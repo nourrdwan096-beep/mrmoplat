@@ -24,7 +24,7 @@ export default function WhyChooseUs() {
   };
 
   return (
-    <section id="benefits" className="py-20 relative overflow-hidden">
+    <section id="features" className="py-20 relative overflow-hidden">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Section Header */}
