@@ -6,6 +6,11 @@ import { AuthProvider } from '@/context/AuthContext';
 export const metadata: Metadata = {
   title: 'منصة مستر محمد رضوان التعليمية | MR. MOHAMED RADWAN',
   description: 'المنصة التعليمية المتطورة لتدريس وتأسيس اللغة الإنجليزية للمرحلتين الإعدادية والثانوية - عام وأزهر مع مستر محمد رضوان',
+  icons: {
+    icon: '/logo.png',
+    shortcut: '/logo.png',
+    apple: '/logo.png',
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
