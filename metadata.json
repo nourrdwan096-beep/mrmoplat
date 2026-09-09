@@ -1,0 +1,6 @@
+{
+  "name": "MR. MOHAMED RADWAN EDUCATION PLATFORM",
+  "description": "منصة مستر محمد رضوان التعليمية المتطورة للغة الإنجليزية للمرحلتين الإعدادية والثانوية - عام وأزهر",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

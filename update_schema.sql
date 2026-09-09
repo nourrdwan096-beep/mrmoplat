@@ -1,0 +1,10 @@
+ALTER TABLE public.quiz_questions 
+  ADD COLUMN IF NOT EXISTS grading_type VARCHAR(20) DEFAULT 'auto',
+  ADD COLUMN IF NOT EXISTS ideal_answer TEXT,
+  ADD COLUMN IF NOT EXISTS parent_id UUID REFERENCES public.quiz_questions(id) ON DELETE CASCADE;
+
+ALTER TABLE public.courses
+  ADD COLUMN IF NOT EXISTS enforce_unit_progression BOOLEAN DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS enforce_item_progression BOOLEAN DEFAULT TRUE,
+  ADD COLUMN IF NOT EXISTS original_price NUMERIC(10, 2),
+  ADD COLUMN IF NOT EXISTS has_discount BOOLEAN DEFAULT FALSE;

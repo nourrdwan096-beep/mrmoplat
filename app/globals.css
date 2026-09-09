@@ -1,0 +1,117 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap');
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark, .dark *));
+
+@layer base {
+  body {
+    font-family: 'Cairo', sans-serif;
+    font-size: 1.125rem;
+  }
+  
+  h1, h2, h3, h4, h5, h6, 
+  .font-sans, 
+  .font-tajawal, 
+  [class*="text-xl"], 
+  [class*="text-2xl"], 
+  [class*="text-3xl"], 
+  [class*="text-4xl"],
+  .tracking-tight,
+  button,
+  .btn-text,
+  .badge-text {
+    font-family: 'Tajawal', sans-serif !important;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom Sleek Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.5);
+}
+
+/* Printable Recharge Card Styles */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 12pt !important;
+  }
+
+  header, footer, nav, aside, .no-print, button:not(.allow-print) {
+    display: none !important;
+  }
+
+  .print-sheet-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 16px !important;
+    page-break-inside: auto !important;
+  }
+
+  .recharge-voucher-card {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    border: 2px dashed #94a3b8 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+    margin-bottom: 12px !important;
+    color: #0f172a !important;
+  }
+
+  .recharge-voucher-card * {
+    color: #0f172a !important;
+  }
+
+  .recharge-voucher-card .text-emerald-400,
+  .recharge-voucher-card .text-emerald-500,
+  .recharge-voucher-card .text-emerald-600 {
+    color: #059669 !important;
+  }
+
+  .recharge-voucher-card .text-amber-300,
+  .recharge-voucher-card .text-amber-400 {
+    color: #b45309 !important;
+  }
+}
+
+/* Custom Scrollbar for small lists */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
+/* Fullscreen Background Normalization */
+:fullscreen,
+::backdrop {
+  background-color: #f8fafc;
+}
+.dark:fullscreen,
+.dark :fullscreen,
+.dark::backdrop,
+:fullscreen.dark {
+  background-color: #020617;
+}

@@ -1,0 +1,399 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/context/AuthContext';
+import { 
+  fetchAllCourses, 
+  fetchStudentEnrolledCourseIds, 
+  fetchUnitsByCourse, 
+  fetchItemsByUnit, 
+  fetchStudentProgress,
+  CourseData, 
+  UnitData, 
+  UnitItemData, 
+  StudentItemProgressData 
+} from '@/lib/academicService';
+import { 
+  Award, TrendingUp, CheckCircle2, AlertTriangle, 
+  BookOpen, Video, FileText, HelpCircle, ChevronRight, 
+  Sparkles, ArrowLeft, RotateCcw, Target, ShieldCheck
+} from 'lucide-react';
+import { motion } from 'motion/react';
+
+interface CourseProgressSummary {
+  course: CourseData;
+  units: UnitData[];
+  items: UnitItemData[];
+  progressMap: Record<string, StudentItemProgressData>;
+  totalItems: number;
+  completedItems: number;
+  averageScore: number;
+  passedExamsCount: number;
+  failedExamsCount: number;
+  weakTopics: { item: UnitItemData; score: number; relatedVideo?: UnitItemData }[];
+  strongTopics: { item: UnitItemData; score: number }[];
+}
+
+export default function StudentProgressPage() {
+  const { currentUser } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [coursesSummary, setCoursesSummary] = useState<CourseProgressSummary[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState<string>('');
+
+  useEffect(() => {
+    async function loadAcademicProgress() {
+      if (!currentUser?.id) return;
+      try {
+        const enrolledIds = await fetchStudentEnrolledCourseIds(currentUser.id, currentUser.email);
+        const allCourses = await fetchAllCourses();
+        const myCourses = allCourses.filter(c => enrolledIds.includes(c.id));
+
+        const summaries: CourseProgressSummary[] = [];
+
+        for (const course of myCourses) {
+          const units = await fetchUnitsByCourse(course.id);
+          const allItems: UnitItemData[] = [];
+          for (const u of units) {
+            const items = await fetchItemsByUnit(u.id);
+            allItems.push(...items);
+          }
+
+          const progressMap = await fetchStudentProgress(currentUser.id, course.id);
+
+          let totalItems = allItems.length;
+          let completedItems = 0;
+          let scoreSum = 0;
+          let scoreCount = 0;
+          let passedCount = 0;
+          let failedCount = 0;
+          const weakTopics: { item: UnitItemData; score: number; relatedVideo?: UnitItemData }[] = [];
+          const strongTopics: { item: UnitItemData; score: number }[] = [];
+
+          allItems.forEach((item, idx) => {
+            const prog = progressMap[item.id];
+            if (prog?.isPassed) {
+              completedItems++;
+            }
+
+            if (item.itemType === 'exam' || item.itemType === 'homework') {
+              if (prog && prog.attemptsCount > 0) {
+                scoreSum += prog.highestScore;
+                scoreCount++;
+
+                if (prog.isPassed) {
+                  passedCount++;
+                  if (prog.highestScore >= 85) {
+                    strongTopics.push({ item, score: prog.highestScore });
+                  }
+                } else {
+                  failedCount++;
+                  // Find related or previous video in the unit
+                  const unitVideos = allItems.filter(i => i.unitId === item.unitId && i.itemType === 'video');
+                  const relatedVideo = unitVideos[unitVideos.length - 1];
+                  weakTopics.push({ item, score: prog.highestScore, relatedVideo });
+                }
+              }
+            }
+          });
+
+          const averageScore = scoreCount > 0 ? Math.round(scoreSum / scoreCount) : 0;
+
+          summaries.push({
+            course,
+            units,
+            items: allItems,
+            progressMap,
+            totalItems,
+            completedItems,
+            averageScore,
+            passedExamsCount: passedCount,
+            failedExamsCount: failedCount,
+            weakTopics,
+            strongTopics
+          });
+        }
+
+        setCoursesSummary(summaries);
+        setSelectedCourseId(prev => prev || (summaries.length > 0 ? summaries[0].course.id : ''));
+      } catch (err) {
+        console.error('Error loading progress:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadAcademicProgress();
+  }, [currentUser?.id, currentUser?.email]);
+
+  const activeSummary = coursesSummary.find(s => s.course.id === selectedCourseId) || coursesSummary[0];
+
+  return (
+    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-8">
+      
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white mb-2 flex items-center gap-2">
+            تقدمي الأكاديمي <Award className="w-8 h-8 text-amber-500" />
+          </h1>
+          <p className="text-slate-500 dark:text-slate-400 font-medium text-sm md:text-base">
+            تحليل درجاتك ونقاط القوة والضعف في كل كورس مع توجيهات مستر محمد رضوان للمراجعة والتفوق.
+          </p>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="py-20 text-center text-slate-400 font-bold">جاري تحليل مستواك ودرجاتك...</div>
+      ) : coursesSummary.length === 0 ? (
+        <div className="p-12 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-3">
+          <BookOpen className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600" />
+          <h3 className="text-lg font-black text-slate-800 dark:text-slate-200">لست مشتركاً في أي كورس حالياً</h3>
+          <p className="text-sm text-slate-400 max-w-md mx-auto">
+            اشترك في كورسات مستر محمد رضوان لتبدأ حل الواجبات والامتحانات وتتبع تقدمك خطوة بخطوة.
+          </p>
+          <Link
+            href="/courses"
+            className="inline-flex items-center gap-2 px-6 py-3 bg-violet-600 text-white font-black text-xs rounded-2xl shadow-lg shadow-violet-600/20"
+          >
+            تصفح الكورسات المتاحة
+          </Link>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          
+          {/* Course Selector Tabs */}
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {coursesSummary.map(s => {
+              const isSelected = s.course.id === activeSummary?.course.id;
+              const percent = s.totalItems > 0 ? Math.round((s.completedItems / s.totalItems) * 100) : 0;
+              return (
+                <button
+                  key={s.course.id}
+                  onClick={() => setSelectedCourseId(s.course.id)}
+                  className={`px-5 py-3 rounded-2xl font-black text-xs whitespace-nowrap transition-all flex items-center gap-3 border ${isSelected ? 'bg-violet-600 text-white border-violet-600 shadow-md shadow-violet-600/20' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-violet-300'}`}
+                >
+                  <span>{s.course.title}</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] ${isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}`}>
+                    {percent}% مكتمل
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {activeSummary && (
+            <div className="space-y-8">
+              
+              {/* Metrics Grid */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                  <span className="text-xs font-bold text-slate-400">نسبة إنجاز المنهج</span>
+                  <div className="text-3xl font-black text-violet-600 dark:text-violet-400 mt-2">
+                    {activeSummary.totalItems > 0 ? Math.round((activeSummary.completedItems / activeSummary.totalItems) * 100) : 0}%
+                  </div>
+                  <div className="mt-3 w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
+                    <div 
+                      className="bg-violet-600 h-full rounded-full transition-all duration-500"
+                      style={{ width: `${activeSummary.totalItems > 0 ? Math.round((activeSummary.completedItems / activeSummary.totalItems) * 100) : 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                  <span className="text-xs font-bold text-slate-400">متوسط درجات الاختبارات</span>
+                  <div className="text-3xl font-black text-slate-900 dark:text-white mt-2">
+                    {activeSummary.averageScore}%
+                  </div>
+                  <span className="text-[11px] font-bold text-emerald-500 mt-2 block">
+                    {activeSummary.averageScore >= 80 ? 'مستوى ممتاز ومتقدم' : activeSummary.averageScore >= 60 ? 'مستوى جيد ويحتاج تثبيت' : 'بحاجة للمراجعة المكثفة'}
+                  </span>
+                </div>
+
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                  <span className="text-xs font-bold text-emerald-500">اختبارات تم اجتيازها</span>
+                  <div className="text-3xl font-black text-emerald-600 dark:text-emerald-400 mt-2">
+                    {activeSummary.passedExamsCount}
+                  </div>
+                  <span className="text-[11px] font-bold text-slate-400 mt-2 block">نجاح وتفوق</span>
+                </div>
+
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                  <span className="text-xs font-bold text-rose-500">مهام تحتاج إعادة أو مراجعة</span>
+                  <div className="text-3xl font-black text-rose-600 dark:text-rose-400 mt-2">
+                    {activeSummary.failedExamsCount}
+                  </div>
+                  <span className="text-[11px] font-bold text-slate-400 mt-2 block">درجة أقل من نسبة النجاح</span>
+                </div>
+              </div>
+
+              {/* Weakness & Strength Analysis Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* Weak Topics (Need Revision) */}
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-rose-100 dark:border-rose-950/40 shadow-sm space-y-4">
+                  <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 font-black">
+                    <AlertTriangle className="w-5 h-5" />
+                    <h3 className="text-base">نقاط الضعف والدروس الواجب مراجعتها</h3>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                    بناءً على نتائجك في الواجبات والامتحانات، هذه الدروس تحتاج منك إعادة مشاهدة الشرح وحل الأسئلة مجدداً:
+                  </p>
+
+                  {activeSummary.weakTopics.length === 0 ? (
+                    <div className="p-6 text-center bg-emerald-50 dark:bg-emerald-950/20 rounded-2xl border border-emerald-100 dark:border-emerald-800/40">
+                      <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+                      <p className="text-xs font-black text-emerald-700 dark:text-emerald-300">
+                        رائع جداً! لا توجد لديك أي نقاط ضعف مسجلة في هذا الكورس حتى الآن.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {activeSummary.weakTopics.map(({ item, score, relatedVideo }) => (
+                        <div 
+                          key={item.id}
+                          className="p-4 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        >
+                          <div>
+                            <span className="text-xs font-black text-slate-900 dark:text-white block">
+                              {item.title}
+                            </span>
+                            <span className="text-[11px] font-bold text-rose-600 dark:text-rose-400">
+                              الدرجة المسجلة: {score}% (أقل من نسبة الاجتياز)
+                            </span>
+                          </div>
+                          {relatedVideo && (
+                            <Link
+                              href={`/student/study/${activeSummary.course.id}?itemId=${relatedVideo.id}`}
+                              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 whitespace-nowrap shadow-md shadow-rose-600/10"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" /> مراجعة الشرح
+                            </Link>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Strong Topics */}
+                <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl border border-emerald-100 dark:border-emerald-950/40 shadow-sm space-y-4">
+                  <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-black">
+                    <ShieldCheck className="w-5 h-5" />
+                    <h3 className="text-base">نقاط القوة والتميز الأكاديمي</h3>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                    الدروس والوحدات التي حققت فيها درجات فائقة وتثبت إتقانك التام لقواعدها ومفرداتها:
+                  </p>
+
+                  {activeSummary.strongTopics.length === 0 ? (
+                    <div className="p-6 text-center bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                      <Target className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                      <p className="text-xs font-bold text-slate-500">
+                        أكمل حل الواجبات والامتحانات لتحصل على وسام التميز في الدروس المتفوق فيها.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {activeSummary.strongTopics.map(({ item, score }) => (
+                        <div 
+                          key={item.id}
+                          className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30 flex items-center justify-between gap-3"
+                        >
+                          <div>
+                            <span className="text-xs font-black text-slate-900 dark:text-white block">
+                              {item.title}
+                            </span>
+                            <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                              إتقان تام بدرجة: {score}%
+                            </span>
+                          </div>
+                          <span className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 font-black text-xs rounded-xl">
+                            متقن ✓
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+              </div>
+
+              {/* Detailed Breakdown per Unit */}
+              <div className="bg-white dark:bg-slate-900 p-6 md:p-8 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
+                <h3 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
+                  <BookOpen className="w-5 h-5 text-violet-500" /> تفاصيل إنجازك في وحدات الكورس
+                </h3>
+
+                <div className="space-y-6">
+                  {activeSummary.units.map(unit => {
+                    const unitItems = activeSummary.items.filter(i => i.unitId === unit.id);
+                    return (
+                      <div key={unit.id} className="border border-slate-100 dark:border-slate-800 rounded-2xl p-5 space-y-4 bg-slate-50/50 dark:bg-slate-900/50">
+                        <div className="flex items-center justify-between border-b border-slate-200/60 dark:border-slate-800 pb-3">
+                          <h4 className="text-base font-black text-slate-900 dark:text-white">
+                            الوحدة {unit.unitNumber}: {unit.title}
+                          </h4>
+                          <span className="text-xs font-bold text-slate-400">
+                            {unitItems.filter(i => activeSummary.progressMap[i.id]?.isPassed).length} من {unitItems.length} عنصر مكتمل
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {unitItems.map(item => {
+                            const prog = activeSummary.progressMap[item.id];
+                            const isPassed = prog?.isPassed;
+                            return (
+                              <div
+                                key={item.id}
+                                className={`p-3.5 rounded-xl border flex items-center justify-between gap-2 ${isPassed ? 'bg-emerald-50/40 border-emerald-100 dark:bg-emerald-950/20 dark:border-emerald-900/30' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'}`}
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <div className="shrink-0 text-slate-400">
+                                    {item.itemType === 'video' ? <Video className="w-4 h-4 text-blue-500" /> : <FileText className="w-4 h-4 text-violet-500" />}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-black text-slate-800 dark:text-slate-200 truncate">
+                                      {item.title}
+                                    </p>
+                                    <p className="text-[10px] text-slate-400 font-semibold">
+                                      {item.itemType === 'video' ? 'محاضرة شرح' : item.itemType === 'exam' ? 'امتحان شامل' : 'واجب تطبيقي'}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="shrink-0 text-left">
+                                  {isPassed ? (
+                                    <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                                      <CheckCircle2 className="w-3.5 h-3.5" />
+                                      {prog?.highestScore ? `${prog.highestScore}%` : 'تم'}
+                                    </span>
+                                  ) : prog?.attemptsCount ? (
+                                    <span className="text-[10px] font-black text-rose-500">
+                                      {prog.highestScore}% (إعادة)
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] font-bold text-slate-400">
+                                      لم يبدأ
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+            </div>
+          )}
+
+        </div>
+      )}
+
+    </div>
+  );
+}
