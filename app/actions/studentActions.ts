@@ -96,19 +96,6 @@ export async function checkDeviceStatusAction(
         const p = profilesByFp[0];
         const isBanned = p.status === 'banned';
 
-        // Auto-bind primary fingerprint if missing in student_devices
-        if (cleanFp && cleanFp !== p.primary_device_fingerprint) {
-          try {
-            await supabaseAdmin.from('student_devices').upsert([{
-              student_id: p.id,
-              device_fingerprint: cleanFp,
-              device_name: 'جهاز تسجيل معتمد إضافي',
-              is_primary: false,
-              last_active: new Date().toISOString(),
-            }], { onConflict: 'student_id,device_fingerprint' });
-          } catch {}
-        }
-
         return {
           isBanned: isBanned,
           isRegistered: true,
@@ -150,19 +137,6 @@ export async function checkDeviceStatusAction(
 
         if (studentProfile) {
           const isBanned = studentProfile.status === 'banned';
-
-          // Auto-bind new fingerprint
-          if (cleanFp) {
-            try {
-              await supabaseAdmin.from('student_devices').upsert([{
-                student_id: studentProfile.id,
-                device_fingerprint: cleanFp,
-                device_name: 'جهاز معتمد',
-                last_active: new Date().toISOString(),
-              }], { onConflict: 'student_id,device_fingerprint' });
-            } catch {}
-          }
-
           return {
             isBanned: isBanned,
             isRegistered: true,
@@ -217,22 +191,6 @@ export async function checkDeviceStatusAction(
     if (foundProfileByContact) {
       const p = foundProfileByContact;
       const isBanned = p.status === 'banned';
-
-      // Bind device to this recognized student
-      if (cleanFp) {
-        try {
-          if (!p.primary_device_fingerprint) {
-            await supabaseAdmin.from('profiles').update({ primary_device_fingerprint: cleanFp }).eq('id', p.id);
-          }
-          await supabaseAdmin.from('student_devices').upsert([{
-            student_id: p.id,
-            device_fingerprint: cleanFp,
-            device_name: 'جهاز الطالب المعتمد',
-            last_active: new Date().toISOString(),
-          }], { onConflict: 'student_id,device_fingerprint' });
-        } catch {}
-      }
-
       return {
         isBanned: isBanned,
         isRegistered: true,
@@ -523,23 +481,6 @@ export async function checkStudentContactAction(
         isStaff: true,
         message: 'هذا البريد / الرقم مسجل بالفعل كحساب إداري في المنصة. يرجى تسجيل الدخول من صفحة الدخول.'
       };
-    }
-
-    // It's a student - bind device
-    if (cleanFp) {
-      try {
-        if (!p.primary_device_fingerprint) {
-          await supabaseAdmin.from('profiles').update({ primary_device_fingerprint: cleanFp }).eq('id', p.id);
-        }
-        await supabaseAdmin.from('student_devices').upsert([{
-          student_id: p.id,
-          device_fingerprint: cleanFp,
-          device_name: 'جهاز الطالب المعتمد',
-          last_active: new Date().toISOString(),
-        }], { onConflict: 'student_id,device_fingerprint' });
-      } catch (e) {
-        console.error('Error binding device to contact student:', e);
-      }
     }
 
     return {
@@ -967,18 +908,18 @@ export async function registerStudentAction(studentData: any) {
       return { success: false, error: 'حدث خطأ في قاعدة البيانات: ' + error.message };
     }
 
-    // 8. Register all fingerprints in student_devices
-    if (insertedUser && allFps.length > 0) {
+    // 8. Register ONLY the primary fingerprint in student_devices
+    if (insertedUser && fingerprint) {
       try {
-        const deviceRecords = allFps.map((fp, idx) => ({
-          student_id: insertedUser.id,
-          device_fingerprint: fp,
-          device_name: idx === 0 ? 'الجهاز الأساسي للتسجيل' : `معرف جهاز إضافي #${idx + 1}`,
-          is_primary: idx === 0,
-        }));
         await supabaseAdmin
           .from('student_devices')
-          .upsert(deviceRecords, { onConflict: 'student_id,device_fingerprint' });
+          .upsert([{
+            student_id: insertedUser.id,
+            device_fingerprint: fingerprint,
+            device_name: 'الجهاز الأساسي للتسجيل',
+            is_primary: true,
+            last_active: new Date().toISOString(),
+          }], { onConflict: 'student_id,device_fingerprint' });
       } catch (devErr) {
         console.warn('student_devices logging warning:', devErr);
       }
