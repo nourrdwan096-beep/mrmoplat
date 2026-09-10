@@ -91,7 +91,7 @@ export default function SecuredVideoPlayer({
   const [actualStudentPhone, setActualStudentPhone] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const storedAuth = localStorage.getItem('mradwan_auth_user');
+        const storedAuth = localStorage.getItem('mr_radwan_current_user');
         if (storedAuth) {
           const user = JSON.parse(storedAuth);
           if (user.phone) return user.phone;
@@ -104,7 +104,7 @@ export default function SecuredVideoPlayer({
   const [actualStudentId, setActualStudentId] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const storedAuth = localStorage.getItem('mradwan_auth_user');
+        const storedAuth = localStorage.getItem('mr_radwan_current_user');
         if (storedAuth) {
           const user = JSON.parse(storedAuth);
           if (user.id) return user.id.slice(0, 10).toUpperCase();
@@ -117,7 +117,7 @@ export default function SecuredVideoPlayer({
   const [actualStudentName, setActualStudentName] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       try {
-        const storedAuth = localStorage.getItem('mradwan_auth_user');
+        const storedAuth = localStorage.getItem('mr_radwan_current_user');
         if (storedAuth) {
           const user = JSON.parse(storedAuth);
           if (user.fullName) return user.fullName;
