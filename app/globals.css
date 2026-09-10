@@ -104,6 +104,79 @@ html {
   background: #334155;
 }
 
+/* ===================================================
+   Rich Text & Word-Style Visual Animations (CSS3)
+   =================================================== */
+@keyframes text-pulse-anim {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.85;
+  }
+}
+
+@keyframes text-bounce-anim {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes text-glow-anim {
+  0%, 100% {
+    text-shadow: 0 0 4px rgba(245, 158, 11, 0.4), 0 0 10px rgba(245, 158, 11, 0.2);
+  }
+  50% {
+    text-shadow: 0 0 8px rgba(245, 158, 11, 0.9), 0 0 16px rgba(245, 158, 11, 0.6);
+  }
+}
+
+@keyframes text-shimmer-anim {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.pulse-anim {
+  display: inline-block !important;
+  animation: text-pulse-anim 1.8s ease-in-out infinite !important;
+  transform-origin: center center !important;
+}
+
+.bounce-anim {
+  display: inline-block !important;
+  animation: text-bounce-anim 1.2s ease-in-out infinite !important;
+  transform-origin: bottom center !important;
+}
+
+.glow-anim,
+.shine-anim {
+  display: inline-block !important;
+  animation: text-glow-anim 2s ease-in-out infinite !important;
+  color: #f59e0b !important;
+}
+
+.shimmer-anim {
+  display: inline-block !important;
+  background: linear-gradient(90deg, #ec4899, #8b5cf6, #3b82f6, #10b981, #ec4899) !important;
+  background-size: 200% auto !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  animation: text-shimmer-anim 3s linear infinite !important;
+  font-weight: 800 !important;
+}
+
 /* Fullscreen Background Normalization */
 :fullscreen,
 ::backdrop {

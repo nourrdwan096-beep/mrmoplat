@@ -19,6 +19,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
 import UndoDeleteToast from '@/components/UndoDeleteToast';
 import RichContentViewer from '@/components/RichContentViewer';
+import RichTextEditor from '@/components/RichTextEditor';
 
 interface Task {
   id: string;
@@ -385,17 +386,18 @@ export default function StudentSchedulePage() {
               </div>
             </div>
 
-            {/* Optional notes / tips */}
+            {/* Optional notes / tips with full rich text & live animations */}
             <div>
               <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-1.5">
-                ملاحظات أو نصائح إضافية لهذه المهمة (اختياري)
+                ملاحظات أو نصائح إضافية لهذه المهمة (اختياري - يدعم التلوين والأنميشن والستيكرات)
               </label>
-              <input
-                type="text"
-                placeholder="مثال: التركيز على حروف الجر مع أفعال Phrasal Verbs..."
+              <RichTextEditor
                 value={taskNotes}
-                onChange={(e) => setTaskNotes(e.target.value)}
-                className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-xs font-medium text-slate-900 dark:text-white"
+                onChange={setTaskNotes}
+                placeholder="مثال: التركيز على حروف الجر مع أفعال Phrasal Verbs، حل تدريبات صفحة 45..."
+                minHeight="min-h-[100px]"
+                showStickers={true}
+                showAnimations={true}
               />
             </div>
 
@@ -499,15 +501,13 @@ export default function StudentSchedulePage() {
                       </span>
                       <span>•</span>
                       <span>{task.duration} دقيقة</span>
-                      {task.notes && (
-                        <>
-                          <span>•</span>
-                          <span className="text-slate-400 font-medium truncate max-w-xs">
-                            {task.notes}
-                          </span>
-                        </>
-                      )}
                     </div>
+
+                    {task.notes && (
+                      <div className="mt-2.5 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-xs leading-relaxed text-slate-600 dark:text-slate-300 max-w-xl">
+                        <RichContentViewer content={task.notes} />
+                      </div>
+                    )}
                   </div>
                 </div>
 
