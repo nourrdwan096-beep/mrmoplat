@@ -127,12 +127,6 @@ export default function SecuredVideoPlayer({
     return initialName;
   });
 
-  // Instructor Tester Modal
-  const [isTestModeOpen, setIsTestModeOpen] = useState<boolean>(false);
-  const [testPhoneInput, setTestPhoneInput] = useState<string>('01148553118');
-  const [testIdInput, setTestIdInput] = useState<string>('STU-EG-9941');
-  const [testNameInput, setTestNameInput] = useState<string>('طالب تجريبي (أزهر)');
-
   // Video Duration & Playback State
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -577,15 +571,6 @@ export default function SecuredVideoPlayer({
     setNotes(getStudentVideoNotes(itemId));
   };
 
-  // Instructor Test Apply Handler
-  const handleApplyTesterData = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (testPhoneInput) setActualStudentPhone(testPhoneInput);
-    if (testIdInput) setActualStudentId(testIdInput);
-    if (testNameInput) setActualStudentName(testNameInput);
-    setIsTestModeOpen(false);
-  };
-
   // Note card click: triggers friendly interactive confirmation prompt
   const handleNoteCardClick = (note: VideoTimestampNote) => {
     setJumpNotePrompt(note);
@@ -607,7 +592,7 @@ export default function SecuredVideoPlayer({
 
   return (
     <div className="space-y-5 select-none font-sans" id="mradwan_secured_video_root">
-      {/* Top Security Badge & Tester Mode Bar */}
+      {/* Top Security Badge */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
         <div className="flex items-center gap-2">
           <span className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold rounded-full">
@@ -618,17 +603,6 @@ export default function SecuredVideoPlayer({
             مدة المحاضرة الفعلية: {detectedDurationLabel || (totalDuration > 0 ? formatVideoTime(totalDuration) : 'جاري التحديد التلقائي...')}
           </span>
         </div>
-
-        {/* Instructor / Admin Test Button */}
-        <button
-          type="button"
-          onClick={() => setIsTestModeOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-[11px] rounded-full border border-slate-300 dark:border-slate-700 transition-colors shadow-sm"
-          title="اختبار المشغل ببيانات طالب مختلفة والتأكد من العلامة المائية"
-        >
-          <Sparkles className="w-3 h-3 text-amber-500" />
-          <span>اختبار بيانات الطالب والعلامة المائية</span>
-        </button>
       </div>
 
       {/* Video Container Shell with Smooth Visual Finish */}
@@ -639,23 +613,25 @@ export default function SecuredVideoPlayer({
         onMouseEnter={() => setShowControls(true)}
         className="relative w-full rounded-3xl overflow-hidden bg-slate-950 border border-slate-800 shadow-2xl group flex flex-col justify-between aspect-video"
       >
-        {/* Dynamic Watermark 1 (Primary Floating Phone & Student ID - Subtle & Non-Intrusive) */}
+        {/* Dynamic Watermark 1 (Primary Floating Name, Phone & Student ID - Subtle & Non-Intrusive) */}
         {sourceType === 'internal_secured' && (
           <div
-            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-25 hover:opacity-10 text-white font-mono text-[11px] font-black px-3 py-1 rounded-lg bg-black/40 backdrop-blur-[1px] border border-white/10 z-30 flex flex-col items-center select-none shadow-sm"
+            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-25 hover:opacity-10 text-white font-mono text-[11px] font-black px-3 py-1 rounded-lg bg-black/40 backdrop-blur-[1px] border border-white/10 z-30 flex flex-col items-center select-none shadow-sm text-center"
             style={{ top: watermarkPos.top, left: watermarkPos.left }}
           >
-            <span className="tracking-wider">{actualStudentPhone}</span>
-            <span className="text-[9px] opacity-75">{actualStudentId}</span>
+            <span className="tracking-wider">{actualStudentName}</span>
+            <span className="tracking-wider mt-0.5">{actualStudentPhone}</span>
+            <span className="text-[9px] opacity-75 mt-0.5">{actualStudentId}</span>
           </div>
         )}
 
         {/* Dynamic Watermark 2 (Subtle floating secondary watermark) */}
         {sourceType === 'internal_secured' && (
           <div
-            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-20 text-emerald-300 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-black/30 z-30 select-none"
+            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-20 text-emerald-300 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-black/30 z-30 select-none flex flex-col items-center"
             style={{ top: watermarkSubPos.top, left: watermarkSubPos.left }}
           >
+            <span>{actualStudentName}</span>
             <span>{actualStudentPhone}</span>
           </div>
         )}
@@ -1541,77 +1517,6 @@ export default function SecuredVideoPlayer({
                   className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md"
                 >
                   حفظ البطاقة
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Instructor Tester & Dynamic Watermark Simulator */}
-      {isTestModeOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl space-y-4 animate-fadeIn">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
-                  <Sparkles className="w-4 h-4" />
-                </div>
-                <h4 className="text-base font-black text-slate-900 dark:text-white">
-                  محاكاة واختبار العلامة المائية
-                </h4>
-              </div>
-              <button onClick={() => setIsTestModeOpen(false)} className="text-slate-400 hover:text-slate-600">
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-500 font-medium leading-relaxed">
-              تتيح لك هذه الميزة كمعلم اختبار ظهور رقم هاتف وكود الطالب الحقيقي على المشغل والتأكد من أنها تظهر بشكل شفاف وديناميكي يمنع التسريب.
-            </p>
-
-            <form onSubmit={handleApplyTesterData} className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
-                  <Phone className="w-3.5 h-3.5 text-emerald-500" />
-                  رقم الهاتف التجريبي (الظاهر في العلامة المائية)
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={testPhoneInput}
-                  onChange={(e) => setTestPhoneInput(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl font-mono text-xs text-slate-900 dark:text-white focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center gap-1">
-                  <Smartphone className="w-3.5 h-3.5 text-emerald-500" />
-                  معرّف الطالب / Device ID
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={testIdInput}
-                  onChange={(e) => setTestIdInput(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl font-mono text-xs text-slate-900 dark:text-white focus:outline-none"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsTestModeOpen(false)}
-                  className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-xl"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md"
-                >
-                  تطبيق المحاكاة الآن
                 </button>
               </div>
             </form>
