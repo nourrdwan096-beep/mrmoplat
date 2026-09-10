@@ -153,6 +153,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
   const [codesBatchName, setCodesBatchName] = useState('دفعة سنتر النخبة');
   const [codeGenerationMode, setCodeGenerationMode] = useState<'general' | 'assigned_student'>('general');
   const [targetStudentName, setTargetStudentName] = useState('');
+  const [targetStudentBirthDate, setTargetStudentBirthDate] = useState('');
   const [centerOrGroupName, setCenterOrGroupName] = useState('');
   const [codeSearchQuery, setCodeSearchQuery] = useState('');
   const [codeFilterStatus, setCodeFilterStatus] = useState<'all' | 'available' | 'used'>('all');
@@ -576,6 +577,13 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
   // Codes generator
   const handleGenerateCodes = async () => {
     if (!course) return;
+
+    // Strict guard: Codes are only for PAID courses
+    if (course.isFree || (course.price ?? 0) <= 0) {
+      alert('هذا الكورس مجاني ومتاح لجميع الطلاب بدون أكواد. توليد كروت الشحن والأكواد متاح حصرياً للكورسات المدفوعة فقط.');
+      return;
+    }
+
     setIsGeneratingCodes(true);
     setGenerateSuccessMsg(null);
     try {
@@ -585,23 +593,32 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
         ? centerOrGroupName.trim() 
         : codesBatchName.trim() || 'دفعة عامة';
 
-      await generateActivationCodes(course.id, count, batchLabel, {
+      const newGenerated = await generateActivationCodes(course.id, count, batchLabel, {
         assignedStudentName: isPersonalized ? targetStudentName.trim() : undefined,
+        studentBirthDate: isPersonalized && targetStudentBirthDate ? targetStudentBirthDate.trim() : undefined,
+        assignedStudentBirthDate: isPersonalized && targetStudentBirthDate ? targetStudentBirthDate.trim() : undefined,
         centerOrGroup: centerOrGroupName.trim() || undefined,
         price: course.price,
         courseTitle: course.title,
       });
 
-      const updated = await fetchCodesByCourse(course.id);
-      setCodes(updated);
+      // Immediate state update guarantees newly generated codes appear without delay
+      setCodes(prev => {
+        const genIds = new Set(newGenerated.map(g => g.id));
+        return [...newGenerated, ...prev.filter(p => !genIds.has(p.id))];
+      });
+
       setGenerateSuccessMsg(isPersonalized 
         ? `✓ تم توليد كارت الشحن المخصص للطالب (${targetStudentName.trim()}) بنجاح! جاهز للطباعة أو الإرسال.` 
         : `✓ تم توليد عدد (${count}) كود شحن بنجاح!`);
+
       if (isPersonalized) {
         setTargetStudentName('');
+        setTargetStudentBirthDate('');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error generating codes:', err);
+      alert(err?.message || 'حدث خطأ أثناء توليد الأكواد');
     } finally {
       setIsGeneratingCodes(false);
     }
@@ -1103,154 +1120,185 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
               </div>
             </div>
 
-            {/* Generator Form */}
-            <div className="no-print bg-slate-50 dark:bg-slate-950 p-5 sm:p-6 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-5">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <span className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-emerald-600" />
-                  خيارات توليد الكروت والأكواد:
-                </span>
-
-                {/* Mode Selector Toggle */}
-                <div className="inline-flex p-1 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-bold">
-                  <button
-                    type="button"
-                    onClick={() => setCodeGenerationMode('general')}
-                    className={`px-3.5 py-1.5 rounded-xl transition-all ${
-                      codeGenerationMode === 'general'
-                        ? 'bg-emerald-600 text-white shadow-xs font-black'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                    }`}
-                  >
-                    دفعة عامة للسنتر / الدفعة
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCodeGenerationMode('assigned_student')}
-                    className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
-                      codeGenerationMode === 'assigned_student'
-                        ? 'bg-amber-500 text-slate-950 shadow-xs font-black'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                    }`}
-                  >
-                    <span>⭐ كود مخصص لاسم طالب</span>
-                  </button>
+            {/* If Course is Free -> Notice Banner, otherwise Generator Form */}
+            {(course.isFree || (course.price ?? 0) <= 0) ? (
+              <div className="no-print p-6 rounded-3xl bg-emerald-50 dark:bg-emerald-950/30 border-2 border-emerald-500/30 text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-xs">
+                  <Sparkles className="w-6 h-6" />
                 </div>
+                <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                  هذا الكورس مجاني ومتاح لجميع الطلاب بدون أكواد أو كروت شحن
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400 font-bold max-w-xl mx-auto leading-relaxed">
+                  الكورسات المجانية مفتوحة لجميع طلاب المنصة تلقائياً وعلى جميع الأجهزة بدون أي أكواد تفعيل. توليد كروت الشحن والأكواد الرقمية مخصص حصرياً للكورسات المدفوعة فقط.
+                </p>
               </div>
+            ) : (
+              <div className="no-print bg-slate-50 dark:bg-slate-950 p-5 sm:p-6 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <span className="text-xs font-black text-slate-900 dark:text-white flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-emerald-600" />
+                    خيارات توليد الكروت والأكواد (خاص بالكورس المدفوع):
+                  </span>
 
-              {/* Dynamic Form Fields */}
-              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-                {codeGenerationMode === 'assigned_student' ? (
-                  <>
-                    <div className="sm:col-span-5">
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                        اسم الطالب المخصص له الكود <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        value={targetStudentName}
-                        onChange={(e) => setTargetStudentName(e.target.value)}
-                        placeholder="مثال: أحمد محمود محمد علي"
-                        className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700/60 rounded-xl font-bold text-sm text-slate-900 dark:text-white focus:outline-hidden focus:border-amber-500"
-                      />
-                      <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium mt-1 block">
-                        سيتم طباعة اسم الطالب على الكارت، ولن يسمح بتفعيله إلا من حساب الطالب ذاته.
-                      </span>
-                    </div>
+                  {/* Mode Selector Toggle */}
+                  <div className="inline-flex p-1 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setCodeGenerationMode('general')}
+                      className={`px-3.5 py-1.5 rounded-xl transition-all ${
+                        codeGenerationMode === 'general'
+                          ? 'bg-emerald-600 text-white shadow-xs font-black'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      دفعة عامة للسنتر / الدفعة
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCodeGenerationMode('assigned_student')}
+                      className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                        codeGenerationMode === 'assigned_student'
+                          ? 'bg-amber-500 text-slate-950 shadow-xs font-black'
+                          : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                      }`}
+                    >
+                      <span>⭐ كود مخصص لاسم وتاريخ ميلاد طالب</span>
+                    </button>
+                  </div>
+                </div>
 
-                    <div className="sm:col-span-4">
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                        السنتر / المجموعة (اختياري)
-                      </label>
-                      <input
-                        type="text"
-                        value={centerOrGroupName}
-                        onChange={(e) => setCenterOrGroupName(e.target.value)}
-                        placeholder="مثال: سنتر الأهرام - مجموعة السبت"
-                        className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-sm text-slate-900 dark:text-white focus:outline-hidden focus:border-emerald-500"
-                      />
-                    </div>
+                {/* Dynamic Form Fields */}
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                  {codeGenerationMode === 'assigned_student' ? (
+                    <>
+                      <div className="sm:col-span-4">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                          اسم الطالب المخصص له الكود <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={targetStudentName}
+                          onChange={(e) => setTargetStudentName(e.target.value)}
+                          placeholder="مثال: أحمد محمود محمد علي"
+                          className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700/60 rounded-xl font-bold text-sm text-slate-900 dark:text-white focus:outline-hidden focus:border-amber-500"
+                        />
+                        <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium mt-1 block">
+                          سيتم طباعة اسم الطالب على الكارت، وقصر التفعيل عليه.
+                        </span>
+                      </div>
 
-                    <div className="sm:col-span-3 flex items-end">
-                      <button
-                        onClick={handleGenerateCodes}
-                        disabled={isGeneratingCodes || !targetStudentName.trim()}
-                        className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
-                      >
-                        {isGeneratingCodes ? (
-                          <div className="w-4 h-4 border-2 border-slate-950/30 border-t-slate-950 rounded-full animate-spin" />
-                        ) : (
-                          <>
-                            <Sparkles className="w-4 h-4" />
-                            توليد كارت الطالب
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="sm:col-span-3">
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                        عدد الأكواد المطلوبة
-                      </label>
-                      <select
-                        value={codesCount}
-                        onChange={(e) => setCodesCount(Number(e.target.value))}
-                        className="w-full px-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-sm text-slate-900 dark:text-white focus:outline-hidden"
-                      >
-                        <option value={1}>كود واحد (1)</option>
-                        <option value={5}>5 أكواد</option>
-                        <option value={10}>10 أكواد</option>
-                        <option value={20}>20 كود</option>
-                        <option value={50}>50 كود</option>
-                        <option value={100}>100 كود</option>
-                      </select>
-                    </div>
+                      <div className="sm:col-span-3">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-teal-600" />
+                          <span>تاريخ ميلاد الطالب</span>
+                          <span className="text-teal-600 dark:text-teal-400 text-[10px] font-normal">(مميز للأمان)</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={targetStudentBirthDate}
+                          onChange={(e) => setTargetStudentBirthDate(e.target.value)}
+                          className="w-full px-3.5 py-2 bg-white dark:bg-slate-900 border border-teal-300 dark:border-teal-700/60 rounded-xl font-bold text-sm text-slate-900 dark:text-white focus:outline-hidden focus:border-teal-500"
+                        />
+                        <span className="text-[10px] text-teal-600 dark:text-teal-400 font-medium mt-1 block">
+                          يتم إدراج تاريخ الميلاد داخل الكود لتخصيصه بشكل كامل.
+                        </span>
+                      </div>
 
-                    <div className="sm:col-span-6">
-                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
-                        السنتر أو المجموعة (اختياري للتمييز)
-                      </label>
-                      <input
-                        type="text"
-                        value={centerOrGroupName}
-                        onChange={(e) => setCenterOrGroupName(e.target.value)}
-                        placeholder="مثال: سنتر الأهرام / دفعة شهر أكتوبر"
-                        className="w-full px-3.5 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-sm text-slate-900 dark:text-white focus:outline-hidden focus:border-emerald-500"
-                      />
-                    </div>
+                      <div className="sm:col-span-3">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                          السنتر / المجموعة (اختياري)
+                        </label>
+                        <input
+                          type="text"
+                          value={centerOrGroupName}
+                          onChange={(e) => setCenterOrGroupName(e.target.value)}
+                          placeholder="مثال: سنتر الأهرام - مجموعة السبت"
+                          className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-sm text-slate-900 dark:text-white focus:outline-hidden focus:border-emerald-500"
+                        />
+                      </div>
 
-                    <div className="sm:col-span-3 flex items-end">
-                      <button
-                        onClick={handleGenerateCodes}
-                        disabled={isGeneratingCodes}
-                        className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-                      >
-                        {isGeneratingCodes ? (
-                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        ) : (
-                          <>
-                            <Sparkles className="w-4 h-4" />
-                            توليد الأكواد الآن
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </>
+                      <div className="sm:col-span-2 flex items-end">
+                        <button
+                          onClick={handleGenerateCodes}
+                          disabled={isGeneratingCodes || !targetStudentName.trim()}
+                          className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5"
+                        >
+                          {isGeneratingCodes ? (
+                            <div className="w-4 h-4 border-2 border-slate-950/30 border-t-slate-950 rounded-full animate-spin" />
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4" />
+                              توليد كارت الطالب
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="sm:col-span-3">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                          عدد الأكواد المطلوبة
+                        </label>
+                        <select
+                          value={codesCount}
+                          onChange={(e) => setCodesCount(Number(e.target.value))}
+                          className="w-full px-3 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-sm text-slate-900 dark:text-white focus:outline-hidden"
+                        >
+                          <option value={1}>كود واحد (1)</option>
+                          <option value={5}>5 أكواد</option>
+                          <option value={10}>10 أكواد</option>
+                          <option value={20}>20 كود</option>
+                          <option value={50}>50 كود</option>
+                          <option value={100}>100 كود</option>
+                        </select>
+                      </div>
+
+                      <div className="sm:col-span-6">
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                          السنتر أو المجموعة (اختياري للتمييز)
+                        </label>
+                        <input
+                          type="text"
+                          value={centerOrGroupName}
+                          onChange={(e) => setCenterOrGroupName(e.target.value)}
+                          placeholder="مثال: سنتر الأهرام / دفعة شهر أكتوبر"
+                          className="w-full px-3.5 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-sm text-slate-900 dark:text-white focus:outline-hidden focus:border-emerald-500"
+                        />
+                      </div>
+
+                      <div className="sm:col-span-3 flex items-end">
+                        <button
+                          onClick={handleGenerateCodes}
+                          disabled={isGeneratingCodes}
+                          className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                        >
+                          {isGeneratingCodes ? (
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4" />
+                              توليد الأكواد الآن
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Feedback Success Message */}
+                {generateSuccessMsg && (
+                  <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold flex items-center justify-between">
+                    <span>{generateSuccessMsg}</span>
+                    <button onClick={() => setGenerateSuccessMsg(null)} className="text-emerald-600 hover:text-emerald-800">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
                 )}
               </div>
-
-              {/* Feedback Success Message */}
-              {generateSuccessMsg && (
-                <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold flex items-center justify-between">
-                  <span>{generateSuccessMsg}</span>
-                  <button onClick={() => setGenerateSuccessMsg(null)} className="text-emerald-600 hover:text-emerald-800">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-            </div>
+            )}
 
             {/* Management & Filter Toolbar */}
             <div className="no-print flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2">

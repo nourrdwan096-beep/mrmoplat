@@ -147,7 +147,9 @@ export interface ActivationCodeData {
   courseTitle?: string;
   code: string;
   batchName?: string;
+  studentBirthDate?: string;
   assignedStudentName?: string; // Teacher designated specific student
+  assignedStudentBirthDate?: string; // Student birth date (e.g. YYYY-MM-DD)
   centerOrGroup?: string;       // Optional center or group
   price?: number;               // Optional course price / card value
   isUsed: boolean;
@@ -1056,54 +1058,105 @@ export async function copyExamToTargetCourse(
 // ==========================================
 export async function fetchCodesByCourse(courseId: string): Promise<ActivationCodeData[]> {
   const allCodes = getLocal<ActivationCodeData[]>(STORAGE_KEYS.CODES, []);
+  const localForCourse = allCodes.filter(c => c.courseId === courseId);
   const localCodesMap = new Map<string, ActivationCodeData>();
-  allCodes.filter(c => c.courseId === courseId).forEach(c => localCodesMap.set(c.id, c));
+  localForCourse.forEach(c => {
+    localCodesMap.set(c.id, c);
+    localCodesMap.set(c.code.toUpperCase(), c);
+  });
 
+  let serverCodes: any[] = [];
+
+  // 1. Try server API route (bypasses RLS with supabaseAdmin)
   try {
-    const { data, error } = await supabase
-      .from('course_activation_codes')
-      .select('*, courses(id, title, price)')
-      .eq('course_id', courseId)
-      .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      return data.map((c: any) => {
-        const local = localCodesMap.get(c.id);
-        // Parse metadata embedded in batch_name if present: e.g. "سنتر الأهرام | مخصص: أحمد محمد"
-        let parsedBatch = c.batch_name || '';
-        let assignedStudent = local?.assignedStudentName;
-        let center = local?.centerOrGroup;
-
-        if (parsedBatch.includes('مخصص:')) {
-          const parts = parsedBatch.split('مخصص:');
-          assignedStudent = assignedStudent || parts[1]?.trim();
-        }
-        if (parsedBatch.includes('سنتر:') || parsedBatch.includes('مجموعة:')) {
-          center = center || parsedBatch;
-        }
-
-        return {
-          id: c.id,
-          courseId: c.course_id,
-          courseTitle: c.courses?.title || local?.courseTitle,
-          code: c.code,
-          batchName: c.batch_name || local?.batchName,
-          assignedStudentName: assignedStudent,
-          centerOrGroup: center,
-          price: c.courses?.price || local?.price,
-          isUsed: c.is_used,
-          usedAt: c.used_at || local?.usedAt,
-          usedByStudentName: local?.usedByStudentName,
-          usedByStudentId: c.used_by_student_id || local?.usedByStudentId,
-          createdAt: c.created_at || local?.createdAt,
-        };
-      });
+    const res = await fetch(`/api/course-codes?courseId=${encodeURIComponent(courseId)}`, {
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && Array.isArray(json.codes) && json.codes.length > 0) {
+        serverCodes = json.codes;
+      }
     }
-  } catch (err) {
-    console.warn('Supabase fetchCodes error:', err);
+  } catch (apiErr) {
+    console.warn('API /api/course-codes fetch error:', apiErr);
   }
 
-  return allCodes.filter(c => c.courseId === courseId);
+  // 2. Fallback to direct supabase client if API had no data
+  if (serverCodes.length === 0) {
+    try {
+      const { data, error } = await supabase
+        .from('course_activation_codes')
+        .select('*, courses(id, title, price)')
+        .eq('course_id', courseId)
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        serverCodes = data;
+      }
+    } catch (sbErr) {
+      console.warn('Supabase fetchCodes error:', sbErr);
+    }
+  }
+
+  // 3. If server returned codes, format and merge with local records
+  if (serverCodes.length > 0) {
+    const mappedServerCodes: ActivationCodeData[] = serverCodes.map((c: any) => {
+      const cleanCode = (c.code || '').toUpperCase();
+      const local = localCodesMap.get(c.id) || localCodesMap.get(cleanCode);
+
+      // Parse metadata embedded in batch_name: e.g. "دفعة سنتر النخبة [مخصص: أحمد محمود] [ميلاد: 2008-05-15]"
+      let parsedBatch = c.batch_name || '';
+      let assignedStudent = local?.assignedStudentName;
+      let studentBirthDate = local?.studentBirthDate || (local as any)?.assignedStudentBirthDate;
+      let center = local?.centerOrGroup;
+
+      if (parsedBatch.includes('مخصص:')) {
+        const parts = parsedBatch.split('مخصص:');
+        assignedStudent = assignedStudent || parts[1]?.split(']')[0]?.trim();
+      }
+      if (parsedBatch.includes('ميلاد:')) {
+        const parts = parsedBatch.split('ميلاد:');
+        studentBirthDate = studentBirthDate || parts[1]?.split(']')[0]?.trim();
+      }
+      if (parsedBatch.includes('سنتر:')) {
+        const parts = parsedBatch.split('سنتر:');
+        center = center || parts[1]?.split(']')[0]?.trim();
+      }
+
+      return {
+        id: c.id,
+        courseId: c.course_id,
+        courseTitle: c.courses?.title || local?.courseTitle,
+        code: c.code,
+        batchName: c.batch_name || local?.batchName,
+        assignedStudentName: assignedStudent,
+        studentBirthDate,
+        assignedStudentBirthDate: studentBirthDate,
+        centerOrGroup: center,
+        price: c.courses?.price || local?.price,
+        isUsed: Boolean(c.is_used),
+        usedAt: c.used_at || local?.usedAt,
+        usedByStudentName: local?.usedByStudentName,
+        usedByStudentId: c.used_by_student_id || local?.usedByStudentId,
+        createdAt: c.created_at || local?.createdAt,
+      };
+    });
+
+    // Merge any locally generated codes that might not have reached server yet
+    const serverCodeSet = new Set(mappedServerCodes.map(s => s.code.toUpperCase()));
+    const localOnly = localForCourse.filter(l => !serverCodeSet.has(l.code.toUpperCase()));
+    const combined = [...mappedServerCodes, ...localOnly];
+
+    // Persist combined back to local storage
+    const otherCoursesCodes = allCodes.filter(c => c.courseId !== courseId);
+    setLocal(STORAGE_KEYS.CODES, [...combined, ...otherCoursesCodes]);
+
+    return combined;
+  }
+
+  // 4. If server returned nothing or had an error: RETURN ALL LOCAL CODES (Never return empty if local exist!)
+  return localForCourse;
 }
 
 export async function generateActivationCodes(
@@ -1112,6 +1165,8 @@ export async function generateActivationCodes(
   batchName: string, 
   createdByOrOptions?: string | {
     assignedStudentName?: string;
+    studentBirthDate?: string;
+    assignedStudentBirthDate?: string;
     centerOrGroup?: string;
     price?: number;
     courseTitle?: string;
@@ -1119,6 +1174,8 @@ export async function generateActivationCodes(
   },
   optionsArg?: {
     assignedStudentName?: string;
+    studentBirthDate?: string;
+    assignedStudentBirthDate?: string;
     centerOrGroup?: string;
     price?: number;
     courseTitle?: string;
@@ -1128,6 +1185,8 @@ export async function generateActivationCodes(
   let createdBy: string | undefined;
   let options: {
     assignedStudentName?: string;
+    studentBirthDate?: string;
+    assignedStudentBirthDate?: string;
     centerOrGroup?: string;
     price?: number;
     courseTitle?: string;
@@ -1145,19 +1204,63 @@ export async function generateActivationCodes(
   const generated: ActivationCodeData[] = [];
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-  for (let i = 0; i < count; i++) {
-    let randomPart = '';
-    for (let c = 0; c < 8; c++) {
-      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+  // Format date tag for code:
+  // If student birth date is provided (e.g. 2008-05-15 or 15/05/2008): format as YYMMDD
+  // Otherwise use current issue date as YYMMDD
+  const resolvedDob = options?.studentBirthDate?.trim() || options?.assignedStudentBirthDate?.trim();
+  let dateTag = '';
+
+  if (resolvedDob) {
+    const parts = resolvedDob.split(/[-/]/);
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        // YYYY-MM-DD
+        const y = parts[0].slice(2);
+        const m = parts[1].padStart(2, '0');
+        const d = parts[2].padStart(2, '0');
+        dateTag = `${y}${m}${d}`;
+      } else if (parts[2].length === 4) {
+        // DD-MM-YYYY
+        const d = parts[0].padStart(2, '0');
+        const m = parts[1].padStart(2, '0');
+        const y = parts[2].slice(2);
+        dateTag = `${y}${m}${d}`;
+      }
     }
-    const codeString = `MR-${randomPart.substring(0, 4)}-${randomPart.substring(4, 8)}`;
+    if (!dateTag) {
+      const digits = resolvedDob.replace(/\D/g, '');
+      dateTag = digits.slice(-6).padStart(6, '0');
+    }
+  }
+
+  if (!dateTag) {
+    // Current issue date
+    const now = new Date();
+    const y = String(now.getFullYear()).slice(2);
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    dateTag = `${y}${m}${d}`;
+  }
+
+  for (let i = 0; i < count; i++) {
+    let part1 = '';
+    let part2 = '';
+    for (let c = 0; c < 4; c++) {
+      part1 += chars.charAt(Math.floor(Math.random() * chars.length));
+      part2 += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    // High-prestige distinctive code format: MR-[YYMMDD]-[PART1]-[PART2]
+    const codeString = `MR-${dateTag}-${part1}-${part2}`;
 
     let fullBatchDisplay = batchName?.trim() || 'دفعة ' + new Date().toLocaleDateString('ar-EG');
     if (options?.centerOrGroup?.trim()) {
-      fullBatchDisplay += ` [${options.centerOrGroup.trim()}]`;
+      fullBatchDisplay += ` [سنتر: ${options.centerOrGroup.trim()}]`;
     }
     if (options?.assignedStudentName?.trim()) {
       fullBatchDisplay += ` [مخصص: ${options.assignedStudentName.trim()}]`;
+    }
+    if (resolvedDob) {
+      fullBatchDisplay += ` [ميلاد: ${resolvedDob}]`;
     }
 
     const newCode: ActivationCodeData = {
@@ -1167,6 +1270,8 @@ export async function generateActivationCodes(
       code: codeString,
       batchName: fullBatchDisplay,
       assignedStudentName: options?.assignedStudentName?.trim() || undefined,
+      studentBirthDate: resolvedDob || undefined,
+      assignedStudentBirthDate: resolvedDob || undefined,
       centerOrGroup: options?.centerOrGroup?.trim() || undefined,
       price: options?.price,
       isUsed: false,
@@ -1175,6 +1280,22 @@ export async function generateActivationCodes(
     generated.push(newCode);
   }
 
+  // 1. Immediately save to local storage (guarantees zero UI lag/drop)
+  const allCodes = getLocal<ActivationCodeData[]>(STORAGE_KEYS.CODES, []);
+  setLocal(STORAGE_KEYS.CODES, [...generated, ...allCodes]);
+
+  // 2. Persist to server API route in the background (uses supabaseAdmin)
+  try {
+    await fetch('/api/course-codes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codes: generated }),
+    });
+  } catch (apiErr) {
+    console.warn('API /api/course-codes POST error:', apiErr);
+  }
+
+  // 3. Also attempt direct supabase insert as fallback
   try {
     await supabase.from('course_activation_codes').insert(
       generated.map(g => ({
@@ -1190,19 +1311,27 @@ export async function generateActivationCodes(
     console.warn('Supabase insert codes error:', err);
   }
 
-  const allCodes = getLocal<ActivationCodeData[]>(STORAGE_KEYS.CODES, []);
-  setLocal(STORAGE_KEYS.CODES, [...generated, ...allCodes]);
-
   return generated;
 }
 
 export async function deleteActivationCode(codeId: string): Promise<boolean> {
+  // 1. Delete via server API
+  try {
+    await fetch(`/api/course-codes?id=${encodeURIComponent(codeId)}`, {
+      method: 'DELETE',
+    });
+  } catch (apiErr) {
+    console.warn('API /api/course-codes DELETE error:', apiErr);
+  }
+
+  // 2. Direct supabase fallback
   try {
     await supabase.from('course_activation_codes').delete().eq('id', codeId);
   } catch (err) {
     console.warn('Supabase delete code error:', err);
   }
 
+  // 3. Delete from local storage
   const allCodes = getLocal<ActivationCodeData[]>(STORAGE_KEYS.CODES, []);
   setLocal(STORAGE_KEYS.CODES, allCodes.filter(c => c.id !== codeId));
   return true;
