@@ -147,14 +147,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // 2. Students & Assistants from Database via Action
     try {
       let deviceFp = '';
+      let deviceInfo: { name?: string; browser?: string } | undefined = undefined;
       try {
-        const { getStrictDeviceIdentity } = await import('@/lib/deviceSecurity');
+        const { getStrictDeviceIdentity, getPhysicalHardwareProfile } = await import('@/lib/deviceSecurity');
         const identity = await getStrictDeviceIdentity();
         deviceFp = identity.primaryFingerprint;
+        const profile = getPhysicalHardwareProfile();
+        deviceInfo = { name: profile.displayName, browser: profile.browserName };
       } catch {}
 
       const { loginAction } = await import('@/app/actions/studentActions');
-      const res = await loginAction(cleanEmail, cleanPass, deviceFp);
+      const res = await loginAction(cleanEmail, cleanPass, deviceFp, deviceInfo);
       
       if (res.success) {
         if (res.requiresOtp) {

@@ -509,7 +509,182 @@ export async function checkStudentContactAction(
   }
 }
 
-export async function loginAction(email: string, pass: string, deviceFingerprint?: string) {
+function parseDeviceTypeAndOs(fp: string, name?: string, browser?: string): { type: 'mobile' | 'tablet' | 'desktop'; os: string } {
+  const s = `${fp} ${name || ''} ${browser || ''}`.toUpperCase();
+  let type: 'mobile' | 'tablet' | 'desktop' = 'desktop';
+  if (s.includes('MOBILE') || s.includes('PHONE') || s.includes('هاتف') || s.includes('موبايل')) {
+    type = 'mobile';
+  } else if (s.includes('TABLET') || s.includes('IPAD') || s.includes('تابلت') || s.includes('لوحي')) {
+    type = 'tablet';
+  }
+
+  let os = 'UNKNOWN';
+  if (s.includes('ANDROID') || s.includes('أندرويد')) os = 'ANDROID';
+  else if (s.includes('IOS') || s.includes('IPHONE') || s.includes('IPAD') || s.includes('أبل')) os = 'IOS';
+  else if (s.includes('WINDOWS') || s.includes('ويندوز')) os = 'WINDOWS';
+  else if (s.includes('MAC') || s.includes('ماك')) os = 'MACOS';
+  else if (s.includes('LINUX') || s.includes('لينكس')) os = 'LINUX';
+
+  return { type, os };
+}
+
+async function verifyAndEnforceStudentDevice(
+  studentId: string,
+  cleanFp: string,
+  deviceInfo?: { name?: string; browser?: string }
+): Promise<{ allowed: boolean; isPrimary?: boolean; maxDevicesReached?: boolean; isBanned?: boolean; message?: string }> {
+  // 1. Is device banned?
+  const { data: bannedCheck } = await supabaseAdmin
+    .from('banned_devices')
+    .select('id, reason')
+    .eq('device_fingerprint', cleanFp)
+    .limit(1);
+
+  if (bannedCheck && bannedCheck.length > 0) {
+    return {
+      allowed: false,
+      isBanned: true,
+      message: 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة. ' + (bannedCheck[0].reason || ''),
+    };
+  }
+
+  // 2. Fetch existing devices for this student
+  const { data: studentDevices } = await supabaseAdmin
+    .from('student_devices')
+    .select('*')
+    .eq('student_id', studentId)
+    .order('is_primary', { ascending: false });
+
+  let existingList = studentDevices || [];
+
+  // Parse incoming device physical specs
+  const incoming = parseDeviceTypeAndOs(cleanFp, deviceInfo?.name, deviceInfo?.browser);
+
+  // 3. Find if this exact fingerprint or same physical device already exists
+  let matchedDevice = existingList.find((d: any) => d.device_fingerprint === cleanFp);
+
+  if (!matchedDevice) {
+    // Check if any existing record is the SAME physical device category & OS (e.g. was previously opened in another browser on this phone)
+    matchedDevice = existingList.find((d: any) => {
+      const existing = parseDeviceTypeAndOs(d.device_fingerprint, d.device_name, d.browser_info);
+      return existing.type === incoming.type && existing.os === incoming.os;
+    });
+
+    if (matchedDevice) {
+      // Update its fingerprint to the unified physical fingerprint!
+      await supabaseAdmin
+        .from('student_devices')
+        .update({
+          device_fingerprint: cleanFp,
+          device_name: deviceInfo?.name || matchedDevice.device_name,
+          browser_info: deviceInfo?.browser || matchedDevice.browser_info,
+          last_active: new Date().toISOString(),
+        })
+        .eq('id', matchedDevice.id);
+
+      if (matchedDevice.is_primary) {
+        await supabaseAdmin
+          .from('profiles')
+          .update({ primary_device_fingerprint: cleanFp })
+          .eq('id', studentId);
+      }
+    }
+  } else {
+    // Exact match: update last active
+    await supabaseAdmin
+      .from('student_devices')
+      .update({
+        device_name: deviceInfo?.name || matchedDevice.device_name,
+        browser_info: deviceInfo?.browser || matchedDevice.browser_info,
+        last_active: new Date().toISOString(),
+      })
+      .eq('id', matchedDevice.id);
+  }
+
+  // 4. Consolidate any redundant duplicate records from earlier multi-browser testing on the same physical device!
+  if (existingList.length > 1) {
+    const devicesByPhysical = new Map<string, any>();
+    const redundantIdsToDelete: string[] = [];
+
+    for (const d of existingList) {
+      const parsed = parseDeviceTypeAndOs(d.device_fingerprint, d.device_name, d.browser_info);
+      const key = `${parsed.type}_${parsed.os}`;
+      if (!devicesByPhysical.has(key)) {
+        devicesByPhysical.set(key, d);
+      } else {
+        // Redundant duplicate! If current is not primary, delete it
+        if (!d.is_primary) {
+          redundantIdsToDelete.push(d.id);
+        } else {
+          // Current is primary, delete the previously stored non-primary
+          const prev = devicesByPhysical.get(key);
+          if (prev && !prev.is_primary) {
+            redundantIdsToDelete.push(prev.id);
+            devicesByPhysical.set(key, d);
+          }
+        }
+      }
+    }
+
+    if (redundantIdsToDelete.length > 0) {
+      await supabaseAdmin
+        .from('student_devices')
+        .delete()
+        .in('id', redundantIdsToDelete);
+
+      existingList = existingList.filter((d: any) => !redundantIdsToDelete.includes(d.id));
+    }
+  }
+
+  if (matchedDevice) {
+    return {
+      allowed: true,
+      isPrimary: Boolean(matchedDevice.is_primary),
+    };
+  }
+
+  // 5. New Physical Device: Check 2-device limit
+  if (existingList.length >= 2) {
+    return {
+      allowed: false,
+      maxDevicesReached: true,
+      message: 'عذراً، لقد بلغت الحد الأقصى للأجهزة المصرح بها لحسابك (جهازين فقط). لا يمكن فتح الحساب على جهاز ثالث. يرجى الدخول من أحد جهازيك المسجلين، أو إزالة الجهاز الثاني من صفحة "أجهزتي المسجلة" لإتاحة هذا الجهاز.',
+    };
+  }
+
+  // 6. Register as new physical device
+  const isPrimary = (existingList.length === 0);
+  const finalDeviceName = deviceInfo?.name || (isPrimary ? 'الجهاز الأساسي (مثبت)' : 'الجهاز الثاني');
+  const finalBrowser = deviceInfo?.browser || '';
+
+  if (isPrimary) {
+    await supabaseAdmin
+      .from('profiles')
+      .update({ primary_device_fingerprint: cleanFp })
+      .eq('id', studentId);
+  }
+
+  await supabaseAdmin.from('student_devices').insert([{
+    student_id: studentId,
+    device_fingerprint: cleanFp,
+    device_name: finalDeviceName,
+    browser_info: finalBrowser,
+    is_primary: isPrimary,
+    last_active: new Date().toISOString(),
+  }]);
+
+  return {
+    allowed: true,
+    isPrimary,
+  };
+}
+
+export async function loginAction(
+  email: string, 
+  pass: string, 
+  deviceFingerprint?: string,
+  deviceInfo?: { name?: string; browser?: string }
+) {
   try {
     const cleanEmail = email.trim().toLowerCase();
     const cleanPass = pass.trim();
@@ -598,66 +773,17 @@ export async function loginAction(email: string, pass: string, deviceFingerprint
       return { success: false, message: 'تم رفض طلب انضمامك للمنصة. يمكنك التواصل مع المعلم للاستفسار على الرقم: 01552191172' };
     }
 
-    // Strict 2-Device Policy Enforcement for Students
+    // Strict 2-Device Policy Enforcement for Students (Physical hardware level)
     if (user.role === 'student' && cleanFp) {
       try {
-        // 1. Check if device is banned
-        const { data: bannedCheck } = await supabaseAdmin
-          .from('banned_devices')
-          .select('id, reason')
-          .eq('device_fingerprint', cleanFp)
-          .limit(1);
-
-        if (bannedCheck && bannedCheck.length > 0) {
+        const deviceResult = await verifyAndEnforceStudentDevice(user.id, cleanFp, deviceInfo);
+        if (!deviceResult.allowed) {
           return {
             success: false,
-            isBanned: true,
-            message: 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة. ' + (bannedCheck[0].reason || ''),
+            isBanned: deviceResult.isBanned,
+            maxDevicesReached: deviceResult.maxDevicesReached,
+            message: deviceResult.message || 'تم رفض الدخول من هذا الجهاز',
           };
-        }
-
-        // 2. Fetch existing devices for this student
-        const { data: studentDevices } = await supabaseAdmin
-          .from('student_devices')
-          .select('*')
-          .eq('student_id', user.id)
-          .order('is_primary', { ascending: false });
-
-        const existingList = studentDevices || [];
-        const existingDevice = existingList.find((d: any) => d.device_fingerprint === cleanFp);
-
-        if (existingDevice) {
-          // Device is already recognized, update last_active
-          await supabaseAdmin
-            .from('student_devices')
-            .update({ last_active: new Date().toISOString() })
-            .eq('id', existingDevice.id);
-        } else {
-          // New device trying to log in
-          if (existingList.length >= 2) {
-            return {
-              success: false,
-              maxDevicesReached: true,
-              message: 'عذراً، لقد بلغت الحد الأقصى للأجهزة المصرح بها لحسابك (جهازين فقط). لا يمكن فتح الحساب على جهاز ثالث. يرجى الدخول من أحد جهازيك المسجلين، أو إزالة الجهاز الثاني من صفحة "أجهزتي المسجلة" لإتاحة هذا الجهاز.',
-            };
-          }
-
-          // Allowed to register as primary (if 0) or secondary (if 1)
-          const isPrimary = (existingList.length === 0);
-          if (isPrimary && !user.primary_device_fingerprint) {
-            await supabaseAdmin
-              .from('profiles')
-              .update({ primary_device_fingerprint: cleanFp })
-              .eq('id', user.id);
-          }
-
-          await supabaseAdmin.from('student_devices').insert([{
-            student_id: user.id,
-            device_fingerprint: cleanFp,
-            device_name: isPrimary ? 'الجهاز الأساسي (مثبت)' : 'الجهاز الثاني',
-            is_primary: isPrimary,
-            last_active: new Date().toISOString(),
-          }]);
         }
       } catch (e) {
         console.error('Error enforcing device policy on login:', e);
@@ -1109,81 +1235,11 @@ export async function checkAndRegisterStudentDeviceAction(
       return { allowed: false, message: 'بيانات غير مكتملة' };
     }
 
-    // 1. Is device banned?
-    const { data: banned } = await supabaseAdmin
-      .from('banned_devices')
-      .select('id, reason')
-      .eq('device_fingerprint', cleanFp)
-      .limit(1);
-
-    if (banned && banned.length > 0) {
-      return {
-        allowed: false,
-        isBanned: true,
-        message: 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة.',
-      };
-    }
-
-    // 2. Fetch existing devices
-    const { data: existingDevices } = await supabaseAdmin
-      .from('student_devices')
-      .select('*')
-      .eq('student_id', cleanStudentId);
-
-    const list = existingDevices || [];
-    const match = list.find((d: any) => d.device_fingerprint === cleanFp);
-
-    if (match) {
-      await supabaseAdmin
-        .from('student_devices')
-        .update({ last_active: new Date().toISOString() })
-        .eq('id', match.id);
-
-      return {
-        allowed: true,
-        isPrimary: Boolean(match.is_primary),
-        totalDevices: list.length,
-      };
-    }
-
-    // 3. If new device, check max limit (2 devices)
-    if (list.length >= 2) {
-      return {
-        allowed: false,
-        maxDevicesReached: true,
-        message: 'لقد استنفدت الحد الأقصى للأجهزة المصرح بها (جهازين فقط). لا يمكنك استخدام حسابك أو الكورسات على جهاز ثالث. يرجى إزالة الجهاز الثاني من صفحة "أجهزتي المسجلة" أولاً لإتاحة هذا الجهاز.',
-      };
-    }
-
-    // 4. Register new device
-    const isPrimary = (list.length === 0);
-    const deviceName = deviceInfo?.name || (isPrimary ? 'الجهاز الأساسي (مثبت)' : 'الجهاز الثاني');
-    const browserInfo = deviceInfo?.browser || '';
-
-    if (isPrimary) {
-      await supabaseAdmin
-        .from('profiles')
-        .update({ primary_device_fingerprint: cleanFp })
-        .eq('id', cleanStudentId);
-    }
-
-    await supabaseAdmin.from('student_devices').insert([{
-      student_id: cleanStudentId,
-      device_fingerprint: cleanFp,
-      device_name: deviceName,
-      browser_info: browserInfo,
-      is_primary: isPrimary,
-      last_active: new Date().toISOString(),
-    }]);
-
-    return {
-      allowed: true,
-      isPrimary,
-      totalDevices: list.length + 1,
-    };
+    const res = await verifyAndEnforceStudentDevice(cleanStudentId, cleanFp, deviceInfo);
+    return res;
   } catch (err: any) {
     console.error('checkAndRegisterStudentDeviceAction error:', err);
-    return { allowed: false, message: err.message };
+    return { allowed: false, message: err.message || 'حدث خطأ أثناء فحص الجهاز' };
   }
 }
 
