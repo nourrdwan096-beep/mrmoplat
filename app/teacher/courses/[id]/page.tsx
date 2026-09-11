@@ -509,7 +509,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
         itemType,
         title: itemTitle.trim(),
         description: itemDesc.trim(),
-        orderIndex: editingItem ? editingItem.orderIndex : Date.now(),
+        orderIndex: editingItem ? editingItem.orderIndex : Math.floor(Date.now() / 1000),
         durationMinutes: durationMinutes === '' ? 0 : durationMinutes,
         totalMarks,
         passingScorePercentage: passingScore,

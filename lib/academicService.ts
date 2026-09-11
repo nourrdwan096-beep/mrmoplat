@@ -871,7 +871,7 @@ export async function copyExamToTargetCourse(
     itemType: sourceItem.itemType,
     title: newExamTitle,
     description: sourceItem.description,
-    orderIndex: Date.now(),
+    orderIndex: Math.floor(Date.now() / 1000),
     durationMinutes: sourceItem.durationMinutes || 0,
     totalMarks: sourceItem.totalMarks || 100,
     passingScorePercentage: sourceItem.passingScorePercentage || 60,
