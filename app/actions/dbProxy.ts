@@ -325,8 +325,8 @@ export async function saveItemServer(item: any): Promise<any> {
     max_exam_attempts: Number(item.maxExamAttempts) || 2,
     video_source_type: item.videoSourceType || 'internal_secured',
     obfuscated_video_id: item.obfuscatedVideoId || null,
-    direct_video_url: item.directVideoUrl || null,
-    pdf_attachment_url: item.pdfAttachmentUrl || null,
+    direct_video_url: (item.directVideoUrl && !item.directVideoUrl.startsWith('idb://')) ? item.directVideoUrl : null,
+    pdf_attachment_url: (item.pdfAttachmentUrl && !item.pdfAttachmentUrl.startsWith('idb://')) ? item.pdfAttachmentUrl : null,
     is_prerequisite_required: item.isPrerequisiteRequired !== false,
     updated_at: new Date().toISOString(),
   };

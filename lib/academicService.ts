@@ -373,55 +373,33 @@ function setLocal<T>(key: string, val: T): void {
 // COURSES CRUD
 // ==========================================
 export async function fetchAllCourses(): Promise<CourseData[]> {
-  const localCourses = getLocal<CourseData[]>(STORAGE_KEYS.COURSES, []);
   try {
     const remoteCourses = await fetchCoursesServer();
-
-    if (remoteCourses && remoteCourses.length > 0) {
-      // Check if local storage has any courses not yet present in Supabase
-      const remoteIds = new Set(remoteCourses.map((c: any) => c.id));
-      const localOnly = localCourses.filter(c => !remoteIds.has(c.id));
-
-      if (localOnly.length > 0) {
-        // Auto-sync local courses to Supabase so nothing created offline/locally is lost
-        syncLocalCoursesServer(localOnly).catch(err => console.warn('syncLocalCoursesServer err:', err));
-      }
-
-      // Merge: remote takes precedence, local fills any gaps
-      const mergedMap = new Map<string, CourseData>();
-      localOnly.forEach(c => mergedMap.set(c.id, c));
-      remoteCourses.forEach((c: CourseData) => mergedMap.set(c.id, c));
-      const merged = Array.from(mergedMap.values());
-
-      setLocal(STORAGE_KEYS.COURSES, merged);
-      return merged;
-    } else if (localCourses.length > 0) {
-      // Remote is empty but local has courses: sync them up to Supabase!
-      syncLocalCoursesServer(localCourses).catch(err => console.warn('syncLocalCoursesServer err:', err));
+    if (remoteCourses && Array.isArray(remoteCourses)) {
+      // Overwrite local storage completely to ensure deleted items on server are removed locally
+      setLocal(STORAGE_KEYS.COURSES, remoteCourses);
+      return remoteCourses;
     }
   } catch (err) {
     console.warn('fetchAllCourses server action error, fallback to local storage:', err);
   }
-  return localCourses;
+  return getLocal<CourseData[]>(STORAGE_KEYS.COURSES, []);
 }
 
 export async function getCourseById(courseId: string): Promise<CourseData | null> {
-  const localCourses = getLocal<CourseData[]>(STORAGE_KEYS.COURSES, []);
-  const foundLocal = localCourses.find(c => c.id === courseId);
-
   try {
     const remoteCourses = await fetchCoursesServer();
-    const foundRemote = remoteCourses.find((c: any) => c.id === courseId);
-    if (foundRemote) {
-      const updatedList = [foundRemote, ...localCourses.filter(c => c.id !== courseId)];
-      setLocal(STORAGE_KEYS.COURSES, updatedList);
-      return foundRemote;
+    if (remoteCourses && Array.isArray(remoteCourses)) {
+      setLocal(STORAGE_KEYS.COURSES, remoteCourses);
+      const foundRemote = remoteCourses.find((c: any) => c.id === courseId);
+      return foundRemote || null;
     }
   } catch (err) {
-    console.warn('getCourseById error:', err);
+    console.warn('getCourseById error, fallback to local:', err);
   }
 
-  return foundLocal || null;
+  const localCourses = getLocal<CourseData[]>(STORAGE_KEYS.COURSES, []);
+  return localCourses.find(c => c.id === courseId) || null;
 }
 
 export async function saveCourse(course: Omit<CourseData, 'id' | 'createdAt'> & { id?: string }): Promise<CourseData> {
@@ -569,23 +547,21 @@ export async function duplicateCourse(
 // UNITS CRUD
 // ==========================================
 export async function fetchUnitsByCourse(courseId: string): Promise<UnitData[]> {
-  const allUnits = getLocal<UnitData[]>(STORAGE_KEYS.UNITS, []);
-  const localUnits = allUnits.filter(u => u.courseId === courseId);
   try {
     const remoteUnits = await fetchUnitsServer(courseId);
-
-    if (remoteUnits && remoteUnits.length > 0) {
-      const mergedMap = new Map<string, UnitData>();
-      localUnits.forEach(u => mergedMap.set(u.id, u));
-      remoteUnits.forEach((u: UnitData) => mergedMap.set(u.id, u));
-      const combined = [...allUnits.filter(u => u.courseId !== courseId), ...Array.from(mergedMap.values())];
+    if (remoteUnits && Array.isArray(remoteUnits)) {
+      const allUnits = getLocal<UnitData[]>(STORAGE_KEYS.UNITS, []);
+      const otherCoursesUnits = allUnits.filter(u => u.courseId !== courseId);
+      const combined = [...otherCoursesUnits, ...remoteUnits];
       setLocal(STORAGE_KEYS.UNITS, combined);
-      return Array.from(mergedMap.values()).sort((a, b) => a.orderIndex - b.orderIndex);
+      return remoteUnits.sort((a, b) => a.orderIndex - b.orderIndex);
     }
   } catch (err) {
     console.warn('fetchUnitsServer error, fallback to local storage:', err);
   }
 
+  const allUnits = getLocal<UnitData[]>(STORAGE_KEYS.UNITS, []);
+  const localUnits = allUnits.filter(u => u.courseId === courseId);
   return localUnits.sort((a, b) => a.orderIndex - b.orderIndex);
 }
 
@@ -640,23 +616,21 @@ export async function removeUnit(unitId: string): Promise<boolean> {
 // UNIT ITEMS (Lessons, Homework, Exams, Sheets) CRUD
 // ==========================================
 export async function fetchItemsByUnit(unitId: string): Promise<UnitItemData[]> {
-  const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
-  const localItems = allItems.filter(i => i.unitId === unitId);
   try {
     const remoteItems = await fetchItemsServer(unitId);
-
-    if (remoteItems && remoteItems.length > 0) {
-      const mergedMap = new Map<string, UnitItemData>();
-      localItems.forEach(item => mergedMap.set(item.id, item));
-      remoteItems.forEach((item: UnitItemData) => mergedMap.set(item.id, item));
-      const combined = [...allItems.filter(i => i.unitId !== unitId), ...Array.from(mergedMap.values())];
+    if (remoteItems && Array.isArray(remoteItems)) {
+      const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
+      const otherUnitsItems = allItems.filter(i => i.unitId !== unitId);
+      const combined = [...otherUnitsItems, ...remoteItems];
       setLocal(STORAGE_KEYS.ITEMS, combined);
-      return Array.from(mergedMap.values()).sort((a, b) => a.orderIndex - b.orderIndex);
+      return remoteItems.sort((a, b) => a.orderIndex - b.orderIndex);
     }
   } catch (err) {
     console.warn('fetchItemsServer error, fallback to local storage:', err);
   }
 
+  const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
+  const localItems = allItems.filter(i => i.unitId === unitId);
   return localItems.sort((a, b) => a.orderIndex - b.orderIndex);
 }
 
@@ -846,7 +820,7 @@ export async function fetchItemById(itemId: string): Promise<UnitItemData | null
 export async function fetchQuestionsByItem(itemId: string): Promise<QuestionData[]> {
   try {
     const remoteQuestions = await fetchQuestionsServer(itemId);
-    if (remoteQuestions && remoteQuestions.length > 0) {
+    if (remoteQuestions && Array.isArray(remoteQuestions)) {
       const allQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
       const otherQuestions = allQuestions.filter(q => q.itemId !== itemId);
       setLocal(STORAGE_KEYS.QUESTIONS, [...otherQuestions, ...remoteQuestions]);
