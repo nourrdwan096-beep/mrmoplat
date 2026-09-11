@@ -2076,13 +2076,38 @@ export async function fetchStudentEnrolledCourseIds(studentId: string, studentEm
     }
   });
 
+  // Free courses are available to all registered students without requiring any activation code
+  try {
+    const allCourses = await fetchAllCourses();
+    allCourses.forEach(c => {
+      if (c.isPublished && (c.isFree || (c.price ?? 0) <= 0)) {
+        if (!results.includes(c.id)) {
+          results.push(c.id);
+        }
+      }
+    });
+  } catch (err) {
+    console.warn("Auto-including free courses error:", err);
+  }
+
   return results;
 }
 
 export async function isStudentEnrolledInCourse(studentId: string, courseId: string, studentEmail?: string): Promise<boolean> {
   if (!studentId || !courseId) return false;
   const enrolledIds = await fetchStudentEnrolledCourseIds(studentId, studentEmail);
-  return enrolledIds.includes(courseId);
+  if (enrolledIds.includes(courseId)) return true;
+
+  // Fallback direct check for free course
+  try {
+    const course = await getCourseById(courseId);
+    if (course && (course.isFree || (course.price ?? 0) <= 0)) {
+      await enrollStudentInCourse(studentId, courseId, 'free', 0);
+      return true;
+    }
+  } catch (e) {}
+
+  return false;
 }
 
 export async function enrollStudentInCourse(
