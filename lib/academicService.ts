@@ -1,4 +1,27 @@
 import { supabase } from './supabaseClient';
+import { 
+  proxyUpsert, 
+  proxyInsert, 
+  proxyUpdate, 
+  proxyDelete,
+  fetchCoursesServer,
+  saveCourseServer,
+  deleteCourseServer,
+  fetchUnitsServer,
+  saveUnitServer,
+  deleteUnitServer,
+  fetchItemsServer,
+  saveItemServer,
+  deleteItemServer,
+  fetchQuestionsServer,
+  saveQuestionsServer,
+  fetchCodesServer,
+  insertCodesServer,
+  markCodeUsedServer,
+  fetchStudentEnrollmentsServer,
+  saveEnrollmentServer,
+  syncLocalCoursesServer,
+} from '@/app/actions/dbProxy';
 import { saveVaultItem } from './indexedDbStorage';
 import { getStudentProfilesByIdsAction, saveStudentItemProgressAction } from '@/app/actions/studentActions';
 
@@ -346,46 +369,32 @@ function setLocal<T>(key: string, val: T): void {
 export async function fetchAllCourses(): Promise<CourseData[]> {
   const localCourses = getLocal<CourseData[]>(STORAGE_KEYS.COURSES, []);
   try {
-    // Attempt Supabase query
-    const { data, error } = await supabase
-      .from('courses')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const remoteCourses = await fetchCoursesServer();
 
-    if (!error && data && data.length > 0) {
-      const mapped: CourseData[] = data.map((c: any) => ({
-        id: c.id,
-        title: c.title,
-        slug: c.slug,
-        description: c.description || '',
-        coverImage: c.cover_image_url,
-        price: Number(c.price) || 0,
-        originalPrice: c.original_price ? Number(c.original_price) : undefined,
-        hasDiscount: c.has_discount ?? false,
-        isFree: c.is_free ?? (Number(c.price) === 0),
-        stage: c.stage,
-        grade: c.grade,
-        educationType: c.education_type,
-        isPublished: c.is_published ?? true,
-        publishDate: c.publish_date,
-        expiryDate: c.expiry_date,
-        enforceUnitProgression: c.enforce_unit_progression ?? true,
-        enforceItemProgression: c.enforce_item_progression ?? true,
-        createdAt: c.created_at,
-        updatedAt: c.updated_at,
-      }));
+    if (remoteCourses && remoteCourses.length > 0) {
+      // Check if local storage has any courses not yet present in Supabase
+      const remoteIds = new Set(remoteCourses.map((c: any) => c.id));
+      const localOnly = localCourses.filter(c => !remoteIds.has(c.id));
 
-      // Merge: preserve local courses not yet in remote, and update existing
+      if (localOnly.length > 0) {
+        // Auto-sync local courses to Supabase so nothing created offline/locally is lost
+        syncLocalCoursesServer(localOnly).catch(err => console.warn('syncLocalCoursesServer err:', err));
+      }
+
+      // Merge: remote takes precedence, local fills any gaps
       const mergedMap = new Map<string, CourseData>();
-      localCourses.forEach(c => mergedMap.set(c.id, c));
-      mapped.forEach(c => mergedMap.set(c.id, c));
+      localOnly.forEach(c => mergedMap.set(c.id, c));
+      remoteCourses.forEach((c: CourseData) => mergedMap.set(c.id, c));
       const merged = Array.from(mergedMap.values());
 
       setLocal(STORAGE_KEYS.COURSES, merged);
       return merged;
+    } else if (localCourses.length > 0) {
+      // Remote is empty but local has courses: sync them up to Supabase!
+      syncLocalCoursesServer(localCourses).catch(err => console.warn('syncLocalCoursesServer err:', err));
     }
   } catch (err) {
-    console.warn('Supabase fetch failed, fallback to local storage:', err);
+    console.warn('fetchAllCourses server action error, fallback to local storage:', err);
   }
   return localCourses;
 }
@@ -393,54 +402,25 @@ export async function fetchAllCourses(): Promise<CourseData[]> {
 export async function getCourseById(courseId: string): Promise<CourseData | null> {
   const localCourses = getLocal<CourseData[]>(STORAGE_KEYS.COURSES, []);
   const foundLocal = localCourses.find(c => c.id === courseId);
-  if (foundLocal) {
-    return foundLocal;
-  }
 
   try {
-    const { data, error } = await supabase
-      .from('courses')
-      .select('*')
-      .eq('id', courseId)
-      .maybeSingle();
-
-    if (!error && data) {
-      const mapped: CourseData = {
-        id: data.id,
-        title: data.title,
-        slug: data.slug,
-        description: data.description || '',
-        coverImage: data.cover_image_url,
-        price: Number(data.price) || 0,
-        originalPrice: data.original_price ? Number(data.original_price) : undefined,
-        hasDiscount: data.has_discount ?? false,
-        isFree: data.is_free ?? (Number(data.price) === 0),
-        stage: data.stage,
-        grade: data.grade,
-        educationType: data.education_type,
-        isPublished: data.is_published ?? true,
-        publishDate: data.publish_date,
-        expiryDate: data.expiry_date,
-        enforceUnitProgression: data.enforce_unit_progression ?? true,
-        enforceItemProgression: data.enforce_item_progression ?? true,
-        createdAt: data.created_at,
-        updatedAt: data.updated_at,
-      };
-
-      const updatedList = [mapped, ...localCourses.filter(c => c.id !== courseId)];
+    const remoteCourses = await fetchCoursesServer();
+    const foundRemote = remoteCourses.find((c: any) => c.id === courseId);
+    if (foundRemote) {
+      const updatedList = [foundRemote, ...localCourses.filter(c => c.id !== courseId)];
       setLocal(STORAGE_KEYS.COURSES, updatedList);
-      return mapped;
+      return foundRemote;
     }
   } catch (err) {
-    console.warn('Supabase getCourseById error:', err);
+    console.warn('getCourseById error:', err);
   }
 
-  return null;
+  return foundLocal || null;
 }
 
 export async function saveCourse(course: Omit<CourseData, 'id' | 'createdAt'> & { id?: string }): Promise<CourseData> {
   const newCourse: CourseData = {
-    id: course.id || crypto.randomUUID(),
+    id: course.id && course.id.length === 36 ? course.id : crypto.randomUUID(),
     title: course.title,
     slug: course.slug || course.title.toLowerCase().replace(/\s+/g, '-'),
     description: course.description,
@@ -462,27 +442,12 @@ export async function saveCourse(course: Omit<CourseData, 'id' | 'createdAt'> & 
   };
 
   try {
-    await supabase.from('courses').upsert({
-      id: newCourse.id,
-      title: newCourse.title,
-      slug: newCourse.slug,
-      description: newCourse.description,
-      cover_image_url: newCourse.coverImage,
-      price: newCourse.price,
-      original_price: newCourse.originalPrice,
-      has_discount: newCourse.hasDiscount,
-      is_free: newCourse.isFree,
-      stage: newCourse.stage,
-      grade: newCourse.grade,
-      education_type: newCourse.educationType === 'azhar' ? 'azhar' : 'general',
-      is_published: newCourse.isPublished,
-      publish_date: newCourse.publishDate,
-      expiry_date: newCourse.expiryDate,
-      enforce_unit_progression: newCourse.enforceUnitProgression,
-      enforce_item_progression: newCourse.enforceItemProgression,
-    });
+    const saved = await saveCourseServer(newCourse);
+    if (saved) {
+      Object.assign(newCourse, saved);
+    }
   } catch (err) {
-    console.warn('Supabase saveCourse fallback:', err);
+    console.warn('saveCourseServer error:', err);
   }
 
   const existing = getLocal<CourseData[]>(STORAGE_KEYS.COURSES, []);
@@ -499,9 +464,9 @@ export async function saveCourse(course: Omit<CourseData, 'id' | 'createdAt'> & 
 
 export async function removeCourse(courseId: string): Promise<boolean> {
   try {
-    await supabase.from('courses').delete().eq('id', courseId);
+    await deleteCourseServer(courseId);
   } catch (err) {
-    console.warn('Supabase delete error:', err);
+    console.warn('deleteCourseServer error:', err);
   }
 
   const existing = getLocal<CourseData[]>(STORAGE_KEYS.COURSES, []);
@@ -601,33 +566,18 @@ export async function fetchUnitsByCourse(courseId: string): Promise<UnitData[]> 
   const allUnits = getLocal<UnitData[]>(STORAGE_KEYS.UNITS, []);
   const localUnits = allUnits.filter(u => u.courseId === courseId);
   try {
-    const { data, error } = await supabase
-      .from('course_units')
-      .select('*')
-      .eq('course_id', courseId)
-      .order('order_index', { ascending: true });
+    const remoteUnits = await fetchUnitsServer(courseId);
 
-    if (!error && data && data.length > 0) {
-      const mapped: UnitData[] = data.map((u: any) => ({
-        id: u.id,
-        courseId: u.course_id,
-        unitNumber: u.unit_number,
-        title: u.title,
-        description: u.description || '',
-        orderIndex: u.order_index,
-        isPublished: u.is_published ?? true,
-        createdAt: u.created_at,
-      }));
-
+    if (remoteUnits && remoteUnits.length > 0) {
       const mergedMap = new Map<string, UnitData>();
       localUnits.forEach(u => mergedMap.set(u.id, u));
-      mapped.forEach(u => mergedMap.set(u.id, u));
+      remoteUnits.forEach((u: UnitData) => mergedMap.set(u.id, u));
       const combined = [...allUnits.filter(u => u.courseId !== courseId), ...Array.from(mergedMap.values())];
       setLocal(STORAGE_KEYS.UNITS, combined);
       return Array.from(mergedMap.values()).sort((a, b) => a.orderIndex - b.orderIndex);
     }
   } catch (err) {
-    console.warn('Supabase fetch units error:', err);
+    console.warn('fetchUnitsServer error, fallback to local storage:', err);
   }
 
   return localUnits.sort((a, b) => a.orderIndex - b.orderIndex);
@@ -635,28 +585,21 @@ export async function fetchUnitsByCourse(courseId: string): Promise<UnitData[]> 
 
 export async function saveUnit(unit: Omit<UnitData, 'id' | 'createdAt'> & { id?: string }): Promise<UnitData> {
   const newUnit: UnitData = {
-    id: unit.id || crypto.randomUUID(),
+    id: unit.id && unit.id.length === 36 ? unit.id : crypto.randomUUID(),
     courseId: unit.courseId,
-    unitNumber: unit.unitNumber,
+    unitNumber: Number(unit.unitNumber) || Number(unit.orderIndex) || 1,
     title: unit.title,
     description: unit.description,
-    orderIndex: unit.orderIndex,
+    orderIndex: Number(unit.orderIndex) || 1,
     isPublished: unit.isPublished,
     createdAt: new Date().toISOString(),
   };
 
   try {
-    await supabase.from('course_units').upsert({
-      id: newUnit.id,
-      course_id: newUnit.courseId,
-      unit_number: newUnit.unitNumber,
-      title: newUnit.title,
-      description: newUnit.description,
-      order_index: newUnit.orderIndex,
-      is_published: newUnit.isPublished,
-    });
+    const saved = await saveUnitServer(newUnit);
+    if (saved) Object.assign(newUnit, saved);
   } catch (err) {
-    console.warn('Supabase unit save error:', err);
+    console.warn('saveUnitServer error:', err);
   }
 
   const allUnits = getLocal<UnitData[]>(STORAGE_KEYS.UNITS, []);
@@ -673,9 +616,9 @@ export async function saveUnit(unit: Omit<UnitData, 'id' | 'createdAt'> & { id?:
 
 export async function removeUnit(unitId: string): Promise<boolean> {
   try {
-    await supabase.from('course_units').delete().eq('id', unitId);
+    await deleteUnitServer(unitId);
   } catch (err) {
-    console.warn('Supabase removeUnit error:', err);
+    console.warn('deleteUnitServer error:', err);
   }
 
   const allUnits = getLocal<UnitData[]>(STORAGE_KEYS.UNITS, []);
@@ -694,49 +637,25 @@ export async function fetchItemsByUnit(unitId: string): Promise<UnitItemData[]> 
   const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
   const localItems = allItems.filter(i => i.unitId === unitId);
   try {
-    const { data, error } = await supabase
-      .from('unit_items')
-      .select('*')
-      .eq('unit_id', unitId)
-      .order('order_index', { ascending: true });
+    const remoteItems = await fetchItemsServer(unitId);
 
-    if (!error && data && data.length > 0) {
-      const mapped = data.map((i: any) => ({
-        id: i.id,
-        unitId: i.unit_id,
-        courseId: i.course_id,
-        itemType: i.item_type,
-        title: i.title,
-        description: i.description || '',
-        orderIndex: i.order_index,
-        durationMinutes: i.duration_minutes,
-        totalMarks: i.total_marks,
-        passingScorePercentage: i.passing_score_percentage,
-        maxExamAttempts: i.max_exam_attempts,
-        videoSourceType: i.video_source_type,
-        obfuscatedVideoId: i.obfuscated_video_id,
-        directVideoUrl: i.direct_video_url,
-        pdfAttachmentUrl: i.pdf_attachment_url,
-        isPrerequisiteRequired: i.is_prerequisite_required ?? true,
-        createdAt: i.created_at,
-      }));
-
+    if (remoteItems && remoteItems.length > 0) {
       const mergedMap = new Map<string, UnitItemData>();
       localItems.forEach(item => mergedMap.set(item.id, item));
-      mapped.forEach((item: UnitItemData) => mergedMap.set(item.id, item));
+      remoteItems.forEach((item: UnitItemData) => mergedMap.set(item.id, item));
       const combined = [...allItems.filter(i => i.unitId !== unitId), ...Array.from(mergedMap.values())];
       setLocal(STORAGE_KEYS.ITEMS, combined);
       return Array.from(mergedMap.values()).sort((a, b) => a.orderIndex - b.orderIndex);
     }
   } catch (err) {
-    console.warn('Supabase fetchItems error:', err);
+    console.warn('fetchItemsServer error, fallback to local storage:', err);
   }
 
   return localItems.sort((a, b) => a.orderIndex - b.orderIndex);
 }
 
 export async function saveUnitItem(item: Omit<UnitItemData, 'id' | 'createdAt'> & { id?: string }): Promise<UnitItemData> {
-  const itemId = item.id || crypto.randomUUID();
+  const itemId = item.id && item.id.length === 36 ? item.id : crypto.randomUUID();
   let safePdfUrl = item.pdfAttachmentUrl;
 
   if (safePdfUrl && safePdfUrl.startsWith('data:') && safePdfUrl.length > 5000) {
@@ -756,11 +675,11 @@ export async function saveUnitItem(item: Omit<UnitItemData, 'id' | 'createdAt'> 
     itemType: item.itemType,
     title: item.title,
     description: item.description,
-    orderIndex: item.orderIndex,
-    durationMinutes: item.durationMinutes,
-    totalMarks: item.totalMarks,
-    passingScorePercentage: item.passingScorePercentage,
-    maxExamAttempts: item.maxExamAttempts,
+    orderIndex: Number(item.orderIndex) || 1,
+    durationMinutes: Number(item.durationMinutes) || 0,
+    totalMarks: Number(item.totalMarks) || 100,
+    passingScorePercentage: Number(item.passingScorePercentage) || 60,
+    maxExamAttempts: Number(item.maxExamAttempts) || 2,
     videoSourceType: item.videoSourceType || 'internal_secured',
     obfuscatedVideoId: item.obfuscatedVideoId,
     directVideoUrl: item.directVideoUrl,
@@ -770,26 +689,10 @@ export async function saveUnitItem(item: Omit<UnitItemData, 'id' | 'createdAt'> 
   };
 
   try {
-    await supabase.from('unit_items').upsert({
-      id: newItem.id,
-      unit_id: newItem.unitId,
-      course_id: newItem.courseId,
-      item_type: newItem.itemType,
-      title: newItem.title,
-      description: newItem.description,
-      order_index: newItem.orderIndex,
-      duration_minutes: newItem.durationMinutes,
-      total_marks: newItem.totalMarks,
-      passing_score_percentage: newItem.passingScorePercentage,
-      max_exam_attempts: newItem.maxExamAttempts,
-      video_source_type: newItem.videoSourceType,
-      obfuscated_video_id: newItem.obfuscatedVideoId,
-      direct_video_url: newItem.directVideoUrl,
-      pdf_attachment_url: newItem.pdfAttachmentUrl,
-      is_prerequisite_required: newItem.isPrerequisiteRequired,
-    });
+    const saved = await saveItemServer(newItem);
+    if (saved) Object.assign(newItem, saved);
   } catch (err) {
-    console.warn('Supabase unit_items error:', err);
+    console.warn('saveItemServer error:', err);
   }
 
   const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
@@ -878,9 +781,9 @@ export async function updateItemMetadata(
 
 export async function removeUnitItem(itemId: string): Promise<boolean> {
   try {
-    await supabase.from('unit_items').delete().eq('id', itemId);
+    await deleteItemServer(itemId);
   } catch (err) {
-    console.warn('Supabase removeUnitItem error:', err);
+    console.warn('deleteItemServer error:', err);
   }
 
   const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
@@ -936,32 +839,15 @@ export async function fetchItemById(itemId: string): Promise<UnitItemData | null
 // ==========================================
 export async function fetchQuestionsByItem(itemId: string): Promise<QuestionData[]> {
   try {
-    const { data, error } = await supabase
-      .from('quiz_questions')
-      .select('*')
-      .eq('item_id', itemId)
-      .order('order_index', { ascending: true });
-
-    if (!error && data) {
-      return data.map((q: any) => ({
-        id: q.id,
-        itemId: q.item_id,
-        questionText: q.question_text,
-        questionImageUrl: q.question_image_url,
-        questionType: q.question_type,
-        options: q.options || [],
-        correctAnswerId: q.correct_answer_id,
-        idealAnswer: q.ideal_answer,
-        gradingType: q.grading_type,
-        parentId: q.parent_id,
-        explanation: q.explanation,
-        hint: q.hint,
-        points: Number(q.points) || 1,
-        orderIndex: q.order_index,
-      }));
+    const remoteQuestions = await fetchQuestionsServer(itemId);
+    if (remoteQuestions && remoteQuestions.length > 0) {
+      const allQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
+      const otherQuestions = allQuestions.filter(q => q.itemId !== itemId);
+      setLocal(STORAGE_KEYS.QUESTIONS, [...otherQuestions, ...remoteQuestions]);
+      return remoteQuestions.sort((a, b) => a.orderIndex - b.orderIndex);
     }
   } catch (err) {
-    console.warn('Supabase fetchQuestions error:', err);
+    console.warn('fetchQuestionsServer error, fallback to local storage:', err);
   }
 
   const allQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
@@ -970,30 +856,9 @@ export async function fetchQuestionsByItem(itemId: string): Promise<QuestionData
 
 export async function saveQuestionsForItem(itemId: string, questions: QuestionData[]): Promise<boolean> {
   try {
-    // Delete existing
-    await supabase.from('quiz_questions').delete().eq('item_id', itemId);
-    if (questions.length > 0) {
-      await supabase.from('quiz_questions').insert(
-        questions.map((q, idx) => ({
-          id: q.id || 'q_' + Math.random().toString(36).substring(2, 9),
-          item_id: itemId,
-          question_text: q.questionText,
-          question_image_url: q.questionImageUrl,
-          question_type: q.questionType,
-          options: q.options,
-          correct_answer_id: q.correctAnswerId,
-          ideal_answer: q.idealAnswer,
-          grading_type: q.gradingType,
-          parent_id: q.parentId,
-          explanation: q.explanation,
-          hint: q.hint,
-          points: q.points,
-          order_index: idx + 1,
-        }))
-      );
-    }
+    await saveQuestionsServer(itemId, questions);
   } catch (err) {
-    console.warn('Supabase saveQuestions error:', err);
+    console.warn('saveQuestionsServer error:', err);
   }
 
   const allQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
@@ -1297,7 +1162,7 @@ export async function generateActivationCodes(
 
   // 3. Also attempt direct supabase insert as fallback
   try {
-    await supabase.from('course_activation_codes').insert(
+    await proxyInsert('course_activation_codes', 
       generated.map(g => ({
         id: g.id,
         course_id: g.courseId,
@@ -1326,7 +1191,7 @@ export async function deleteActivationCode(codeId: string): Promise<boolean> {
 
   // 2. Direct supabase fallback
   try {
-    await supabase.from('course_activation_codes').delete().eq('id', codeId);
+    await proxyDelete('course_activation_codes', { id: codeId });
   } catch (err) {
     console.warn('Supabase delete code error:', err);
   }
@@ -1448,7 +1313,7 @@ export async function recordStudentItemProgress(
     });
     if (!actionResult?.success) {
       // Fallback to client-side supabase directly
-      await supabase.from('student_item_progress').upsert({
+      await proxyUpsert('student_item_progress', {
         id: updated.id,
         student_id: updated.studentId,
         course_id: updated.courseId,
@@ -1565,7 +1430,7 @@ export async function grantStudentExtraAttempts(
   setLocal(storageKey, localList);
 
   try {
-    await supabase.from('student_item_progress').upsert({
+    await proxyUpsert('student_item_progress', {
       id: prog.id,
       student_id: prog.studentId,
       course_id: prog.courseId,
@@ -1586,7 +1451,7 @@ export async function grantStudentExtraAttempts(
   // Audit log
   try {
     const auditId = crypto.randomUUID();
-    await supabase.from('audit_logs').insert({
+    await proxyInsert('audit_logs', {
       id: auditId,
       actor_name: 'مستر محمد رضوان (المعلم)',
       actor_role: 'teacher',
@@ -2206,21 +2071,14 @@ export async function fetchStudentEnrolledCourseIds(studentId: string, studentEm
   const results: string[] = [];
 
   try {
-    const { data, error } = await supabase
-      .from('course_enrollments')
-      .select('course_id')
-      .eq('student_id', studentId)
-      .eq('is_active', true);
-    
-    if (!error && data) {
-      data.forEach((d: any) => {
-        if (d.course_id && !results.includes(d.course_id)) {
-          results.push(d.course_id);
-        }
+    const remoteEnrolledIds = await fetchStudentEnrollmentsServer(studentId);
+    if (remoteEnrolledIds && remoteEnrolledIds.length > 0) {
+      remoteEnrolledIds.forEach(id => {
+        if (!results.includes(id)) results.push(id);
       });
     }
   } catch (err) {
-    console.warn("Supabase fetch enrollments failed, falling back to local:", err);
+    console.warn("fetchStudentEnrollmentsServer failed, fallback to local:", err);
   }
 
   const allEnrollments = getLocal<any[]>(STORAGE_KEYS.ENROLLMENTS, []);
@@ -2318,33 +2176,16 @@ export async function enrollStudentInCourse(
   setLocal(STORAGE_KEYS.ENROLLMENTS, allEnrollments);
 
   try {
-    await supabase.from('course_enrollments').insert({
-      id: newEnrollment.id,
-      student_id: studentId,
-      course_id: courseId,
-      payment_method: paymentMethod,
-      amount_paid: amount,
-      is_active: true,
-      enrolled_at: newEnrollment.enrolledAt,
-    });
-  } catch (err) {
-    console.warn('Supabase course_enrollments error:', err);
-  }
-
-  // Record wallet transaction if applicable
-  try {
-    const txId = crypto.randomUUID();
-    await supabase.from('wallet_transactions').insert({
-      id: txId,
-      student_id: studentId,
+    await saveEnrollmentServer(newEnrollment, {
+      id: crypto.randomUUID(),
+      studentId: studentId,
       amount: amount,
-      transaction_type: paymentMethod === 'wallet' ? 'course_purchase' : paymentMethod === 'fawry' ? 'fawry_purchase' : 'activation_code',
-      fawry_reference_number: studentInfo?.fawryRefNumber || null,
-      status: 'completed',
+      transactionType: paymentMethod === 'wallet' ? 'course_purchase' : paymentMethod === 'fawry' ? 'fawry_purchase' : 'activation_code',
+      fawryReference: studentInfo?.fawryRefNumber || null,
       notes: `اشتراك وتفعيل كورس (${courseId}) عبر ${paymentMethod}`,
     });
   } catch (err) {
-    console.warn('Supabase wallet_transactions log error:', err);
+    console.warn('saveEnrollmentServer error:', err);
   }
 
   return true;
@@ -2499,13 +2340,9 @@ export async function redeemActivationCodeForStudent(
 
   // Mark code as used in Supabase
   try {
-    await supabase.from('course_activation_codes').update({
-      is_used: true,
-      used_by_student_id: studentId,
-      used_at: nowIso,
-    }).ilike('code', cleanCode);
+    await markCodeUsedServer(codeObj.id, studentId, nowIso);
   } catch (err) {
-    console.warn('Supabase code update error:', err);
+    console.warn('markCodeUsedServer error:', err);
   }
 
   // Enroll student in course
