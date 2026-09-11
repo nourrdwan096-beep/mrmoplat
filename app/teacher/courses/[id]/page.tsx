@@ -501,30 +501,35 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
       ? obfuscateVideoIdentifier(videoUrl)
       : videoUrl;
 
-    const saved = await saveUnitItem({
-      id: editingItem?.id,
-      unitId: targetUnitId,
-      courseId,
-      itemType,
-      title: itemTitle.trim(),
-      description: itemDesc.trim(),
-      orderIndex: editingItem ? editingItem.orderIndex : Date.now(),
-      durationMinutes: durationMinutes === '' ? 0 : durationMinutes,
-      totalMarks,
-      passingScorePercentage: passingScore,
-      maxExamAttempts: maxAttempts,
-      videoSourceType,
-      directVideoUrl: videoUrl,
-      obfuscatedVideoId: securedObfuscatedId,
-      pdfAttachmentUrl: pdfUrl,
-      isPrerequisiteRequired: isPrerequisite,
-    });
+    try {
+      const saved = await saveUnitItem({
+        id: editingItem?.id,
+        unitId: targetUnitId,
+        courseId,
+        itemType,
+        title: itemTitle.trim(),
+        description: itemDesc.trim(),
+        orderIndex: editingItem ? editingItem.orderIndex : Date.now(),
+        durationMinutes: durationMinutes === '' ? 0 : durationMinutes,
+        totalMarks,
+        passingScorePercentage: passingScore,
+        maxExamAttempts: maxAttempts,
+        videoSourceType,
+        directVideoUrl: videoUrl,
+        obfuscatedVideoId: securedObfuscatedId,
+        pdfAttachmentUrl: pdfUrl,
+        isPrerequisiteRequired: isPrerequisite,
+      });
 
-    setIsItemModalOpen(false);
-    await loadData();
+      setIsItemModalOpen(false);
+      await loadData();
 
-    if (navigateToQuestions && (itemType === 'exam' || itemType === 'homework') && saved?.id) {
-      router.push(`/teacher/courses/${courseId}/items/${saved.id}`);
+      if (navigateToQuestions && (itemType === 'exam' || itemType === 'homework') && saved?.id) {
+        router.push(`/teacher/courses/${courseId}/items/${saved.id}`);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || 'حدث خطأ أثناء حفظ المحتوى. يرجى التأكد من تحديث قاعدة البيانات.');
     }
   };
 

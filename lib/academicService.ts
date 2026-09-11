@@ -430,8 +430,9 @@ export async function saveCourse(course: Omit<CourseData, 'id' | 'createdAt'> & 
     if (saved) {
       Object.assign(newCourse, saved);
     }
-  } catch (err) {
+  } catch (err: any) {
     console.warn('saveCourseServer error:', err);
+    throw new Error(err.message || 'فشل حفظ الكورس في قاعدة البيانات');
   }
 
   const existing = getLocal<CourseData[]>(STORAGE_KEYS.COURSES, []);
@@ -580,8 +581,9 @@ export async function saveUnit(unit: Omit<UnitData, 'id' | 'createdAt'> & { id?:
   try {
     const saved = await saveUnitServer(newUnit);
     if (saved) Object.assign(newUnit, saved);
-  } catch (err) {
+  } catch (err: any) {
     console.warn('saveUnitServer error:', err);
+    throw new Error(err.message || 'فشل حفظ الوحدة في قاعدة البيانات');
   }
 
   const allUnits = getLocal<UnitData[]>(STORAGE_KEYS.UNITS, []);
@@ -671,8 +673,9 @@ export async function saveUnitItem(item: Omit<UnitItemData, 'id' | 'createdAt'> 
   try {
     const saved = await saveItemServer(newItem);
     if (saved) Object.assign(newItem, saved);
-  } catch (err) {
+  } catch (err: any) {
     console.warn('saveItemServer error:', err);
+    throw new Error(err.message || 'حدث خطأ في قاعدة البيانات أثناء حفظ المحتوى. (قد تحتاج لتشغيل كود SQL لتحديث الجداول)');
   }
 
   const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
