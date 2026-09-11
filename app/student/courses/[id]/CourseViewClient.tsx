@@ -22,7 +22,12 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
   const { currentUser } = useAuth();
   
   const [course, setCourse] = useState<CourseData | null>(null);
+  const [imgError, setImgError] = useState(false);
+  const fallbackUrl = 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=800&auto=format&fit=crop&q=80';
   const resolvedCoverImage = useResolvedImageUrl(course?.coverImage);
+  const displayCover = (imgError || !resolvedCoverImage || resolvedCoverImage.startsWith('idb://'))
+    ? fallbackUrl
+    : resolvedCoverImage;
   const [units, setUnits] = useState<UnitData[]>([]);
   const [unitItems, setUnitItems] = useState<Record<string, UnitItemData[]>>({});
   const [isEnrolled, setIsEnrolled] = useState(false);
@@ -248,13 +253,14 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
             <div className="w-28 h-28 sm:w-36 sm:h-36 md:w-44 md:h-44 rounded-3xl overflow-hidden shrink-0 border-2 border-slate-700/80 bg-slate-800 shadow-2xl relative">
               {course.coverImage ? (
                 <Image 
-                  src={resolvedCoverImage || 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=800&auto=format&fit=crop&q=80'} 
+                  src={displayCover} 
                   alt={course.title} 
                   width={240} 
                   height={240} 
                   className="w-full h-full object-cover" 
                   referrerPolicy="no-referrer"
-                  unoptimized={Boolean(resolvedCoverImage?.startsWith('data:') || resolvedCoverImage?.startsWith('blob:') || resolvedCoverImage?.startsWith('idb://'))}
+                  onError={() => setImgError(true)}
+                  unoptimized={Boolean(displayCover?.startsWith('data:') || displayCover?.startsWith('blob:'))}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center text-slate-600 bg-slate-800/80">

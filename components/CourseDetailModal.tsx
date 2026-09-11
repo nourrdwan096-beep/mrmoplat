@@ -66,8 +66,13 @@ export default function CourseDetailModal({
   const [unitItems, setUnitItems] = useState<Record<string, UnitItemData[]>>({});
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [imgError, setImgError] = useState(false);
 
+  const fallbackUrl = 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=800&auto=format&fit=crop&q=80';
   const resolvedCoverImage = useResolvedImageUrl(course?.coverImage);
+  const displayCover = (imgError || !resolvedCoverImage || resolvedCoverImage.startsWith('idb://'))
+    ? fallbackUrl
+    : resolvedCoverImage;
 
   useEffect(() => {
     if (initialTab) {
@@ -189,12 +194,13 @@ export default function CourseDetailModal({
         {/* Course Banner Header with clean 16:9 aspect ratio */}
         <div className="relative w-full aspect-[16/9] max-h-72 bg-slate-900 overflow-hidden shrink-0">
           <Image
-            src={resolvedCoverImage}
+            src={displayCover}
             alt={course.title}
             fill
             className="object-cover"
             referrerPolicy="no-referrer"
-            unoptimized={Boolean(resolvedCoverImage?.startsWith('data:') || resolvedCoverImage?.startsWith('blob:') || resolvedCoverImage?.startsWith('idb://'))}
+            onError={() => setImgError(true)}
+            unoptimized={Boolean(displayCover?.startsWith('data:') || displayCover?.startsWith('blob:'))}
           />
           <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/20 pointer-events-none" />
           

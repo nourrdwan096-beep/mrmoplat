@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { 
@@ -77,6 +77,12 @@ export default function CourseCard({
   
   // Resolve idb:// urls to viewable Blob URLs
   const resolvedCoverImage = useResolvedImageUrl(coverImage);
+  const [imgError, setImgError] = useState(false);
+
+  const fallbackUrl = 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=800&auto=format&fit=crop&q=80';
+  const displayCover = (imgError || !resolvedCoverImage || resolvedCoverImage.startsWith('idb://'))
+    ? fallbackUrl
+    : resolvedCoverImage;
 
   // Normalized course object for callbacks
   const mappedCourse: Course = {
@@ -134,22 +140,23 @@ export default function CourseCard({
       <div className="relative w-full aspect-[16/9] rounded-[1.7rem] overflow-hidden bg-slate-200/50 dark:bg-slate-950/50 shrink-0 shadow-inner flex items-center justify-center">
         {/* 1. Blurred background to fill empty space if image is not 16:9 */}
         <Image
-          src={resolvedCoverImage}
+          src={displayCover}
           alt="blur background"
           fill
           className="object-cover opacity-40 dark:opacity-30 blur-2xl scale-110 pointer-events-none"
-          unoptimized={Boolean(resolvedCoverImage?.startsWith('data:') || resolvedCoverImage?.startsWith('blob:') || resolvedCoverImage?.startsWith('idb://'))}
+          unoptimized={Boolean(displayCover?.startsWith('data:') || displayCover?.startsWith('blob:'))}
         />
         
         {/* 2. The Actual Image - Using object-contain so NOTHING is cut off */}
         <Image
-          src={resolvedCoverImage}
+          src={displayCover}
           alt={title}
           fill
           sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
           className="object-contain z-10 group-hover:scale-105 transition-transform duration-700 ease-out p-1"
           referrerPolicy="no-referrer"
-          unoptimized={Boolean(resolvedCoverImage?.startsWith('data:') || resolvedCoverImage?.startsWith('blob:') || resolvedCoverImage?.startsWith('idb://'))}
+          onError={() => setImgError(true)}
+          unoptimized={Boolean(displayCover?.startsWith('data:') || displayCover?.startsWith('blob:'))}
         />
         
         {/* Soft bottom vignette to blend with the overlapping card */}

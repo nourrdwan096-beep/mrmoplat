@@ -297,8 +297,14 @@ function sanitizeForLocalStorage<T>(key: string, val: T): T {
       return val.map((course: any) => {
         if (!course) return course;
         const cleanCourse = { ...course };
-        // If cover image is large data url, offload
-        if (cleanCourse.coverImage && typeof cleanCourse.coverImage === 'string' && cleanCourse.coverImage.startsWith('data:') && cleanCourse.coverImage.length > 1000) {
+        // Only offload extremely large raw image data urls (> 200KB) and NEVER SVG templates
+        if (
+          cleanCourse.coverImage && 
+          typeof cleanCourse.coverImage === 'string' && 
+          cleanCourse.coverImage.startsWith('data:') && 
+          !cleanCourse.coverImage.startsWith('data:image/svg+xml') && 
+          cleanCourse.coverImage.length > 200000
+        ) {
           const vaultId = `course_img_${cleanCourse.id || Math.random().toString(36).substring(2, 9)}`;
           saveVaultItem(vaultId, cleanCourse.coverImage).catch(() => {});
           cleanCourse.coverImage = `idb://${vaultId}`;

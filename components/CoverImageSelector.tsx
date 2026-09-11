@@ -51,16 +51,58 @@ export default function CoverImageSelector({ value, onChange, defaultTitle }: Co
       return;
     }
 
-    if (file.size > 8 * 1024 * 1024) {
-      alert('حجم الصورة كبير جداً. يرجى اختيار صورة أقل من 8 ميجابايت.');
+    if (file.size > 15 * 1024 * 1024) {
+      alert('حجم الصورة كبير جداً. يرجى اختيار صورة أقل من 15 ميجابايت.');
       return;
     }
 
+    // For SVG images, keep them directly as data URL
+    if (file.type === 'image/svg+xml') {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          onChange(event.target.result as string);
+        }
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    // For raster images, compress and resize to optimal 1200px width for fast loading
     const reader = new FileReader();
     reader.onload = (event) => {
-      if (event.target?.result) {
-        onChange(event.target.result as string);
-      }
+      const rawDataUrl = event.target?.result as string;
+      if (!rawDataUrl) return;
+
+      const img = new window.Image();
+      img.onload = () => {
+        const maxWidth = 1200;
+        const maxHeight = 675; // 16:9 ratio target
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth || height > maxHeight) {
+          const ratio = Math.min(maxWidth / width, maxHeight / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          onChange(compressedDataUrl);
+        } else {
+          onChange(rawDataUrl);
+        }
+      };
+      img.onerror = () => {
+        onChange(rawDataUrl);
+      };
+      img.src = rawDataUrl;
     };
     reader.readAsDataURL(file);
   };

@@ -86,7 +86,9 @@ function parseCourseFromRow(row: any): any {
     title: row.title,
     slug: row.slug || row.title.toLowerCase().replace(/\s+/g, '-'),
     description,
-    coverImage: row.cover_image_url || 'https://picsum.photos/seed/course/800/600',
+    coverImage: (row.cover_image_url && !row.cover_image_url.startsWith('idb://'))
+      ? row.cover_image_url
+      : 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=800&auto=format&fit=crop&q=80',
     price: Number(row.price) || 0,
     originalPrice,
     hasDiscount,
@@ -145,7 +147,9 @@ export async function saveCourseServer(course: any): Promise<any> {
     title: course.title,
     slug: course.slug || course.title.toLowerCase().replace(/\s+/g, '-'),
     description: storedDescription,
-    cover_image_url: course.coverImage,
+    cover_image_url: (course.coverImage && !course.coverImage.startsWith('idb://'))
+      ? course.coverImage
+      : 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=800&auto=format&fit=crop&q=80',
     price: Number(course.price) || 0,
     is_free: Boolean(course.isFree || Number(course.price) === 0),
     stage: course.stage === 'middle' ? 'middle' : 'high',

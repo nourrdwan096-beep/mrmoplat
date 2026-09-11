@@ -53,7 +53,12 @@ export default function CourseDetailsPage({ params }: { params: Promise<{ id: st
   const { currentUser } = useAuth();
 
   const [course, setCourse] = useState<CourseData | null>(null);
+  const [imgError, setImgError] = useState(false);
+  const fallbackUrl = 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=800&auto=format&fit=crop&q=80';
   const resolvedCoverImage = useResolvedImageUrl(course?.coverImage);
+  const displayCover = (imgError || !resolvedCoverImage || resolvedCoverImage.startsWith('idb://'))
+    ? fallbackUrl
+    : resolvedCoverImage;
   const [units, setUnits] = useState<UnitData[]>([]);
   const [unitItems, setUnitItems] = useState<Record<string, UnitItemData[]>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -573,12 +578,13 @@ export default function CourseDetailsPage({ params }: { params: Promise<{ id: st
               {/* Cover Card */}
               <div className="rounded-[2rem] overflow-hidden bg-slate-900 border border-slate-200/80 dark:border-slate-800/80 shadow-xl relative aspect-[16/9] w-full">
                 <Image
-                  src={resolvedCoverImage || 'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?w=800&auto=format&fit=crop&q=80'}
+                  src={displayCover}
                   alt={course.title}
                   fill
                   className="object-cover"
                   referrerPolicy="no-referrer"
-                  unoptimized={Boolean(resolvedCoverImage?.startsWith('data:') || resolvedCoverImage?.startsWith('blob:') || resolvedCoverImage?.startsWith('idb://'))}
+                  onError={() => setImgError(true)}
+                  unoptimized={Boolean(displayCover?.startsWith('data:') || displayCover?.startsWith('blob:'))}
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex items-end p-5">
                   <div className="text-white">
