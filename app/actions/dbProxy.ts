@@ -363,6 +363,89 @@ export async function saveItemServer(item: any): Promise<any> {
   };
 }
 
+export async function updateItemMetadataServer(itemId: string, metadata: {
+  title?: string;
+  description?: string;
+  durationMinutes?: number;
+  totalMarks?: number;
+  passingScorePercentage?: number;
+  maxExamAttempts?: number;
+  startDate?: string;
+  endDate?: string;
+  isPrerequisiteRequired?: boolean;
+}): Promise<{ success: boolean; item?: any; error?: string }> {
+  try {
+    const updatePayload: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (metadata.title !== undefined) updatePayload.title = metadata.title;
+    if (metadata.description !== undefined) updatePayload.description = metadata.description;
+    if (metadata.durationMinutes !== undefined) updatePayload.duration_minutes = metadata.durationMinutes;
+    if (metadata.totalMarks !== undefined) updatePayload.total_marks = metadata.totalMarks;
+    if (metadata.passingScorePercentage !== undefined) updatePayload.passing_score_percentage = metadata.passingScorePercentage;
+    if (metadata.maxExamAttempts !== undefined) updatePayload.max_exam_attempts = Math.max(1, Number(metadata.maxExamAttempts) || 3);
+    if (metadata.startDate !== undefined) updatePayload.start_date = metadata.startDate || null;
+    if (metadata.endDate !== undefined) updatePayload.end_date = metadata.endDate || null;
+    if (metadata.isPrerequisiteRequired !== undefined) updatePayload.is_prerequisite_required = metadata.isPrerequisiteRequired;
+
+    const { data, error } = await supabaseAdmin
+      .from('unit_items')
+      .update(updatePayload)
+      .eq('id', itemId)
+      .select();
+
+    if (error) {
+      console.error('updateItemMetadataServer error:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, item: data?.[0] };
+  } catch (err: any) {
+    console.error('updateItemMetadataServer exception:', err);
+    return { success: false, error: err?.message || 'فشل تحديث البيانات' };
+  }
+}
+
+export async function fetchItemByIdServer(itemId: string): Promise<any | null> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('unit_items')
+      .select('*')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (error || !data) {
+      if (error) console.warn('fetchItemByIdServer error:', error);
+      return null;
+    }
+
+    return {
+      id: data.id,
+      unitId: data.unit_id,
+      courseId: data.course_id,
+      itemType: data.item_type,
+      title: data.title,
+      description: data.description || '',
+      orderIndex: data.order_index,
+      durationMinutes: data.duration_minutes,
+      totalMarks: data.total_marks,
+      passingScorePercentage: data.passing_score_percentage,
+      maxExamAttempts: data.max_exam_attempts !== null && data.max_exam_attempts !== undefined ? Number(data.max_exam_attempts) : 3,
+      startDate: data.start_date || undefined,
+      endDate: data.end_date || undefined,
+      videoSourceType: data.video_source_type,
+      obfuscatedVideoId: data.obfuscated_video_id,
+      directVideoUrl: data.direct_video_url,
+      pdfAttachmentUrl: data.pdf_attachment_url,
+      isPrerequisiteRequired: data.is_prerequisite_required,
+      createdAt: data.created_at,
+    };
+  } catch (err) {
+    console.warn('fetchItemByIdServer exception:', err);
+    return null;
+  }
+}
+
 export async function deleteItemServer(itemId: string): Promise<boolean> {
   const { error } = await supabaseAdmin
     .from('unit_items')
@@ -802,6 +885,47 @@ export async function submitAndGradeExamServer(payload: {
       questionResults: {},
       error: err?.message || 'حدث خطأ غير متوقع أثناء تسليم الاختبار',
     };
+  }
+}
+
+// -------------------------------------------------------------
+// SECURE CROSS-DEVICE STUDENT PROGRESS SYNC (SERVER ACTION)
+// -------------------------------------------------------------
+export async function fetchStudentProgressServer(studentId: string, courseId?: string): Promise<any[]> {
+  try {
+    if (!studentId) return [];
+
+    let query = supabaseAdmin
+      .from('student_item_progress')
+      .select('*, unit_items(title, max_exam_attempts, item_type)')
+      .eq('student_id', studentId);
+
+    if (courseId) {
+      query = query.eq('course_id', courseId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      // Fallback if join syntax is not supported in the schema
+      let fallbackQuery = supabaseAdmin
+        .from('student_item_progress')
+        .select('*')
+        .eq('student_id', studentId);
+      if (courseId) {
+        fallbackQuery = fallbackQuery.eq('course_id', courseId);
+      }
+      const { data: rawData, error: rawErr } = await fallbackQuery;
+      if (rawErr) {
+        console.warn('fetchStudentProgressServer fallback warning:', rawErr);
+        return [];
+      }
+      return rawData || [];
+    }
+
+    return data || [];
+  } catch (err) {
+    console.error('fetchStudentProgressServer exception:', err);
+    return [];
   }
 }
 

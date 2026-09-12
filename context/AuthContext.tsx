@@ -49,7 +49,22 @@ function subscribeAuth(callback: () => void) {
 
 function getUserSnapshot(): string {
   if (typeof window === 'undefined') return '';
-  return localStorage.getItem('mr_radwan_current_user') || '';
+  const local = localStorage.getItem('mr_radwan_current_user');
+  if (local) return local;
+  
+  // Resilient fallback to cookies if localStorage was re-initialized
+  try {
+    const match = document.cookie.match(/(^|;)\s*mr_radwan_user=([^;]+)/);
+    if (match) {
+      const val = decodeURIComponent(match[2]);
+      if (val) {
+        localStorage.setItem('mr_radwan_current_user', val);
+        return val;
+      }
+    }
+  } catch {}
+
+  return '';
 }
 
 function getDevicesSnapshot(): string {
@@ -137,6 +152,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           registeredDevices: [{ id: '1', name: 'Master Device (Primary)', isPrimary: true, lastActive: 'الآن' }]
         };
         localStorage.setItem('mr_radwan_current_user', JSON.stringify(teacherProfile));
+        try {
+          document.cookie = 'mr_radwan_role=teacher; path=/; max-age=31536000; SameSite=Lax';
+          document.cookie = 'mr_radwan_user=' + encodeURIComponent(JSON.stringify(teacherProfile)) + '; path=/; max-age=31536000; SameSite=Lax';
+        } catch {}
         notifyAuth();
         return { success: true, message: 'مرحباً بك يا مستر محمد رضوان، تم تسجيل الدخول بنجاح إلى لوحة الإدارة.' };
       } else {
@@ -171,6 +190,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             userToStore.avatarUrl = null; // Prevent localStorage quota exceeded error for large base64 images
           }
           localStorage.setItem('mr_radwan_current_user', JSON.stringify(userToStore));
+          try {
+            document.cookie = `mr_radwan_role=${userToStore.role}; path=/; max-age=31536000; SameSite=Lax`;
+            document.cookie = `mr_radwan_user=${encodeURIComponent(JSON.stringify(userToStore))}; path=/; max-age=31536000; SameSite=Lax`;
+          } catch {}
           notifyAuth();
           
           if (res.user.role === 'student') {
@@ -295,6 +318,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = () => {
     localStorage.removeItem('mr_radwan_current_user');
+    try {
+      document.cookie = 'mr_radwan_role=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_radwan_user=; path=/; max-age=0; SameSite=Lax';
+    } catch {}
     notifyAuth();
   };
 

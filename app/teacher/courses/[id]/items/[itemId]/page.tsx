@@ -42,7 +42,8 @@ import {
   Sliders,
   Maximize2,
   Settings,
-  Lock
+  Lock,
+  Loader2
 } from 'lucide-react';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
 import WordBankSolver from '@/components/WordBankSolver';
@@ -464,7 +465,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
         } : null);
       }
       setMetaSaveSuccess(true);
-      setTimeout(() => setMetaSaveSuccess(false), 3500);
+      setTimeout(() => setMetaSaveSuccess(false), 4500);
     } catch (err) {
       console.error('Error saving metadata:', err);
       alert('حدث خطأ أثناء حفظ بيانات ومواصفات الاختبار');
@@ -772,14 +773,14 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                       عدد محاولات السماح قبل إغلاق الجلسة:
                     </label>
                     <span className="text-violet-600 dark:text-violet-400 font-black text-xs px-2.5 py-0.5 rounded-full bg-violet-100 dark:bg-violet-950/80 border border-violet-200 dark:border-violet-800">
-                      {metaMaxAttempts} {metaMaxAttempts === 1 ? 'محاولة واحدة' : metaMaxAttempts === 2 ? 'محاولتان' : 'محاولات'}
+                      {metaMaxAttempts >= 999 ? 'محاولات غير محدودة (مفتوحة)' : `${metaMaxAttempts} ${metaMaxAttempts === 1 ? 'محاولة واحدة' : metaMaxAttempts === 2 ? 'محاولتان' : 'محاولات'}`}
                     </span>
                   </div>
 
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setMetaMaxAttempts(Math.max(1, metaMaxAttempts - 1))}
+                      onClick={() => setMetaMaxAttempts(Math.max(1, (metaMaxAttempts >= 999 ? 10 : metaMaxAttempts) - 1))}
                       className="w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-black text-lg flex items-center justify-center transition-all shadow-sm active:scale-95"
                       title="تقليل عدد المحاولات"
                     >
@@ -788,14 +789,14 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                     <input
                       type="number"
                       min={1}
-                      max={20}
+                      max={9999}
                       value={metaMaxAttempts}
                       onChange={(e) => setMetaMaxAttempts(Math.max(1, Number(e.target.value) || 1))}
                       className="flex-1 text-center py-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-black text-base shadow-sm focus:ring-2 focus:ring-violet-500"
                     />
                     <button
                       type="button"
-                      onClick={() => setMetaMaxAttempts(metaMaxAttempts + 1)}
+                      onClick={() => setMetaMaxAttempts((metaMaxAttempts >= 999 ? 0 : metaMaxAttempts) + 1)}
                       className="w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-black text-lg flex items-center justify-center transition-all shadow-sm active:scale-95"
                       title="زيادة عدد المحاولات"
                     >
@@ -806,7 +807,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                   {/* Quick Preset Buttons */}
                   <div className="flex flex-wrap items-center gap-1.5 pt-1">
                     <span className="text-[10px] font-bold text-slate-400">تحديد سريع:</span>
-                    {[1, 2, 3, 5, 10].map((preset) => (
+                    {[1, 2, 3, 5, 10, 20, 50, 999].map((preset) => (
                       <button
                         key={preset}
                         type="button"
@@ -817,13 +818,13 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                             : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700'
                         }`}
                       >
-                        {preset} {preset === 3 ? '(الافتراضي)' : ''}
+                        {preset === 999 ? 'غير محدود (999)' : `${preset} ${preset === 3 ? '(الافتراضي)' : ''}`}
                       </button>
                     ))}
                   </div>
 
                   <p className="text-[11px] font-bold text-slate-500">
-                    💡 الوضع الافتراضي للامتحان هو 3 محاولات. يمكنك زيادتها أو تقليلها بحرية تامة، وتُعتمد دائماً درجة المحاولة الأخيرة.
+                    💡 الوضع الافتراضي هو 3 محاولات، وللمعلم الحرية الكاملة في كتابة أي رقم يناسبه أو اختياره من القائمة السريعة، وتُسجل دائماً أحدث محاولة للطالب.
                   </p>
                 </div>
               </div>
@@ -874,15 +875,44 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
               </div>
 
               {/* Save & Action Buttons */}
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="submit"
-                  disabled={isSavingMeta}
-                  className="w-full sm:w-auto px-8 py-3.5 bg-violet-600 hover:bg-violet-700 text-white rounded-2xl font-black text-sm transition-all shadow-lg shadow-violet-600/30 flex items-center justify-center gap-2"
-                >
-                  <Save className="w-4 h-4" />
-                  <span>{isSavingMeta ? 'جاري الحفظ...' : 'حفظ مواصفات وبيانات الاختبار'}</span>
-                </button>
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+                  <button
+                    type="submit"
+                    disabled={isSavingMeta}
+                    className={`w-full sm:w-auto px-8 py-3.5 rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 shadow-lg ${
+                      metaSaveSuccess
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/40 ring-4 ring-emerald-500/20 animate-pulse'
+                        : isSavingMeta
+                        ? 'bg-violet-400 text-white cursor-wait'
+                        : 'bg-violet-600 hover:bg-violet-700 text-white shadow-violet-600/30 active:scale-95'
+                    }`}
+                  >
+                    {metaSaveSuccess ? (
+                      <>
+                        <CheckCircle2 className="w-5 h-5 text-white" />
+                        <span>✓ تم حفظ التعديلات والمحاولات بنجاح!</span>
+                      </>
+                    ) : isSavingMeta ? (
+                      <>
+                        <Loader2 className="w-5 h-5 text-white animate-spin" />
+                        <span>جاري حفظ التعديلات في قاعدة البيانات...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-5 h-5" />
+                        <span>حفظ مواصفات وبيانات الاختبار</span>
+                      </>
+                    )}
+                  </button>
+
+                  {metaSaveSuccess && (
+                    <div className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/80 border-2 border-emerald-500 text-emerald-800 dark:text-emerald-200 text-xs font-black animate-in fade-in zoom-in-95 duration-200 shadow-md">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>تم تحديث قاعدة البيانات بنجاح ({metaMaxAttempts >= 999 ? 'محاولات مفتوحة' : `${metaMaxAttempts} محاولات`})</span>
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex items-center gap-2 w-full sm:w-auto">
                   <button
@@ -904,6 +934,14 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                   </button>
                 </div>
               </div>
+
+              {/* Floating Bottom Notification on Save */}
+              {metaSaveSuccess && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-6 py-3.5 bg-emerald-600 text-white rounded-2xl shadow-2xl font-black text-sm border-2 border-emerald-400 animate-in fade-in slide-in-from-bottom-5 duration-300">
+                  <CheckCircle2 className="w-6 h-6 text-white shrink-0" />
+                  <span>تم حفظ التعديلات ومواصفات الاختبار وعدد المحاولات ({metaMaxAttempts >= 999 ? 'غير محدود' : `${metaMaxAttempts} محاولات`}) بنجاح!</span>
+                </div>
+              )}
             </div>
           </form>
         )}

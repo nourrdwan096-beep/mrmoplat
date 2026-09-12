@@ -37,16 +37,84 @@ export function TeacherLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
-  // Protected Route Logic
+  // Protected Route Logic with rock-solid session persistence on page reload
   useEffect(() => {
-    if (currentRole !== 'teacher' && currentRole !== 'super_admin') {
-      router.push('/login');
+    // 1. Direct synchronous check of localStorage and cookie
+    let resolvedRole = currentRole;
+    if (resolvedRole !== 'teacher' && resolvedRole !== 'super_admin' && typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('mr_radwan_current_user');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.role === 'teacher' || parsed.role === 'super_admin') {
+            resolvedRole = parsed.role;
+          }
+        }
+        if (resolvedRole !== 'teacher' && resolvedRole !== 'super_admin') {
+          const match = document.cookie.match(/(^|;)\s*mr_radwan_role=([^;]+)/);
+          if (match && (match[2] === 'teacher' || match[2] === 'super_admin')) {
+            resolvedRole = match[2] as any;
+          }
+        }
+      } catch {}
     }
+
+    if (resolvedRole === 'teacher' || resolvedRole === 'super_admin') {
+      setIsCheckingAuth(false);
+      return;
+    }
+
+    // Only redirect if definitely not a teacher after hydration check
+    const timeout = setTimeout(() => {
+      let finalCheck = currentRole;
+      try {
+        const stored = localStorage.getItem('mr_radwan_current_user');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.role === 'teacher' || parsed.role === 'super_admin') {
+            finalCheck = parsed.role;
+          }
+        }
+      } catch {}
+
+      if (finalCheck !== 'teacher' && finalCheck !== 'super_admin') {
+        router.push('/login');
+      } else {
+        setIsCheckingAuth(false);
+      }
+    }, 200);
+
+    return () => clearTimeout(timeout);
   }, [currentRole, router]);
 
-  if (currentRole !== 'teacher' && currentRole !== 'super_admin') {
-    return null;
+  // If still verifying on initial reload, check local storage directly
+  if (isCheckingAuth && currentRole !== 'teacher' && currentRole !== 'super_admin') {
+    let isTeacherDirect = false;
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('mr_radwan_current_user');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.role === 'teacher' || parsed.role === 'super_admin') {
+            isTeacherDirect = true;
+          }
+        }
+      } catch {}
+    }
+
+    if (!isTeacherDirect) {
+      return (
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4 text-center font-sans" dir="rtl">
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-violet-600 to-indigo-600 flex items-center justify-center shadow-xl shadow-violet-500/20 mb-3 animate-pulse">
+            <LayoutDashboard className="w-7 h-7 text-white" />
+          </div>
+          <h3 className="text-base font-black text-slate-900 dark:text-white mb-1">جاري استعادة جلسة لوحة الإدارة...</h3>
+          <p className="text-xs text-slate-500 font-bold">منصة الأستاذ محمد رضوان</p>
+        </div>
+      );
+    }
   }
 
   const handleLogout = () => {

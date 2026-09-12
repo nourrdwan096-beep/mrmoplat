@@ -13,11 +13,14 @@ import {
   fetchItemsServer,
   saveItemServer,
   deleteItemServer,
+  updateItemMetadataServer,
+  fetchItemByIdServer,
   fetchQuestionsServer,
   fetchSecuredStudentQuestionsServer,
   saveQuestionsServer,
   submitAndGradeExamServer,
   verifyHomeworkQuestionAnswerServer,
+  fetchStudentProgressServer,
   fetchCodesServer,
   insertCodesServer,
   markCodeUsedServer,
@@ -726,7 +729,7 @@ export async function updateItemMetadata(
   }>
 ): Promise<UnitItemData | null> {
   const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
-  const target = allItems.find(i => i.id === itemId);
+  let target = allItems.find(i => i.id === itemId);
   
   if (target) {
     if (metadata.title !== undefined) target.title = metadata.title;
@@ -734,7 +737,7 @@ export async function updateItemMetadata(
     if (metadata.durationMinutes !== undefined) target.durationMinutes = metadata.durationMinutes;
     if (metadata.totalMarks !== undefined) target.totalMarks = metadata.totalMarks;
     if (metadata.passingScorePercentage !== undefined) target.passingScorePercentage = metadata.passingScorePercentage;
-    if (metadata.maxExamAttempts !== undefined) target.maxExamAttempts = metadata.maxExamAttempts;
+    if (metadata.maxExamAttempts !== undefined) target.maxExamAttempts = Math.max(1, Number(metadata.maxExamAttempts) || 3);
     if (metadata.startDate !== undefined) target.startDate = metadata.startDate;
     if (metadata.endDate !== undefined) target.endDate = metadata.endDate;
     if (metadata.isPrerequisiteRequired !== undefined) target.isPrerequisiteRequired = metadata.isPrerequisiteRequired;
@@ -743,23 +746,54 @@ export async function updateItemMetadata(
   }
 
   try {
-    const updatePayload: Record<string, any> = {};
-    if (metadata.title !== undefined) updatePayload.title = metadata.title;
-    if (metadata.description !== undefined) updatePayload.description = metadata.description;
-    if (metadata.durationMinutes !== undefined) updatePayload.duration_minutes = metadata.durationMinutes;
-    if (metadata.totalMarks !== undefined) updatePayload.total_marks = metadata.totalMarks;
-    if (metadata.passingScorePercentage !== undefined) updatePayload.passing_score_percentage = metadata.passingScorePercentage;
-    if (metadata.maxExamAttempts !== undefined) updatePayload.max_exam_attempts = metadata.maxExamAttempts;
-    if (metadata.isPrerequisiteRequired !== undefined) updatePayload.is_prerequisite_required = metadata.isPrerequisiteRequired;
+    const serverRes = await updateItemMetadataServer(itemId, {
+      title: metadata.title,
+      description: metadata.description,
+      durationMinutes: metadata.durationMinutes,
+      totalMarks: metadata.totalMarks,
+      passingScorePercentage: metadata.passingScorePercentage,
+      maxExamAttempts: metadata.maxExamAttempts !== undefined ? Math.max(1, Number(metadata.maxExamAttempts) || 3) : 3,
+      startDate: metadata.startDate,
+      endDate: metadata.endDate,
+      isPrerequisiteRequired: metadata.isPrerequisiteRequired,
+    });
 
-    if (Object.keys(updatePayload).length > 0) {
-      await supabase
-        .from('unit_items')
-        .update(updatePayload)
-        .eq('id', itemId);
+    if (serverRes?.success && serverRes.item) {
+      const dbItem = serverRes.item;
+      const formattedItem: UnitItemData = {
+        id: dbItem.id,
+        unitId: dbItem.unit_id,
+        courseId: dbItem.course_id,
+        itemType: dbItem.item_type,
+        title: dbItem.title,
+        description: dbItem.description || '',
+        orderIndex: dbItem.order_index,
+        durationMinutes: dbItem.duration_minutes,
+        totalMarks: dbItem.total_marks,
+        passingScorePercentage: dbItem.passing_score_percentage,
+        maxExamAttempts: dbItem.max_exam_attempts !== null && dbItem.max_exam_attempts !== undefined ? Number(dbItem.max_exam_attempts) : 3,
+        startDate: dbItem.start_date || undefined,
+        endDate: dbItem.end_date || undefined,
+        videoSourceType: dbItem.video_source_type,
+        obfuscatedVideoId: dbItem.obfuscated_video_id,
+        directVideoUrl: dbItem.direct_video_url,
+        pdfAttachmentUrl: dbItem.pdf_attachment_url,
+        isPrerequisiteRequired: dbItem.is_prerequisite_required,
+        createdAt: dbItem.created_at,
+      };
+
+      const updatedAll = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
+      const idx = updatedAll.findIndex(i => i.id === itemId);
+      if (idx >= 0) {
+        updatedAll[idx] = { ...updatedAll[idx], ...formattedItem };
+      } else {
+        updatedAll.push(formattedItem);
+      }
+      setLocal(STORAGE_KEYS.ITEMS, updatedAll);
+      return formattedItem;
     }
   } catch (err) {
-    console.warn('Supabase updateItemMetadata error:', err);
+    console.warn('updateItemMetadataServer error:', err);
   }
 
   return target || null;
@@ -782,42 +816,35 @@ export async function removeUnitItem(itemId: string): Promise<boolean> {
 }
 
 export async function fetchItemById(itemId: string): Promise<UnitItemData | null> {
+  // First try server query for authoritative, cross-device fresh state
+  try {
+    const remote = await fetchItemByIdServer(itemId);
+    if (remote) {
+      const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
+      const idx = allItems.findIndex(i => i.id === itemId);
+      if (idx >= 0) {
+        allItems[idx] = { ...allItems[idx], ...remote };
+      } else {
+        allItems.push(remote);
+      }
+      setLocal(STORAGE_KEYS.ITEMS, allItems);
+      return remote;
+    }
+  } catch (err) {
+    console.warn('fetchItemByIdServer warning:', err);
+  }
+
+  // Fallback to local storage
   const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
   const item = allItems.find(i => i.id === itemId);
-  if (item) return item;
-
-  try {
-    const { data, error } = await supabase
-      .from('unit_items')
-      .select('*')
-      .eq('id', itemId)
-      .single();
-
-    if (error || !data) return null;
-
-    return {
-      id: data.id,
-      unitId: data.unit_id,
-      courseId: data.course_id,
-      itemType: data.item_type,
-      title: data.title,
-      description: data.description,
-      orderIndex: data.order_index,
-      durationMinutes: data.duration_minutes,
-      totalMarks: data.total_marks,
-      passingScorePercentage: data.passing_score_percentage,
-      maxExamAttempts: data.max_exam_attempts !== null && data.max_exam_attempts !== undefined ? Number(data.max_exam_attempts) : 3,
-      videoSourceType: data.video_source_type,
-      obfuscatedVideoId: data.obfuscated_video_id,
-      directVideoUrl: data.direct_video_url,
-      pdfAttachmentUrl: data.pdf_attachment_url,
-      isPrerequisiteRequired: data.is_prerequisite_required,
-      createdAt: data.created_at,
-    };
-  } catch (err) {
-    console.warn('Supabase fetchItemById error:', err);
-    return null;
+  if (item) {
+    if (item.maxExamAttempts === undefined || item.maxExamAttempts === null || isNaN(Number(item.maxExamAttempts))) {
+      item.maxExamAttempts = 3;
+    }
+    return item;
   }
+
+  return null;
 }
 
 // ==========================================
@@ -1269,14 +1296,10 @@ export async function fetchStudentProgress(studentId: string, courseId: string):
   localList.forEach(p => { map[p.itemId] = p; });
 
   try {
-    const { data, error } = await supabase
-      .from('student_item_progress')
-      .select('*')
-      .eq('student_id', studentId)
-      .eq('course_id', courseId);
+    const remoteData = await fetchStudentProgressServer(studentId, courseId);
 
-    if (!error && data) {
-      data.forEach((row: any) => {
+    if (remoteData && remoteData.length > 0) {
+      remoteData.forEach((row: any) => {
         map[row.item_id] = {
           id: row.id,
           studentId: row.student_id,
@@ -1295,7 +1318,7 @@ export async function fetchStudentProgress(studentId: string, courseId: string):
       setLocal(storageKey, Object.values(map));
     }
   } catch (err) {
-    console.warn('Supabase fetchStudentProgress error:', err);
+    console.warn('fetchStudentProgress error:', err);
   }
 
   return map;
@@ -1529,12 +1552,7 @@ export async function grantExtraAttempt(studentId: string, courseId: string, ite
 
 export async function fetchStudentProgressForTeacher(studentId: string, courseId: string) {
   try {
-    const { data, error } = await supabase
-      .from('student_item_progress')
-      .select('id, item_id, attempts_count, status, highest_score, is_passed, unit_items(title, max_exam_attempts, item_type)')
-      .eq('student_id', studentId)
-      .eq('course_id', courseId);
-    if (error) throw error;
+    const data = await fetchStudentProgressServer(studentId, courseId);
     return data || [];
   } catch (err) {
     console.warn('fetchStudentProgressForTeacher error:', err);

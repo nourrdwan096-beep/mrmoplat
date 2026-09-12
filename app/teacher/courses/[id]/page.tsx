@@ -160,6 +160,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
   const [codesViewMode, setCodesViewMode] = useState<'cards' | 'table'>('cards');
   const [isGeneratingCodes, setIsGeneratingCodes] = useState(false);
   const [generateSuccessMsg, setGenerateSuccessMsg] = useState<string | null>(null);
+  const [itemSaveSuccessMsg, setItemSaveSuccessMsg] = useState<string | null>(null);
 
   // Enrolled Students & Assessment Tracking
   const [enrolledStudents, setEnrolledStudents] = useState<EnrolledStudentData[]>([]);
@@ -523,6 +524,8 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
 
       setIsItemModalOpen(false);
       await loadData();
+      setItemSaveSuccessMsg(`تم حفظ ${(itemType === 'exam' ? 'الامتحان' : itemType === 'homework' ? 'الواجب' : 'المحتوى')} وتحديد ${maxAttempts >= 999 ? 'محاولات غير محدودة' : `${maxAttempts} محاولات`} بنجاح!`);
+      setTimeout(() => setItemSaveSuccessMsg(null), 4500);
 
       if (navigateToQuestions && (itemType === 'exam' || itemType === 'homework') && saved?.id) {
         router.push(`/teacher/courses/${courseId}/items/${saved.id}`);
@@ -2721,20 +2724,20 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
                           </button>
                         </div>
                         {/* Quick Presets */}
-                        <div className="flex items-center gap-1.5 pt-0.5">
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                           <span className="text-[10px] text-slate-400 font-bold">خيارات سريعة:</span>
-                          {[1, 2, 3, 5].map((preset) => (
+                          {[1, 2, 3, 5, 10, 20, 999].map((preset) => (
                             <button
                               key={preset}
                               type="button"
                               onClick={() => setMaxAttempts(preset)}
                               className={`px-2 py-0.5 rounded text-[10px] font-black transition-all ${
                                 maxAttempts === preset
-                                  ? 'bg-amber-500 text-white shadow-sm'
+                                  ? 'bg-amber-500 text-white shadow-sm ring-1 ring-amber-400'
                                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-100'
                               }`}
                             >
-                              {preset} {preset === 3 ? '(افتراضي)' : ''}
+                              {preset === 999 ? 'مفتوح (999)' : `${preset} ${preset === 3 ? '(افتراضي)' : ''}`}
                             </button>
                           ))}
                         </div>
@@ -3089,6 +3092,13 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
         warningNote={deleteTarget?.warningNote}
         isLoading={isDeletingTarget}
       />
+      {/* Floating Bottom Notification on Item Save */}
+      {itemSaveSuccessMsg && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 px-6 py-3.5 bg-emerald-600 text-white rounded-2xl shadow-2xl font-black text-sm border-2 border-emerald-400 animate-in fade-in slide-in-from-bottom-5 duration-300">
+          <CheckCircle2 className="w-6 h-6 text-white shrink-0" />
+          <span>{itemSaveSuccessMsg}</span>
+        </div>
+      )}
     </div>
   );
 }
