@@ -511,7 +511,7 @@ export default function StudentQuizSolver({
           wordBankAnswers,
           textAnswers,
         },
-        timeSpentSeconds: item.durationMinutes ? Math.max(0, (item.durationMinutes * 60) - (timeLeft || 0)) : 0,
+        timeSpentSeconds: Math.max(0, (assessmentDurationMinutes * 60) - (timeLeft || 0)),
         isSecurityTerminated,
       });
 

@@ -65,8 +65,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
   // Metadata form states
   const [metaTitle, setMetaTitle] = useState('');
   const [metaDescription, setMetaDescription] = useState('');
-  const [metaDurationMinutes, setMetaDurationMinutes] = useState<number | ''>('');
-  const [metaIsUnlimitedTime, setMetaIsUnlimitedTime] = useState(true);
+  const [metaDurationMinutes, setMetaDurationMinutes] = useState<number | ''>(30);
   const [metaPassingScore, setMetaPassingScore] = useState(60);
   const [metaMaxAttempts, setMetaMaxAttempts] = useState(3);
   const [metaStartDate, setMetaStartDate] = useState('');
@@ -118,9 +117,10 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
           setItem(currentItem);
           setMetaTitle(currentItem.title || '');
           setMetaDescription(currentItem.description || '');
-          const hasDur = currentItem.durationMinutes && currentItem.durationMinutes > 0;
-          setMetaDurationMinutes(hasDur ? currentItem.durationMinutes! : '');
-          setMetaIsUnlimitedTime(!hasDur);
+          const dur = (currentItem.durationMinutes !== undefined && currentItem.durationMinutes !== null && !isNaN(Number(currentItem.durationMinutes)) && Number(currentItem.durationMinutes) > 0)
+            ? Number(currentItem.durationMinutes)
+            : 30;
+          setMetaDurationMinutes(dur);
           setMetaPassingScore(currentItem.passingScorePercentage || 60);
           setMetaMaxAttempts(currentItem.maxExamAttempts !== undefined && currentItem.maxExamAttempts !== null && !isNaN(Number(currentItem.maxExamAttempts)) ? Number(currentItem.maxExamAttempts) : 3);
           setMetaStartDate(currentItem.startDate || '');
@@ -1005,7 +1005,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                       ...item,
                       title: metaTitle || item.title,
                       description: metaDescription || item.description,
-                      durationMinutes: metaIsUnlimitedTime ? 0 : Number(metaDurationMinutes || 0),
+                      durationMinutes: metaDurationMinutes === '' ? 30 : Math.max(1, Number(metaDurationMinutes)),
                       passingScorePercentage: metaPassingScore,
                       maxExamAttempts: metaMaxAttempts,
                       totalMarks: calculatedTotalMarks,
@@ -1128,12 +1128,12 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                         <Clock className="w-5 h-5" />
                       </div>
                       <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-200">
-                        {!metaIsUnlimitedTime && metaDurationMinutes ? 'مؤقت زمني' : 'مفتوح'}
+                        مؤقت زمني
                       </span>
                     </div>
                     <div>
                       <span className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">
-                        {!metaIsUnlimitedTime && metaDurationMinutes ? `${metaDurationMinutes} دقيقة` : 'بدون وقت محدد'}
+                        {metaDurationMinutes || 30} دقيقة
                       </span>
                     </div>
                     <p className="text-[11px] font-bold text-slate-500">المدة المخصصة للحل</p>
