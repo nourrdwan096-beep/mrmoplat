@@ -50,8 +50,10 @@ import {
   ShieldAlert,
   ListOrdered,
   Eye,
-  Lock
+  Lock,
+  Crown
 } from 'lucide-react';
+import HonorCertificate from '@/components/HonorCertificate';
 
 interface StudentQuizSolverProps {
   item: UnitItemData;
@@ -135,6 +137,7 @@ export default function StudentQuizSolver({
   // Submission & Results
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [resultActiveTab, setResultActiveTab] = useState<'score_certificate' | 'answers_review'>('score_certificate');
   const [results, setResults] = useState<{
     totalPoints: number;
     earnedPoints: number;
@@ -151,17 +154,21 @@ export default function StudentQuizSolver({
     }>;
   } | null>(null);
 
+  const assessmentDurationMinutes = (item.durationMinutes && item.durationMinutes > 0)
+    ? Number(item.durationMinutes)
+    : 30;
+
   useEffect(() => {
-    if (item.durationMinutes && item.durationMinutes > 0) {
-      setTimeLeft(item.durationMinutes * 60);
-    }
-  }, [item.durationMinutes]);
+    setTimeLeft(assessmentDurationMinutes * 60);
+  }, [assessmentDurationMinutes]);
 
   useEffect(() => {
     if (!hasStarted || isSubmitted || isSecurityTerminated) return;
     if (timeLeft === null) return;
     if (timeLeft <= 0) {
-      if (!isSubmitted) handleSubmit();
+      if (!isSubmitted) {
+        handleSubmit();
+      }
       return;
     }
     const timerId = setInterval(() => {
@@ -997,11 +1004,12 @@ export default function StudentQuizSolver({
                 </div>
 
                 <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700/80 flex flex-col items-center justify-center gap-1 text-center">
-                  <Clock className="w-5 h-5 text-amber-500" />
-                  <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">الوقت المسموح</span>
-                  <span className="text-lg font-black text-slate-900 dark:text-white">
-                    {item.durationMinutes ? `${item.durationMinutes} دقيقة` : 'غير محدد'}
+                  <Clock className="w-5 h-5 text-indigo-500" />
+                  <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">الوقت المحدد للحل</span>
+                  <span className="text-lg font-black text-indigo-600 dark:text-indigo-400">
+                    {assessmentDurationMinutes} دقيقة
                   </span>
+                  <span className="text-[9px] font-bold text-slate-400">⏱️ تايمر إجباري</span>
                 </div>
 
                 <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700/80 flex flex-col items-center justify-center gap-1 text-center">
@@ -1038,14 +1046,14 @@ export default function StudentQuizSolver({
             {/* Security Charter & Strict Anti-Cheat Rules */}
             <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 p-5 sm:p-6 rounded-2xl text-right space-y-2.5">
               <h4 className="text-sm font-black text-amber-800 dark:text-amber-400 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4" /> ميثاق النزاهة الأكاديمية والرقابة الصارمة:
+                <AlertTriangle className="w-4 h-4" /> ميثاق النزاهة الأكاديمية ونظام التايمر:
               </h4>
               <ul className="text-xs font-bold text-amber-900 dark:text-amber-300 space-y-1.5 list-disc list-inside leading-relaxed">
+                <li>يبدأ العداد التنازلي ({assessmentDurationMinutes} دقيقة) فور الضغط على زر البدء.</li>
                 <li>يتم تفعيل وضع ملء الشاشة الآمن تلقائياً فور بدء الاختبار.</li>
                 <li>يمنع منعاً باتاً مغادرة النافذة، أو تصغيرها، أو فتح أي برامج جانبية؛ حيث يُرصد ذلك فوراً كنظام إنذار أمني.</li>
-                <li>يؤدي تكرار الإنذار (مخالفتان) إلى الإلغاء الفوري للاختبار واعتماد درجة (صفر).</li>
+                <li>عند وصول العداد إلى (00:00) يتم تسليم جميع إجاباتك وحساب النتيجة تلقائياً وبأمان.</li>
                 <li>تم قفل لقطات الشاشة، والنسخ، وقوائم الماوس لضمان نزاهة الامتحان 100%.</li>
-                <li>تأكد من شحن جهازك واستقرار الاتصال بالإنترنت قبل الضغط على زر البدء.</li>
               </ul>
             </div>
 
@@ -1057,10 +1065,10 @@ export default function StudentQuizSolver({
                 className="w-full max-w-lg py-4 px-8 bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-700 hover:to-indigo-700 text-white font-black text-base rounded-2xl shadow-xl shadow-emerald-600/30 transition-transform active:scale-95 flex items-center justify-center gap-3 cursor-pointer"
               >
                 <Maximize2 className="w-5 h-5" />
-                <span>بدء أداء {isHomework ? 'الواجب' : 'الامتحان'} (دخول البيئة الآمنة)</span>
+                <span>بدء أداء {isHomework ? 'الواجب' : 'الامتحان'} (التايمر: {assessmentDurationMinutes} دقيقة)</span>
               </button>
               <span className="text-[11px] font-bold text-slate-400">
-                بمجرد النقر سيبدأ التايمر وتفعيل ملء الشاشة والرقابة المباشرة
+                بمجرد النقر سيبدأ التايمر التنازلي وتفعيل ملء الشاشة والرقابة المباشرة
               </span>
             </div>
 
@@ -1072,9 +1080,9 @@ export default function StudentQuizSolver({
       {/* Advanced Futuristic Header & Controls Toolbar */}
       <div className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-lg space-y-4">
         
-        {/* Row 1: Item Meta & Badges */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="space-y-1">
+        {/* Row 1: Item Meta & Prominent Countdown Box */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="space-y-1.5">
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`px-3 py-0.5 rounded-full text-xs font-black border ${
                 isHomework
@@ -1083,18 +1091,8 @@ export default function StudentQuizSolver({
               }`}>
                 {isHomework ? '📝 واجب إلكتروني (تصحيح فوري للسؤال)' : '🛡️ امتحان شامل (بيئة مراقبة)'}
               </span>
-              {timeLeft !== null && (
-                <span className={`px-3.5 py-1 rounded-full text-xs font-black border flex items-center gap-1.5 shadow-sm animate-in fade-in ${
-                  timeLeft < 300 
-                    ? 'bg-rose-100 text-rose-800 border-rose-400 animate-pulse'
-                    : 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
-                }`}>
-                  <Clock className="w-3.5 h-3.5" />
-                  <span className="font-bold">الوقت المتبقي:</span>
-                  <span dir="ltr" className="font-mono font-black">{formatTimeLeft(timeLeft)}</span>
-                </span>
-              )}
-              <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
+              
+              <span className="text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
                 درجة النجاح: {item.passingScorePercentage || 60}%
               </span>
               {!isHomework && (
@@ -1106,6 +1104,38 @@ export default function StudentQuizSolver({
             <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
               {item.title}
             </h2>
+          </div>
+
+          {/* Prominent High-Visibility Numeric Timer Box (2030 Futuristic HUD) */}
+          <div className="flex items-center gap-3 flex-wrap">
+            {timeLeft !== null && (
+              <div className={`flex items-center gap-3 px-4 py-2 rounded-2xl border transition-all ${
+                timeLeft < 60
+                  ? 'bg-rose-500/10 border-rose-500 text-rose-600 dark:text-rose-400 ring-2 ring-rose-500/40 animate-pulse'
+                  : timeLeft < 300
+                  ? 'bg-amber-500/10 border-amber-500 text-amber-600 dark:text-amber-400 ring-2 ring-amber-500/30'
+                  : 'bg-indigo-50/80 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300'
+              }`}>
+                <div className={`p-2 rounded-xl flex items-center justify-center ${
+                  timeLeft < 60
+                    ? 'bg-rose-600 text-white animate-bounce'
+                    : timeLeft < 300
+                    ? 'bg-amber-500 text-white'
+                    : 'bg-indigo-600 text-white'
+                }`}>
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-wider flex items-center gap-1 opacity-80">
+                    <span>الوقت المتبقي</span>
+                    {timeLeft < 60 && <span className="text-rose-600 dark:text-rose-400 font-bold">⚠️ أسرع!</span>}
+                  </div>
+                  <div dir="ltr" className="text-xl sm:text-2xl font-black font-mono tracking-wider leading-none">
+                    {formatTimeLeft(timeLeft)}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Action Tools: Zoom, Highlighter, Fullscreen */}
@@ -1265,64 +1295,183 @@ export default function StudentQuizSolver({
 
       {/* Results Header (Displays if submitted) */}
       {isSubmitted && results && (
-        <div
-          className={`p-6 sm:p-8 rounded-3xl border text-center space-y-4 shadow-xl backdrop-blur-md ${
-            results.passed
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-950 dark:text-emerald-100'
-              : 'bg-rose-500/10 border-rose-500/30 text-rose-950 dark:text-rose-100'
-          }`}
-        >
-          <div
-            className={`w-20 h-20 rounded-3xl flex items-center justify-center mx-auto shadow-lg ${
-              results.passed
-                ? 'bg-emerald-600 text-white shadow-emerald-600/30'
-                : 'bg-rose-600 text-white shadow-rose-600/30'
-            }`}
-          >
-            {results.passed ? <Award className="w-10 h-10" /> : <AlertCircle className="w-10 h-10" />}
-          </div>
+        <div className="space-y-6">
+          {/* Failed Exam Screen: Questions and Model Answers Strictly Hidden */}
+          {!results.passed ? (
+            <div className="p-6 sm:p-8 rounded-3xl border text-center space-y-5 shadow-xl backdrop-blur-md bg-rose-500/10 border-rose-500/30 text-rose-950 dark:text-rose-100">
+              <div className="w-20 h-20 rounded-3xl flex items-center justify-center mx-auto shadow-lg bg-rose-600 text-white shadow-rose-600/30">
+                <AlertCircle className="w-10 h-10" />
+              </div>
 
-          <div className="space-y-1">
-            <h3 className="text-2xl sm:text-3xl font-black">
-              {results.passed ? 'ألف مبروك! لقد اجتزت بنجاح 🎉' : 'للأسف لم تحقق درجة النجاح المطلوبة'}
-            </h3>
-            <p className="text-xs sm:text-sm font-bold opacity-80">
-              {results.passed
-                ? 'درجتك ممتازة وتم فتح الدرس والمحاضرة التالية تلقائياً.'
-                : `درجة النجاح المطلوبة هي ${item.passingScorePercentage || 60}%. يمكنك مراجعة الإجابات أدناه ومعرفة أسباب الخطأ.`}
-            </p>
-          </div>
+              <div className="space-y-1">
+                <h3 className="text-2xl sm:text-3xl font-black">
+                  للأسف لم تحقق درجة النجاح المطلوبة
+                </h3>
+                <p className="text-xs sm:text-sm font-bold opacity-80">
+                  درجة النجاح المطلوبة لاجتياز هذا {isHomework ? 'الواجب' : 'الاختبار'} هي {item.passingScorePercentage || 60}%.
+                </p>
+              </div>
 
-          {/* Score Counter */}
-          <div className="flex items-center justify-center gap-6 pt-2">
-            <div className="p-4 rounded-2xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/50 dark:border-slate-800/50 min-w-[120px]">
-              <span className="text-xs font-bold text-slate-500 block">النسبة المئوية</span>
-              <span className="text-3xl font-black">{results.percentage}%</span>
+              {/* Score Display */}
+              <div className="flex items-center justify-center gap-6 pt-2">
+                <div className="p-4 rounded-2xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/50 dark:border-slate-800/50 min-w-[120px]">
+                  <span className="text-xs font-bold text-slate-500 block">النسبة المئوية</span>
+                  <span className="text-3xl font-black text-rose-600 dark:text-rose-400">{results.percentage}%</span>
+                </div>
+                <div className="p-4 rounded-2xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/50 dark:border-slate-800/50 min-w-[120px]">
+                  <span className="text-xs font-bold text-slate-500 block">الدرجة المحققة</span>
+                  <span className="text-3xl font-black">
+                    {results.earnedPoints} / {results.totalPoints}
+                  </span>
+                </div>
+              </div>
+
+              {/* Security & Integrity Lock Notice */}
+              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs font-bold flex items-center justify-center gap-2.5 max-w-lg mx-auto">
+                <Lock className="w-5 h-5 text-amber-600 shrink-0" />
+                <span>تنويه أمان: نموذج الإجابة التفصيلي والأسئلة يتاح حصرياً للطلاب الذين اجتازوا الاختبار بنجاح حرصاً على العدالة ونزاهة التقييم.</span>
+              </div>
+
+              {/* Retake Button if allowed */}
+              {!isHomework && !isLockedOut && (
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={handleRetake}
+                    className="inline-flex items-center gap-2 px-8 py-3.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-black text-sm transition-all shadow-lg shadow-rose-600/30 active:scale-95"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    <span>إعادة المحاولة الآن ({Math.max(0, maxAttempts - currentAttempts)} محاولات متبقية)</span>
+                  </button>
+                </div>
+              )}
+
+              {isLockedOut && (
+                <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-xs font-bold">
+                  لقد استنفدت جميع المحاولات المتاحة ({maxAttempts} محاولات). يرجى مراجعة المعلم أو المساعد لمنح محاولة جديدة.
+                </div>
+              )}
             </div>
-            <div className="p-4 rounded-2xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/50 dark:border-slate-800/50 min-w-[120px]">
-              <span className="text-xs font-bold text-slate-500 block">الدرجة المحققة</span>
-              <span className="text-3xl font-black">
-                {results.earnedPoints} / {results.totalPoints}
-              </span>
-            </div>
-          </div>
+          ) : (
+            /* Passed Exam Screen: 2 Interactive Tabs */
+            <div className="space-y-6">
+              {/* Tabs Switcher */}
+              <div className="flex items-center justify-center gap-3 bg-white dark:bg-slate-900 p-2 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setResultActiveTab('score_certificate')}
+                  className={`px-6 py-3 rounded-xl font-black text-xs transition-all flex items-center gap-2 ${
+                    resultActiveTab === 'score_certificate'
+                      ? 'bg-violet-600 text-white shadow-md'
+                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Award className="w-4 h-4" />
+                  <span>نتيجة الاختبار والتكريم {results.percentage >= 80 && !isHomework ? '👑 (الشهادة)' : ''}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultActiveTab('answers_review')}
+                  className={`px-6 py-3 rounded-xl font-black text-xs transition-all flex items-center gap-2 ${
+                    resultActiveTab === 'answers_review'
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Eye className="w-4 h-4" />
+                  <span>مراجعة الأسئلة ونموذج الإجابة ({solvableQuestions.length})</span>
+                </button>
+              </div>
 
-          {/* Retake Button if allowed */}
-          {!isHomework && !isLockedOut && (
-            <div className="pt-3">
-              <button
-                type="button"
-                onClick={handleRetake}
-                className="inline-flex items-center gap-2 px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-all shadow-md active:scale-95"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span>إعادة المحاولة الآن ({maxAttempts - currentAttempts} محاولات متبقية)</span>
-              </button>
+              {/* Tab 1: Score & Certificate */}
+              {resultActiveTab === 'score_certificate' && (
+                <div className="space-y-6">
+                  {/* Score & Praise Card */}
+                  <div className="p-6 sm:p-8 rounded-3xl border text-center space-y-4 shadow-xl backdrop-blur-md bg-emerald-500/10 border-emerald-500/30 text-emerald-950 dark:text-emerald-100">
+                    <div className="w-20 h-20 rounded-3xl flex items-center justify-center mx-auto shadow-lg bg-emerald-600 text-white shadow-emerald-600/30">
+                      <Award className="w-10 h-10" />
+                    </div>
+
+                    <div className="space-y-1">
+                      <h3 className="text-2xl sm:text-3xl font-black">
+                        ألف مبروك! لقد اجتزت بنجاح 🎉
+                      </h3>
+                      <p className="text-xs sm:text-sm font-bold opacity-80">
+                        {results.percentage >= 80
+                          ? 'أداء أسطوري وتفوق باهر! استحققت شهادة التقدير الرسمية من مستر محمد رضوان.'
+                          : results.percentage >= 70
+                          ? 'أداء رائع جداً ومتميز! استمر في هذا المستوى الرائع.'
+                          : 'أداء جيد وتم اجتياز الاختبار بنجاح.'}
+                      </p>
+                    </div>
+
+                    {/* Score Counters & Level */}
+                    <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
+                      <div className="p-4 rounded-2xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/50 dark:border-slate-800/50 min-w-[120px]">
+                        <span className="text-xs font-bold text-slate-500 block">النسبة المئوية</span>
+                        <span className="text-3xl font-black text-emerald-600 dark:text-emerald-400">{results.percentage}%</span>
+                      </div>
+                      <div className="p-4 rounded-2xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/50 dark:border-slate-800/50 min-w-[120px]">
+                        <span className="text-xs font-bold text-slate-500 block">الدرجة المحققة</span>
+                        <span className="text-3xl font-black">
+                          {results.earnedPoints} / {results.totalPoints}
+                        </span>
+                      </div>
+                      <div className="p-4 rounded-2xl bg-white/70 dark:bg-slate-900/70 border border-slate-200/50 dark:border-slate-800/50 min-w-[140px]">
+                        <span className="text-xs font-bold text-slate-500 block">التقدير الأكاديمي</span>
+                        <span className="text-lg font-black text-violet-600 dark:text-violet-400">
+                          {results.percentage >= 80 ? 'ممتاز مع مرتبة الشرف 👑' : results.percentage >= 70 ? 'جيد جداً 🌟' : 'مقبول / جيد 👍'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Retake Button if allowed */}
+                    {!isHomework && !isLockedOut && (
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={handleRetake}
+                          className="inline-flex items-center gap-2 px-6 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition-all shadow-md active:scale-95"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>إعادة المحاولة لتحسين الدرجة ({Math.max(0, maxAttempts - currentAttempts)} محاولات متبقية)</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Honor Certificate for Exam with Score >= 80% */}
+                  {!isHomework && results.percentage >= 80 && (
+                    <div className="pt-2">
+                      <HonorCertificate
+                        studentName={currentUser?.fullName || 'الطالب المتميز'}
+                        examTitle={item.title}
+                        courseTitle={courseData?.title}
+                        scorePercentage={results.percentage}
+                      />
+                    </div>
+                  )}
+
+                  {/* Notice for score between passing score and 80% */}
+                  {!isHomework && results.percentage < 80 && (
+                    <div className="p-6 rounded-3xl bg-amber-500/10 border border-amber-500/30 text-amber-950 dark:text-amber-100 text-center space-y-2">
+                      <Sparkles className="w-8 h-8 text-amber-500 mx-auto" />
+                      <h4 className="text-base font-black">شهادة التكريم والامتياز:</h4>
+                      <p className="text-xs font-bold text-slate-600 dark:text-slate-300 max-w-md mx-auto">
+                        تُمنح شهادة التقدير والتكريم الرسمية للطلاب الذين يحققون نسبة 80% فما فوق. درجتك الحالية ممتازة ({results.percentage}%)، ويمكنك إعادة المحاولة في أي وقت للحصول على الشهادة والتكريم الرسمي.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
+      {/* Questions Matrix and Solvers List (Rendered only when solving OR when submitted AND passed AND on review tab) */}
+      {(!isSubmitted || (results?.passed && resultActiveTab === 'answers_review')) && (
+        <div className="space-y-6">
       {/* Navigation Matrix & Question Index Toolbar */}
       <div className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1853,13 +2002,16 @@ export default function StudentQuizSolver({
               </span>
             )}
             {timeLeft !== null && (
-              <span className={`px-3 py-1 rounded-full text-xs font-black border flex items-center gap-1.5 ${
-                timeLeft < 300 
-                  ? 'bg-rose-100 text-rose-800 border-rose-400 animate-pulse'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+              <span className={`px-3 py-1 rounded-xl text-xs font-black border flex items-center gap-2 ${
+                timeLeft < 60
+                  ? 'bg-rose-100 text-rose-800 border-rose-400 dark:bg-rose-950/80 dark:text-rose-300 dark:border-rose-700 animate-pulse'
+                  : timeLeft < 300 
+                  ? 'bg-amber-100 text-amber-800 border-amber-400 dark:bg-amber-950/80 dark:text-amber-300 dark:border-amber-700'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 border-slate-300 dark:border-slate-700'
               }`}>
-                <Clock className="w-4 h-4" />
-                <span dir="ltr">{formatTimeLeft(timeLeft)}</span>
+                <Clock className="w-3.5 h-3.5" />
+                <span className="text-[11px] font-bold opacity-80">الوقت المتبقي:</span>
+                <span dir="ltr" className="font-mono font-black text-sm">{formatTimeLeft(timeLeft)}</span>
               </span>
             )}
           </div>
@@ -1872,6 +2024,9 @@ export default function StudentQuizSolver({
             <Send className="w-4 h-4" />
             <span>مراجعة الإحصائية وتسليم {isHomework ? 'الواجب' : 'الاختبار'}</span>
           </button>
+        </div>
+      )}
+      
         </div>
       )}
       

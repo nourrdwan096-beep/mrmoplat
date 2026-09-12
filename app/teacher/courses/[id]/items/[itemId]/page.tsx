@@ -430,7 +430,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
     setIsSavingMeta(true);
     setMetaSaveSuccess(false);
     try {
-      const finalDuration = metaIsUnlimitedTime ? 0 : (metaDurationMinutes === '' ? 0 : Number(metaDurationMinutes));
+      const finalDuration = metaDurationMinutes === '' ? 30 : Math.max(1, Number(metaDurationMinutes));
       const currentCalculatedMarks = questions.reduce((sum, q) => {
         if (q.questionType === 'passage') return sum;
         return sum + (typeof q.points === 'number' ? q.points : (Number(q.points) || 1));
@@ -684,64 +684,57 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                 />
               </div>
 
-              {/* Duration Settings (Unlimited by default) */}
-              <div className="bg-slate-50 dark:bg-slate-800/60 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-4">
-                <div className="flex items-center justify-between">
+              {/* Duration Settings (Exam / Homework Timer in Minutes) */}
+              <div className="bg-slate-50 dark:bg-slate-800/60 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Clock className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                     <span className="text-sm font-black text-slate-900 dark:text-white">
-                      الوقت المسموح به للحل:
+                      عداد وقت {item?.itemType === 'homework' ? 'الواجب' : 'الامتحان'} (بالدقائق):
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMetaIsUnlimitedTime(true);
-                        setMetaDurationMinutes('');
-                      }}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
-                        metaIsUnlimitedTime
-                          ? 'bg-indigo-600 text-white shadow-sm'
-                          : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      بدون وقت محدد (افتراضي)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMetaIsUnlimitedTime(false);
-                        if (!metaDurationMinutes) setMetaDurationMinutes(30);
-                      }}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
-                        !metaIsUnlimitedTime
-                          ? 'bg-indigo-600 text-white shadow-sm'
-                          : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      مؤقت زمني محدد
-                    </button>
-                  </div>
+                  <span className="text-xs font-black px-3 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                    تايمر تنازلي مباشر أمام الطالب ⏱️
+                  </span>
                 </div>
 
-                {!metaIsUnlimitedTime && (
-                  <div className="flex items-center gap-3 pt-2">
-                    <label className="text-xs font-bold text-slate-600 dark:text-slate-400">
-                      مدة الاختبار بالدقائق:
-                    </label>
+                <div className="flex flex-wrap items-center gap-3 pt-1">
+                  <div className="flex items-center gap-2">
                     <input
                       type="number"
                       min={1}
-                      max={360}
+                      max={600}
                       value={metaDurationMinutes}
-                      onChange={(e) => setMetaDurationMinutes(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="w-32 px-3 py-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-black text-sm"
+                      onChange={(e) => setMetaDurationMinutes(e.target.value === '' ? '' : Math.max(1, Number(e.target.value)))}
+                      className="w-36 px-4 py-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-black text-base focus:ring-2 focus:ring-indigo-500 focus:outline-none text-center"
                       placeholder="30"
                     />
-                    <span className="text-xs font-bold text-slate-500">دقيقة</span>
+                    <span className="text-sm font-black text-slate-700 dark:text-slate-300">دقيقة</span>
                   </div>
-                )}
+
+                  {/* Quick Presets */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-slate-400 font-bold">خيارات سريعة:</span>
+                    {[15, 30, 45, 60, 90, 120].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setMetaDurationMinutes(preset)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all ${
+                          Number(metaDurationMinutes) === preset
+                            ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400'
+                            : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        {preset} دقيقة {preset === 30 ? '⭐' : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400 leading-relaxed">
+                  💡 يبدأ التايمر التنازلي فور بدء الطالب حل {item?.itemType === 'homework' ? 'الواجب' : 'الامتحان'}، وعند وصول العداد إلى (00:00) يتم قفل الأسئلة وتسليم الإجابات تلقائياً وبأمان لمنع أي تلاعب.
+                </p>
               </div>
 
               {/* Passing Score & Max Attempts Grid */}

@@ -17,9 +17,11 @@ import {
 import { 
   Award, TrendingUp, CheckCircle2, AlertTriangle, 
   BookOpen, Video, FileText, HelpCircle, ChevronRight, 
-  Sparkles, ArrowLeft, RotateCcw, Target, ShieldCheck
+  Sparkles, ArrowLeft, RotateCcw, Target, ShieldCheck,
+  Crown, X, Printer, Eye
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
+import HonorCertificate from '@/components/HonorCertificate';
 
 interface CourseProgressSummary {
   course: CourseData;
@@ -35,11 +37,21 @@ interface CourseProgressSummary {
   strongTopics: { item: UnitItemData; score: number }[];
 }
 
+interface EarnedCertificate {
+  item: UnitItemData;
+  course: CourseData;
+  score: number;
+  dateStr?: string;
+  certificateId: string;
+}
+
 export default function StudentProgressPage() {
   const { currentUser } = useAuth();
   const [loading, setLoading] = useState(true);
   const [coursesSummary, setCoursesSummary] = useState<CourseProgressSummary[]>([]);
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
+  const [allCertificates, setAllCertificates] = useState<EarnedCertificate[]>([]);
+  const [viewingCertificate, setViewingCertificate] = useState<EarnedCertificate | null>(null);
 
   useEffect(() => {
     async function loadAcademicProgress() {
@@ -50,6 +62,7 @@ export default function StudentProgressPage() {
         const myCourses = allCourses.filter(c => enrolledIds.includes(c.id));
 
         const summaries: CourseProgressSummary[] = [];
+        const earnedCerts: EarnedCertificate[] = [];
 
         for (const course of myCourses) {
           const units = await fetchUnitsByCourse(course.id);
@@ -70,7 +83,7 @@ export default function StudentProgressPage() {
           const weakTopics: { item: UnitItemData; score: number; relatedVideo?: UnitItemData }[] = [];
           const strongTopics: { item: UnitItemData; score: number }[] = [];
 
-          allItems.forEach((item, idx) => {
+          allItems.forEach((item) => {
             const prog = progressMap[item.id];
             if (prog?.isPassed) {
               completedItems++;
@@ -85,6 +98,17 @@ export default function StudentProgressPage() {
                   passedCount++;
                   if (prog.highestScore >= 85) {
                     strongTopics.push({ item, score: prog.highestScore });
+                  }
+
+                  // Certificate eligibility: EXAM ONLY and HIGHEST SCORE >= 80%
+                  if (item.itemType === 'exam' && prog.highestScore >= 80) {
+                    earnedCerts.push({
+                      item,
+                      course,
+                      score: prog.highestScore,
+                      dateStr: prog.completedAt ? new Date(prog.completedAt).toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' }) : undefined,
+                      certificateId: `MR-${item.id.slice(0, 4).toUpperCase()}-${Math.round(prog.highestScore)}`,
+                    });
                   }
                 } else {
                   failedCount++;
@@ -115,6 +139,7 @@ export default function StudentProgressPage() {
         }
 
         setCoursesSummary(summaries);
+        setAllCertificates(earnedCerts);
         setSelectedCourseId(prev => prev || (summaries.length > 0 ? summaries[0].course.id : ''));
       } catch (err) {
         console.error('Error loading progress:', err);
@@ -138,13 +163,91 @@ export default function StudentProgressPage() {
             تقدمي الأكاديمي <Award className="w-8 h-8 text-amber-500" />
           </h1>
           <p className="text-slate-500 dark:text-slate-400 font-medium text-sm md:text-base">
-            تحليل درجاتك ونقاط القوة والضعف في كل كورس مع توجيهات مستر محمد رضوان للمراجعة والتفوق.
+            تحليل درجاتك ونقاط القوة والضعف في كل كورس وسجل شهادات التكريم المعتمدة من مستر محمد رضوان.
           </p>
         </div>
       </div>
 
+      {/* Royal Honor Certificates Counter Banner */}
+      {!loading && (
+        <div className="relative overflow-hidden p-6 md:p-8 rounded-3xl bg-gradient-to-br from-amber-500/10 via-violet-500/5 to-amber-500/15 border-2 border-amber-400/40 dark:border-amber-500/30 shadow-xl space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-400 to-amber-600 text-white flex items-center justify-center shadow-lg shadow-amber-500/30">
+                <Crown className="w-8 h-8" />
+              </div>
+              <div>
+                <span className="text-xs font-black text-amber-700 dark:text-amber-300 uppercase tracking-wider block">
+                  لوحة الشرف والتميز الأكاديمي
+                </span>
+                <h3 className="text-xl md:text-2xl font-black text-slate-900 dark:text-white">
+                  عدد الشهادات التي حصلت عليها منذ انضمامك للمنصة
+                </h3>
+              </div>
+            </div>
+
+            {/* Counter Value */}
+            <div className="text-right sm:text-left">
+              {allCertificates.length === 0 ? (
+                <div className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-amber-500/20 border border-amber-400/50 text-amber-800 dark:text-amber-200 font-black text-sm md:text-base shadow-sm">
+                  <Sparkles className="w-5 h-5 text-amber-500 animate-pulse" />
+                  <span>ستحصل بإذن الله عليها قريبًا 🌟</span>
+                </div>
+              ) : (
+                <div className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 text-white font-black text-lg md:text-xl shadow-lg shadow-amber-500/30">
+                  <Award className="w-6 h-6" />
+                  <span>{allCertificates.length} {allCertificates.length === 1 ? 'شهادة تقدير وتكريم' : 'شهادات تقدير وتكريم'}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <p className="text-xs font-bold text-slate-600 dark:text-slate-300 max-w-3xl">
+            💡 تُمنح شهادة التقدير والتكريم الرسمية حصرياً عند تجاوز نسبة 80% فما فوق في أي امتحان شامل، وتوثق باسم الطالب وتوقيع مستر محمد رضوان.
+          </p>
+
+          {/* List of Earned Certificates Cards */}
+          {allCertificates.length > 0 && (
+            <div className="pt-2">
+              <h4 className="text-xs font-black text-slate-700 dark:text-slate-300 mb-3 flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-amber-500" /> الشهادات المكتسبة القابلة للعرض والطباعة:
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                {allCertificates.map((cert) => (
+                  <div
+                    key={cert.item.id}
+                    className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-900/50 shadow-sm flex items-center justify-between gap-3 hover:border-amber-400 transition-all"
+                  >
+                    <div className="min-w-0">
+                      <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 block truncate">
+                        {cert.course.title}
+                      </span>
+                      <h5 className="text-xs font-black text-slate-900 dark:text-white truncate">
+                        {cert.item.title}
+                      </h5>
+                      <span className="text-[11px] font-black text-emerald-600 dark:text-emerald-400 block mt-0.5">
+                        درجة الامتياز: {cert.score}%
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setViewingCertificate(cert)}
+                      className="shrink-0 px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shadow-md shadow-amber-500/20 active:scale-95"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>عرض</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {loading ? (
-        <div className="py-20 text-center text-slate-400 font-bold">جاري تحليل مستواك ودرجاتك...</div>
+        <div className="py-20 text-center text-slate-400 font-bold">جاري تحليل مستواك ودرجاتك والشهادات...</div>
       ) : coursesSummary.length === 0 ? (
         <div className="p-12 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-3">
           <BookOpen className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600" />
@@ -393,6 +496,45 @@ export default function StudentProgressPage() {
 
         </div>
       )}
+
+      {/* Certificate Viewer Modal */}
+      <AnimatePresence>
+        {viewingCertificate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative w-full max-w-4xl bg-slate-900 rounded-3xl p-4 sm:p-6 border border-amber-500/40 shadow-2xl my-8"
+            >
+              <button
+                type="button"
+                onClick={() => setViewingCertificate(null)}
+                className="absolute top-6 left-6 z-10 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all print:hidden"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="pt-8">
+                <HonorCertificate
+                  studentName={currentUser?.fullName || 'الطالب المتفوق'}
+                  examTitle={viewingCertificate.item.title}
+                  courseTitle={viewingCertificate.course.title}
+                  scorePercentage={viewingCertificate.score}
+                  dateStr={viewingCertificate.dateStr}
+                  certificateId={viewingCertificate.certificateId}
+                  onClose={() => setViewingCertificate(null)}
+                />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Mandatory Signature Footer */}
+      <div className="text-center pt-8 pb-4 text-xs font-bold text-slate-400 dark:text-slate-500">
+        Built With Developer & Designer NOUR M. EL-SAIED 💚 💚
+      </div>
 
     </div>
   );
