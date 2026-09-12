@@ -27,6 +27,7 @@ import {
   fetchStudentEnrollmentsServer,
   saveEnrollmentServer,
   syncLocalCoursesServer,
+  fetchCourseEnrolledStudentsDataServer,
 } from '@/app/actions/dbProxy';
 import { saveVaultItem } from './indexedDbStorage';
 import { getStudentProfilesByIdsAction, saveStudentItemProgressAction } from '@/app/actions/studentActions';
@@ -1727,57 +1728,43 @@ export async function fetchCourseEnrolledStudents(courseId: string): Promise<Enr
       }
     });
 
-  try {
-    const { data: dbEnrollments, error: enrollErr } = await supabase
-      .from('course_enrollments')
-      .select('*, profiles(id, full_name, phone, parent_phone, avatar_url, role)')
-      .eq('course_id', courseId)
-      .eq('is_active', true)
-      .order('enrolled_at', { ascending: false });
-
-    if (!enrollErr && dbEnrollments && dbEnrollments.length > 0) {
-      dbEnrollments.forEach((e: any) => {
-        const sId = e.student_id;
-        if (sId) {
-          const existing = studentMap.get(sId);
-          studentMap.set(sId, {
-            id: e.id,
-            studentId: sId,
-            courseId: e.course_id,
-            studentName: e.profiles?.full_name || e.student_name || existing?.studentName || 'طالب مسجل',
-            studentPhone: e.profiles?.phone || e.student_phone || existing?.studentPhone || 'غير مسجل',
-            parentPhone: e.profiles?.parent_phone || e.parent_phone || existing?.parentPhone || '',
-            paymentMethod: e.payment_method || existing?.paymentMethod || 'activation_code',
-            amountPaid: Number(e.amount_paid || existing?.amountPaid || 0),
-            enrolledAt: e.enrolled_at || existing?.enrolledAt || new Date().toISOString(),
-            progressPercentage: e.progress_percentage || existing?.progressPercentage || 0,
-            activeDevicesCount: e.active_devices_count || existing?.activeDevicesCount || 1,
-          });
-        }
-      });
-    }
-  } catch (err) {
-    console.warn('Supabase fetchCourseEnrolledStudents enrollments error:', err);
-  }
-
-  // 3. Fetch all progress records for this course from Supabase
   let dbProgressMap = new Map<string, any[]>();
   try {
-    const { data: progressData } = await supabase
-      .from('student_item_progress')
-      .select('id, student_id, course_id, item_id, attempts_count, status, highest_score, last_score, is_passed, completed_at, updated_at, unit_items(id, title, max_exam_attempts, item_type, total_marks, passing_score_percentage)')
-      .eq('course_id', courseId);
+    const serverData = await fetchCourseEnrolledStudentsDataServer(courseId);
+    if (serverData.success) {
+      if (serverData.enrollments && serverData.enrollments.length > 0) {
+        serverData.enrollments.forEach((e: any) => {
+          const sId = e.student_id;
+          if (sId) {
+            const existing = studentMap.get(sId);
+            studentMap.set(sId, {
+              id: e.id,
+              studentId: sId,
+              courseId: e.course_id,
+              studentName: e.profiles?.full_name || e.student_name || existing?.studentName || 'طالب مسجل',
+              studentPhone: e.profiles?.phone || e.student_phone || existing?.studentPhone || 'غير مسجل',
+              parentPhone: e.profiles?.parent_phone || e.parent_phone || existing?.parentPhone || '',
+              paymentMethod: e.payment_method || existing?.paymentMethod || 'activation_code',
+              amountPaid: Number(e.amount_paid || existing?.amountPaid || 0),
+              enrolledAt: e.enrolled_at || existing?.enrolledAt || new Date().toISOString(),
+              progressPercentage: e.progress_percentage || existing?.progressPercentage || 0,
+              activeDevicesCount: e.active_devices_count || existing?.activeDevicesCount || 1,
+            });
+          }
+        });
+      }
 
-    if (progressData) {
-      progressData.forEach((p: any) => {
-        if (!dbProgressMap.has(p.student_id)) {
-          dbProgressMap.set(p.student_id, []);
-        }
-        dbProgressMap.get(p.student_id)!.push(p);
-      });
+      if (serverData.progress && serverData.progress.length > 0) {
+        serverData.progress.forEach((p: any) => {
+          if (!dbProgressMap.has(p.student_id)) {
+            dbProgressMap.set(p.student_id, []);
+          }
+          dbProgressMap.get(p.student_id)!.push(p);
+        });
+      }
     }
   } catch (err) {
-    console.warn('Supabase fetchCourseEnrolledStudents progress error:', err);
+    console.warn('Server fetchCourseEnrolledStudentsDataServer error:', err);
   }
 
   // 3.5. REPAIR & ENRICH STUDENT PHONE AND PROFILE DATA VIA SERVER ACTION & LOCAL CACHE

@@ -1201,3 +1201,32 @@ export async function syncLocalCoursesServer(localCourses: any[]): Promise<any[]
     return [];
   }
 }
+
+export async function fetchCourseEnrolledStudentsDataServer(courseId: string) {
+  try {
+    const { data: dbEnrollments, error: enrollErr } = await supabaseAdmin
+      .from('course_enrollments')
+      .select('*, profiles(id, full_name, phone, parent_phone, avatar_url, role)')
+      .eq('course_id', courseId)
+      .eq('is_active', true)
+      .order('enrolled_at', { ascending: false });
+
+    const { data: progressData, error: progressErr } = await supabaseAdmin
+      .from('student_item_progress')
+      .select('id, student_id, course_id, item_id, attempts_count, status, highest_score, last_score, is_passed, completed_at, updated_at, unit_items(id, title, max_exam_attempts, item_type, total_marks, passing_score_percentage)')
+      .eq('course_id', courseId);
+
+    return {
+      success: true,
+      enrollments: dbEnrollments || [],
+      progress: progressData || []
+    };
+  } catch (err: any) {
+    console.error('fetchCourseEnrolledStudentsDataServer exception:', err);
+    return {
+      success: false,
+      enrollments: [],
+      progress: []
+    };
+  }
+}
