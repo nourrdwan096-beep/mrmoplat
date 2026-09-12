@@ -653,19 +653,19 @@ export default function SecuredVideoPlayer({
         {/* Dynamic Watermark 1 (Primary Floating Name, Phone & Student ID - Subtle & Non-Intrusive) */}
         {sourceType === 'internal_secured' && (
           <div
-            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-12 hover:opacity-20 text-white font-mono text-[10px] sm:text-[11px] font-bold px-2.5 py-1 rounded-lg bg-black/20 backdrop-blur-[0.5px] border border-white/5 z-30 flex flex-col items-center select-none text-center"
+            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-[0.05] hover:opacity-[0.08] text-white font-mono text-[9px] sm:text-[10px] font-bold px-2 py-0.5 rounded bg-black/10 z-30 flex flex-col items-center select-none text-center"
             style={{ top: watermarkPos.top, left: watermarkPos.left }}
           >
             <span className="tracking-wider">{actualStudentName}</span>
-            <span className="tracking-wider text-[9px] sm:text-[10px]">{actualStudentPhone}</span>
-            <span className="text-[8px] sm:text-[9px] opacity-75">ID: {actualStudentId}</span>
+            <span className="tracking-wider text-[8px] sm:text-[9px]">{actualStudentPhone}</span>
+            <span className="text-[7px] sm:text-[8px] opacity-75">ID: {actualStudentId}</span>
           </div>
         )}
 
         {/* Dynamic Watermark 2 (Subtle floating secondary watermark) */}
         {sourceType === 'internal_secured' && (
           <div
-            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-10 text-emerald-200 font-mono text-[9px] sm:text-[10px] font-medium px-2 py-0.5 rounded bg-black/15 z-30 select-none flex flex-col items-center"
+            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-[0.035] text-emerald-200 font-mono text-[8px] sm:text-[9px] font-medium px-1.5 py-0.5 rounded bg-black/5 z-30 select-none flex flex-col items-center"
             style={{ top: watermarkSubPos.top, left: watermarkSubPos.left }}
           >
             <span>{actualStudentName}</span>
@@ -676,7 +676,7 @@ export default function SecuredVideoPlayer({
         {/* Dynamic Watermark 3 (Micro Student Code) */}
         {sourceType === 'internal_secured' && (
           <div
-            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-10 text-slate-300 font-mono text-[8px] sm:text-[9px] px-1.5 py-0.5 rounded bg-black/10 z-30 select-none"
+            className="absolute pointer-events-none transition-all duration-1000 ease-in-out opacity-[0.03] text-slate-300 font-mono text-[7px] sm:text-[8px] px-1 py-0.5 rounded bg-black/5 z-30 select-none"
             style={{ top: watermarkThirdPos.top, left: watermarkThirdPos.left }}
           >
             <span>ID: {actualStudentId}</span>
@@ -759,14 +759,15 @@ export default function SecuredVideoPlayer({
 
         {/* Bottom Custom Bar & Interactive Timeline */}
         <div
-          className={`absolute bottom-0 inset-x-0 p-2 sm:p-3 md:p-4 z-20 space-y-1.5 sm:space-y-2 transition-opacity duration-300 ${
+          dir="ltr"
+          className={`absolute bottom-0 inset-x-0 pt-6 px-2 sm:px-3.5 pb-2 sm:pb-3 z-20 bg-gradient-to-t from-slate-950/95 via-slate-950/75 to-transparent space-y-1 sm:space-y-2 transition-opacity duration-300 ${
             showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'
           }`}
         >
           {/* Custom Sleek LTR Progress Track with Gradient Spectrum and Note Markers */}
           <div
             dir="ltr"
-            className="relative w-full group/track cursor-pointer py-1.5 sm:py-2 select-none"
+            className="relative w-full group/track cursor-pointer py-1 sm:py-2 select-none"
             onMouseMove={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               const clickX = e.clientX - rect.left;
@@ -807,7 +808,7 @@ export default function SecuredVideoPlayer({
             )}
 
             {/* Background Track with Inner Glow */}
-            <div className="w-full h-1.5 sm:h-2 group-hover/track:h-2.5 sm:group-hover/track:h-3.5 bg-slate-900/90 rounded-full overflow-hidden relative transition-all shadow-inner border border-slate-700/60">
+            <div className="w-full h-1 sm:h-2 group-hover/track:h-2 sm:group-hover/track:h-3 bg-slate-900/90 rounded-full overflow-hidden relative transition-all shadow-inner border border-slate-700/60">
               {/* Active Progress with Multi-Layer Rich Gradient Spectrum (Red -> Orange -> Green -> Blue) */}
               <div
                 className="h-full bg-gradient-to-r from-red-500 via-amber-400 via-emerald-400 to-sky-400 transition-all rounded-full relative shadow-[0_0_12px_rgba(56,189,248,0.5)]"
@@ -820,7 +821,7 @@ export default function SecuredVideoPlayer({
 
             {/* Glowing Scrubber Thumb */}
             <div
-              className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-white shadow-[0_0_12px_rgba(56,189,248,0.9)] border-2 border-slate-950 opacity-0 group-hover/track:opacity-100 transition-opacity -ml-2 pointer-events-none z-30"
+              className="absolute top-1/2 -translate-y-1/2 w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-white shadow-[0_0_12px_rgba(56,189,248,0.9)] border-2 border-slate-950 opacity-0 group-hover/track:opacity-100 transition-opacity -ml-1.5 sm:-ml-2 pointer-events-none z-30"
               style={{ left: `${totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0}%` }}
             />
 
@@ -834,7 +835,7 @@ export default function SecuredVideoPlayer({
                     e.stopPropagation();
                     handleNoteCardClick(n);
                   }}
-                  className="absolute top-1/2 -translate-y-1/2 -ml-1.5 w-3 h-3 sm:w-3.5 sm:h-3.5 bg-amber-400 border-2 border-slate-950 rounded-full hover:scale-150 transition-transform cursor-pointer z-30 shadow-lg flex items-center justify-center ring-2 ring-amber-400/40"
+                  className="absolute top-1/2 -translate-y-1/2 -ml-1.5 w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 bg-amber-400 border-2 border-slate-950 rounded-full hover:scale-150 transition-transform cursor-pointer z-30 shadow-lg flex items-center justify-center ring-2 ring-amber-400/40"
                   style={{ left: `${markerPct}%` }}
                   title={`[${n.timestampFormatted}] ${n.title}`}
                 >
@@ -844,20 +845,21 @@ export default function SecuredVideoPlayer({
             })}
           </div>
 
-          {/* Controls Bar Row */}
-          <div className="flex items-center justify-between text-white text-xs font-bold bg-slate-950/90 backdrop-blur-md px-2 py-1.5 sm:px-3 sm:py-2 rounded-xl sm:rounded-2xl border border-slate-800/80 shadow-2xl gap-1 sm:gap-2">
+          {/* Controls Bar Row - Mobile Optimized & Never Squashed */}
+          <div className="flex items-center justify-between text-white text-xs font-bold bg-slate-950/85 backdrop-blur-md px-2 py-1 sm:px-3 sm:py-1.5 rounded-xl sm:rounded-2xl border border-slate-800/80 shadow-2xl gap-1 sm:gap-2">
             {/* Left Controls & Volume */}
-            <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            <div className="flex items-center gap-1 sm:gap-2 shrink-0">
               <button
                 onClick={togglePlayPause}
                 className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg sm:rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white flex items-center justify-center shadow-lg transition-transform active:scale-95 shrink-0"
+                title={isPlaying ? "إيقاف مؤقت (Space)" : "تشغيل (Space)"}
               >
                 {isPlaying ? <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-white" /> : <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-white ml-0.5" />}
               </button>
 
               <button
                 onClick={() => seekDelta(-10)}
-                className="p-1 sm:p-1.5 text-slate-300 hover:text-emerald-400 transition-colors shrink-0"
+                className="p-1 sm:p-1.5 text-slate-300 hover:text-emerald-400 transition-colors shrink-0 rounded-lg"
                 title="تراجع 10 ثوانٍ (Arrow Left / J)"
               >
                 <RotateCcw className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -865,7 +867,7 @@ export default function SecuredVideoPlayer({
 
               <button
                 onClick={() => seekDelta(10)}
-                className="p-1 sm:p-1.5 text-slate-300 hover:text-emerald-400 transition-colors shrink-0"
+                className="p-1 sm:p-1.5 text-slate-300 hover:text-emerald-400 transition-colors shrink-0 rounded-lg"
                 title="تقديم 10 ثوانٍ (Arrow Right / L)"
               >
                 <RotateCw className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -875,20 +877,20 @@ export default function SecuredVideoPlayer({
               <button 
                 onClick={toggleMute} 
                 className="sm:hidden p-1 text-slate-300 hover:text-emerald-400 transition-colors shrink-0 rounded-lg hover:bg-slate-900" 
-                title="كتم / تشغيل الصوت"
+                title="كتم / تشغيل الصوت (M)"
               >
                 {isMuted || volume === 0 ? (
-                  <VolumeX className="w-4 h-4 text-rose-400" />
+                  <VolumeX className="w-3.5 h-3.5 text-rose-400" />
                 ) : volume < 50 ? (
-                  <Volume1 className="w-4 h-4 text-amber-400" />
+                  <Volume1 className="w-3.5 h-3.5 text-amber-400" />
                 ) : (
-                  <Volume2 className="w-4 h-4 text-emerald-400" />
+                  <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
                 )}
               </button>
 
               {/* Desktop Volume Slider with Gradient Bar and Up/Down Step Controls */}
               <div dir="ltr" className="hidden sm:flex items-center gap-1.5 bg-slate-900/90 px-2 py-1 rounded-xl border border-slate-800">
-                <button onClick={toggleMute} className="p-1 hover:text-emerald-400 transition-colors" title="كتم / تشغيل الصوت">
+                <button onClick={toggleMute} className="p-1 hover:text-emerald-400 transition-colors" title="كتم / تشغيل الصوت (M)">
                   {isMuted || volume === 0 ? (
                     <VolumeX className="w-3.5 h-3.5 text-rose-400" />
                   ) : volume < 50 ? (
@@ -939,22 +941,23 @@ export default function SecuredVideoPlayer({
                 </span>
               </div>
 
-              {/* Time Display (Responsive) */}
-              <span className="font-mono text-slate-300 text-[10px] sm:text-[11px] tracking-wider whitespace-nowrap">
+              {/* Time Display (Responsive & Tabular) */}
+              <span className="font-mono text-slate-300 text-[10px] sm:text-[11px] tracking-tight whitespace-nowrap">
                 {formatVideoTime(currentTime)} <span className="text-slate-500">/</span> {totalDuration > 0 ? formatVideoTime(totalDuration) : (detectedDurationLabel || '--:--')}
               </span>
             </div>
 
-            {/* Right Controls */}
-            <div className="flex items-center gap-1.5 sm:gap-2 relative shrink-0">
+            {/* Right Controls - Fullscreen Always Visible & Highlighted */}
+            <div className="flex items-center gap-1 sm:gap-2 relative shrink-0">
               {/* Playback Speed Menu */}
               <div className="relative">
                 <button
                   onClick={() => setShowSpeedMenu((prev) => !prev)}
-                  className="px-2 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700/60 rounded-lg text-[10px] sm:text-[11px] font-mono text-slate-200 flex items-center gap-0.5 sm:gap-1"
+                  className="px-1.5 py-0.5 sm:px-2 sm:py-1 bg-slate-900 hover:bg-slate-800 border border-slate-700/60 rounded-lg text-[10px] sm:text-[11px] font-mono text-slate-200 flex items-center gap-0.5 sm:gap-1"
+                  title="سرعة التشغيل"
                 >
                   <span>{playbackSpeed}x</span>
-                  <ChevronDown className="w-3 h-3 text-slate-400" />
+                  <ChevronDown className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-slate-400" />
                 </button>
 
                 {showSpeedMenu && (
@@ -976,13 +979,17 @@ export default function SecuredVideoPlayer({
                 )}
               </div>
 
-              {/* High-Visibility Fullscreen Toggle Button */}
+              {/* High-Visibility Fullscreen / Zoom Toggle Button */}
               <button
                 onClick={toggleFullscreen}
-                className="p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-slate-900/90 hover:bg-emerald-600/30 text-emerald-400 hover:text-emerald-300 border border-slate-700/60 hover:border-emerald-500/50 transition-all active:scale-95 shadow-sm flex items-center justify-center"
-                title="ملء الشاشة (F)"
+                className="p-1 sm:p-1.5 rounded-lg sm:rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 shadow-md shadow-emerald-600/30 transition-all active:scale-95 flex items-center justify-center min-w-[30px] min-h-[30px] sm:min-w-[34px] sm:min-h-[34px] shrink-0"
+                title={isFullscreen ? "تصغير الشاشة (F)" : "تكبير الفيديو ملء الشاشة (F)"}
               >
-                {isFullscreen ? <Minimize className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Maximize className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
+                {isFullscreen ? (
+                  <Minimize className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" />
+                ) : (
+                  <Maximize className="w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" />
+                )}
               </button>
             </div>
           </div>

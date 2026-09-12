@@ -99,7 +99,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
   const [durationMinutes, setDurationMinutes] = useState<number | ''>('');
   const [totalMarks, setTotalMarks] = useState(100);
   const [passingScore, setPassingScore] = useState(60);
-  const [maxAttempts, setMaxAttempts] = useState(2);
+  const [maxAttempts, setMaxAttempts] = useState(3);
   const [videoSourceType, setVideoSourceType] = useState<'internal_secured' | 'direct_youtube'>('internal_secured');
   const [videoUrl, setVideoUrl] = useState('');
   const [pdfUrl, setPdfUrl] = useState('');
@@ -466,7 +466,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
     setDurationMinutes('');
     setTotalMarks(type === 'exam' ? 100 : type === 'homework' ? 20 : 0);
     setPassingScore(60);
-    setMaxAttempts(2);
+    setMaxAttempts(3);
     setVideoSourceType('internal_secured');
     setVideoUrl('');
     setPdfUrl('');
@@ -484,7 +484,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
     setDurationMinutes(item.durationMinutes || '');
     setTotalMarks(item.totalMarks || 100);
     setPassingScore(item.passingScorePercentage || 60);
-    setMaxAttempts(item.maxExamAttempts || 2);
+    setMaxAttempts(item.maxExamAttempts !== undefined && item.maxExamAttempts !== null && !isNaN(Number(item.maxExamAttempts)) ? Math.max(1, Number(item.maxExamAttempts)) : 3);
     setVideoSourceType(item.videoSourceType || 'internal_secured');
     setVideoUrl(item.directVideoUrl || deobfuscateVideoIdentifier(item.obfuscatedVideoId || '') || '');
     setPdfUrl(item.pdfAttachmentUrl || '');
@@ -513,7 +513,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
         durationMinutes: durationMinutes === '' ? 0 : durationMinutes,
         totalMarks,
         passingScorePercentage: passingScore,
-        maxExamAttempts: maxAttempts,
+        maxExamAttempts: Math.max(1, Number(maxAttempts) || 3),
         videoSourceType,
         directVideoUrl: videoUrl,
         obfuscatedVideoId: securedObfuscatedId,
@@ -1065,7 +1065,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
                     </span>
                     <h3 className="text-lg font-black text-slate-900 dark:text-white">{testItem.title}</h3>
                     <p className="text-xs text-slate-500 font-medium mt-0.5">
-                      درجة النجاح: {testItem.passingScorePercentage}% | الدرجة الكلية: {testItem.totalMarks} درجة | عدد المحاولات: {testItem.maxExamAttempts || 2}
+                      درجة النجاح: {testItem.passingScorePercentage}% | الدرجة الكلية: {testItem.totalMarks} درجة | عدد المحاولات: {testItem.maxExamAttempts !== undefined && testItem.maxExamAttempts !== null ? testItem.maxExamAttempts : 3}
                     </p>
                   </div>
 
@@ -2676,15 +2676,108 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
                   </div>
                 )}
 
-                {/* EXAM / HOMEWORK INFO BANNER */}
+                {/* EXAM / HOMEWORK CONFIGURATION (ATTEMPTS & PASSING SCORE) */}
                 {(itemType === 'exam' || itemType === 'homework') && (
-                  <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/20 border border-amber-200/70 dark:border-amber-500/30 rounded-2xl space-y-2">
-                    <div className="flex items-center gap-2 text-amber-900 dark:text-amber-300 font-black text-xs">
-                      <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>بنك الأسئلة وإعدادات {itemType === 'homework' ? 'الواجب' : 'الامتحان'}:</span>
+                  <div className="p-4 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/20 border border-amber-200/70 dark:border-amber-500/30 rounded-2xl space-y-3.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-amber-900 dark:text-amber-300 font-black text-xs">
+                        <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>إعدادات {itemType === 'homework' ? 'الواجب' : 'الامتحان'} الأساسية:</span>
+                      </div>
+                      <span className="text-[11px] font-black px-2.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200 border border-amber-300/60 dark:border-amber-700/60">
+                        {maxAttempts} محاولات مسموحة
+                      </span>
                     </div>
-                    <p className="text-[11px] text-amber-800/90 dark:text-amber-300 font-bold leading-relaxed">
-                      💡 يتم حساب الدرجة الكلية تلقائياً من مجموع درجات الأسئلة. يمكنك تخصيص التايمر، عدد المحاولات، نسبة النجاح، وإضافة الأسئلة والقطع والخيارات بكل سهولة فور الحفظ داخل صفحة بنك الأسئلة.
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      {/* Max Attempts Control */}
+                      <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-amber-200 dark:border-amber-800/40 space-y-2">
+                        <label className="text-[11px] font-black text-slate-700 dark:text-slate-300 block">
+                          عدد المحاولات المسموحة للطالب:
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setMaxAttempts(Math.max(1, maxAttempts - 1))}
+                            className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-200 font-black flex items-center justify-center transition-colors"
+                            title="تقليل المحاولات"
+                          >
+                            -
+                          </button>
+                          <input
+                            type="number"
+                            min={1}
+                            value={maxAttempts}
+                            onChange={(e) => setMaxAttempts(Math.max(1, Number(e.target.value) || 1))}
+                            className="w-full text-center px-2 py-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white font-black text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setMaxAttempts(maxAttempts + 1)}
+                            className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-200 font-black flex items-center justify-center transition-colors"
+                            title="زيادة المحاولات"
+                          >
+                            +
+                          </button>
+                        </div>
+                        {/* Quick Presets */}
+                        <div className="flex items-center gap-1.5 pt-0.5">
+                          <span className="text-[10px] text-slate-400 font-bold">خيارات سريعة:</span>
+                          {[1, 2, 3, 5].map((preset) => (
+                            <button
+                              key={preset}
+                              type="button"
+                              onClick={() => setMaxAttempts(preset)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-black transition-all ${
+                                maxAttempts === preset
+                                  ? 'bg-amber-500 text-white shadow-sm'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-100'
+                              }`}
+                            >
+                              {preset} {preset === 3 ? '(افتراضي)' : ''}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Passing Score Control */}
+                      <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-amber-200 dark:border-amber-800/40 space-y-2">
+                        <label className="text-[11px] font-black text-slate-700 dark:text-slate-300 block">
+                          نسبة النجاح والاجتياز (%):
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            max={100}
+                            value={passingScore}
+                            onChange={(e) => setPassingScore(Math.min(100, Math.max(1, Number(e.target.value) || 60)))}
+                            className="w-full text-center px-2 py-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white font-black text-sm"
+                          />
+                          <span className="text-xs font-black text-slate-500">%</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 pt-0.5">
+                          <span className="text-[10px] text-slate-400 font-bold">نسب شائعة:</span>
+                          {[50, 60, 70, 80].map((sc) => (
+                            <button
+                              key={sc}
+                              type="button"
+                              onClick={() => setPassingScore(sc)}
+                              className={`px-2 py-0.5 rounded text-[10px] font-black transition-all ${
+                                passingScore === sc
+                                  ? 'bg-amber-500 text-white shadow-sm'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-100'
+                              }`}
+                            >
+                              {sc}% {sc === 60 ? '(افتراضي)' : ''}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-amber-800/90 dark:text-amber-300 font-bold leading-relaxed pt-1">
+                      💡 الوضع الافتراضي لمحاولات الامتحان هو 3 محاولات، ويمكنك زيادتها أو تقليلها لأي عدد تريده بكل سلاسة. يتم تطبيق عدد المحاولات وقفل الامتحان فور استنفادها تلقائياً.
                     </p>
                   </div>
                 )}

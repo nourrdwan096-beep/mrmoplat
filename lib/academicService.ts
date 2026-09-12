@@ -14,7 +14,10 @@ import {
   saveItemServer,
   deleteItemServer,
   fetchQuestionsServer,
+  fetchSecuredStudentQuestionsServer,
   saveQuestionsServer,
+  submitAndGradeExamServer,
+  verifyHomeworkQuestionAnswerServer,
   fetchCodesServer,
   insertCodesServer,
   markCodeUsedServer,
@@ -661,7 +664,7 @@ export async function saveUnitItem(item: Omit<UnitItemData, 'id' | 'createdAt'> 
     durationMinutes: Number(item.durationMinutes) || 0,
     totalMarks: Number(item.totalMarks) || 100,
     passingScorePercentage: Number(item.passingScorePercentage) || 60,
-    maxExamAttempts: Number(item.maxExamAttempts) || 2,
+    maxExamAttempts: item.maxExamAttempts !== undefined && item.maxExamAttempts !== null && !isNaN(Number(item.maxExamAttempts)) ? Math.max(1, Number(item.maxExamAttempts)) : 3,
     videoSourceType: item.videoSourceType || 'internal_secured',
     obfuscatedVideoId: item.obfuscatedVideoId,
     directVideoUrl: item.directVideoUrl,
@@ -803,7 +806,7 @@ export async function fetchItemById(itemId: string): Promise<UnitItemData | null
       durationMinutes: data.duration_minutes,
       totalMarks: data.total_marks,
       passingScorePercentage: data.passing_score_percentage,
-      maxExamAttempts: data.max_exam_attempts,
+      maxExamAttempts: data.max_exam_attempts !== null && data.max_exam_attempts !== undefined ? Number(data.max_exam_attempts) : 3,
       videoSourceType: data.video_source_type,
       obfuscatedVideoId: data.obfuscated_video_id,
       directVideoUrl: data.direct_video_url,
@@ -835,6 +838,60 @@ export async function fetchQuestionsByItem(itemId: string): Promise<QuestionData
 
   const allQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
   return allQuestions.filter(q => q.itemId === itemId).sort((a, b) => a.orderIndex - b.orderIndex);
+}
+
+// STRICT SECURITY: Student Question Fetcher
+// Fetches questions WITHOUT answers, preventing answer scraping or local storage snooping
+export async function fetchSecuredStudentQuestions(itemId: string): Promise<QuestionData[]> {
+  try {
+    const remoteQuestions = await fetchSecuredStudentQuestionsServer(itemId);
+    if (remoteQuestions && Array.isArray(remoteQuestions) && remoteQuestions.length > 0) {
+      return remoteQuestions.sort((a, b) => a.orderIndex - b.orderIndex);
+    }
+  } catch (err) {
+    console.warn('fetchSecuredStudentQuestionsServer error, falling back:', err);
+  }
+
+  // Fallback: load questions and sanitize them immediately before returning to student
+  const fullQuestions = await fetchQuestionsByItem(itemId);
+  return fullQuestions.map((q) => ({
+    ...q,
+    correctAnswerId: '',
+    correctAnswerIds: [],
+    idealAnswer: '',
+    explanation: '',
+    wordBankBlanks: q.wordBankBlanks?.map((b) => ({
+      blankIndex: b.blankIndex,
+      points: b.points,
+      correctAnswer: '',
+    })),
+  }));
+}
+
+// Submit student answers to server for authoritative scoring
+export async function submitStudentExamAnswers(payload: {
+  itemId: string;
+  studentId: string;
+  courseId: string;
+  answers: {
+    mcqAnswers?: Record<string, string>;
+    multiSelectAnswers?: Record<string, string[]>;
+    wordBankAnswers?: Record<string, Record<number, string>>;
+    textAnswers?: Record<string, string>;
+  };
+  timeSpentSeconds?: number;
+  isSecurityTerminated?: boolean;
+}) {
+  return await submitAndGradeExamServer(payload);
+}
+
+// Interactive check for individual homework questions
+export async function verifyHomeworkQuestionAnswer(payload: {
+  itemId: string;
+  questionId: string;
+  chosenAnswer: any;
+}) {
+  return await verifyHomeworkQuestionAnswerServer(payload);
 }
 
 export async function saveQuestionsForItem(itemId: string, questions: QuestionData[]): Promise<boolean> {
@@ -875,7 +932,7 @@ export async function copyExamToTargetCourse(
     durationMinutes: sourceItem.durationMinutes || 0,
     totalMarks: sourceItem.totalMarks || 100,
     passingScorePercentage: sourceItem.passingScorePercentage || 60,
-    maxExamAttempts: sourceItem.maxExamAttempts || 2,
+    maxExamAttempts: sourceItem.maxExamAttempts !== undefined && sourceItem.maxExamAttempts !== null ? Number(sourceItem.maxExamAttempts) : 3,
     isPrerequisiteRequired: sourceItem.isPrerequisiteRequired ?? true,
   });
 
@@ -1848,7 +1905,7 @@ export async function fetchCourseEnrolledStudents(courseId: string): Promise<Enr
       const p = itemProgMap.get(item.id);
       const unit = courseUnits.find(u => u.id === item.unitId);
 
-      const maxAttempts = item.maxExamAttempts || (item.itemType === 'homework' ? 1 : 2);
+      const maxAttempts = item.maxExamAttempts !== undefined && item.maxExamAttempts !== null ? Number(item.maxExamAttempts) : 3;
       const attemptsCount = p ? Number(p.attempts_count || 0) : 0;
       
       // Strict rule: last attempt score takes precedence

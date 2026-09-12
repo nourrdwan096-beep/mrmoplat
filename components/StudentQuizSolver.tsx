@@ -2,7 +2,15 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useTheme } from '@/context/ThemeContext';
-import { QuestionData, UnitItemData, fetchQuestionsByItem, StudentItemProgressData } from '@/lib/academicService';
+import {
+  QuestionData,
+  UnitItemData,
+  fetchQuestionsByItem,
+  fetchSecuredStudentQuestions,
+  submitStudentExamAnswers,
+  verifyHomeworkQuestionAnswer,
+  StudentItemProgressData
+} from '@/lib/academicService';
 import WordBankSolver from '@/components/WordBankSolver';
 import QuestionRichRenderer from '@/components/QuestionRichRenderer';
 import {
@@ -97,6 +105,7 @@ export default function StudentQuizSolver({
     totalCount?: number;
     earnedPoints: number;
     chosenAnswer: any;
+    explanation?: string;
   }>>({});
 
   // Review & Flagging
@@ -125,12 +134,21 @@ export default function StudentQuizSolver({
 
   // Submission & Results
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [results, setResults] = useState<{
     totalPoints: number;
     earnedPoints: number;
     percentage: number;
     passed: boolean;
-    questionResults: Record<string, { earned: number; max: number; isCorrect: boolean }>;
+    questionResults: Record<string, {
+      earned: number;
+      max: number;
+      isCorrect: boolean;
+      correctAnswerId?: string;
+      correctAnswerIds?: string[];
+      idealAnswer?: string;
+      explanation?: string;
+    }>;
   } | null>(null);
 
   useEffect(() => {
@@ -160,26 +178,28 @@ export default function StudentQuizSolver({
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  // Check attempt limits
-  const maxAttempts = item.maxExamAttempts || (isHomework ? 1 : 2);
+  // Check attempt limits: Default strictly to 3 attempts, customizable and strictly enforced
+  const maxAttempts = item.maxExamAttempts !== undefined && item.maxExamAttempts !== null && !isNaN(Number(item.maxExamAttempts))
+    ? Math.max(1, Number(item.maxExamAttempts))
+    : 3;
   const currentAttempts = studentProgress?.attemptsCount || 0;
   const hasPassed = !!studentProgress?.isPassed;
-  // Strictly lock out if passed OR if attempts are exhausted (both exams and homework)
-  const hasExhaustedAttempts = currentAttempts >= maxAttempts && !hasPassed;
-  const isLockedOut = hasPassed || hasExhaustedAttempts;
+  // Lock out only when all allowed attempts are exhausted
+  const hasExhaustedAttempts = currentAttempts >= maxAttempts;
+  const isLockedOut = hasExhaustedAttempts;
 
-  // Load questions
+  // Load questions using secured student endpoint (answers completely stripped server-side)
   useEffect(() => {
     let isMounted = true;
     async function loadQuestions() {
       setLoading(true);
       try {
-        const loaded = await fetchQuestionsByItem(item.id);
+        const loaded = await fetchSecuredStudentQuestions(item.id);
         if (isMounted) {
           setQuestions(loaded);
         }
       } catch (err) {
-        console.error('Failed to load questions for item:', err);
+        console.error('Failed to load secured questions for item:', err);
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -327,88 +347,55 @@ export default function StudentQuizSolver({
   const unansweredCount = solvableQuestions.length - answeredCount;
   const flaggedCount = solvableQuestions.filter((q) => flaggedQuestions[q.id]).length;
 
-  // Single Question Evaluator for Homework
-  const evaluateHomeworkQuestion = (q: QuestionData, answerOverride?: any) => {
+  // Single Question Evaluator for Homework (Using Secure Server Action)
+  const evaluateHomeworkQuestion = async (q: QuestionData, answerOverride?: any) => {
     if (evaluatedQuestions[q.id]) return; // Already locked
 
     const maxPts = q.points || 1;
-    let isCorrect = false;
-    let isPartial = false;
-    let earned = 0;
-    let correctCount = 0;
-    let totalCount = 1;
+    const chosen = answerOverride !== undefined ? answerOverride : (
+      q.questionType === 'mcq' || q.questionType === 'tf' ? mcqAnswers[q.id] :
+      q.questionType === 'multi_select' ? multiSelectAnswers[q.id] :
+      q.questionType === 'word_bank' ? wordBankAnswers[q.id] :
+      textAnswers[q.id]
+    );
 
-    if (q.questionType === 'mcq' || q.questionType === 'tf') {
-      const chosen = answerOverride !== undefined ? answerOverride : mcqAnswers[q.id];
-      isCorrect = chosen === q.correctAnswerId;
-      earned = isCorrect ? maxPts : 0;
-      correctCount = isCorrect ? 1 : 0;
-      totalCount = 1;
-    } else if (q.questionType === 'multi_select') {
-      const chosen: string[] = (answerOverride !== undefined ? answerOverride : (multiSelectAnswers[q.id] || [])).slice().sort();
-      const expected: string[] = (q.correctAnswerIds || (q.correctAnswerId ? [q.correctAnswerId] : [])).slice().sort();
-      const exactMatch = chosen.length === expected.length && chosen.every((v: string, i: number) => v === expected[i]);
-      
-      const correctPicks = chosen.filter((id) => expected.includes(id)).length;
-      const wrongPicks = chosen.filter((id) => !expected.includes(id)).length;
-      totalCount = expected.length || 1;
-      correctCount = correctPicks;
-
-      if (exactMatch) {
-        isCorrect = true;
-        isPartial = false;
-        earned = maxPts;
-      } else if (wrongPicks === 0 && correctPicks > 0) {
-        isCorrect = false;
-        isPartial = true;
-        earned = parseFloat(((correctPicks / totalCount) * maxPts).toFixed(2));
-      } else if (correctPicks > wrongPicks && expected.length > 0) {
-        const net = Math.max(0, correctPicks - wrongPicks);
-        earned = parseFloat(((net / totalCount) * maxPts).toFixed(2));
-        isCorrect = false;
-        isPartial = earned > 0;
-      } else {
-        isCorrect = false;
-        isPartial = false;
-        earned = 0;
-      }
-    } else if (q.questionType === 'word_bank') {
-      const studentBlanks: Record<number, string> = answerOverride !== undefined ? answerOverride : (wordBankAnswers[q.id] || {});
-      const blanks = q.wordBankBlanks || [];
-      totalCount = blanks.length || 1;
-      let matchCount = 0;
-      
-      blanks.forEach((b) => {
-        const studentAns = (studentBlanks[b.blankIndex] || '').trim().toLowerCase();
-        const expectedAns = (b.correctAnswer || '').trim().toLowerCase();
-        if (studentAns && expectedAns && studentAns === expectedAns) {
-          matchCount++;
-        }
+    try {
+      const res = await verifyHomeworkQuestionAnswer({
+        itemId: item.id,
+        questionId: q.id,
+        chosenAnswer: chosen,
       });
 
-      correctCount = matchCount;
-      isCorrect = totalCount > 0 && matchCount === totalCount;
-      isPartial = matchCount > 0 && matchCount < totalCount;
-      const blankPoints = maxPts / totalCount;
-      earned = parseFloat((matchCount * blankPoints).toFixed(2));
-    } else {
-      const ans = (answerOverride !== undefined ? answerOverride : (textAnswers[q.id] || '')).trim().toLowerCase();
-      const ideal = (q.idealAnswer || '').trim().toLowerCase();
-      isCorrect = Boolean(ideal && ans === ideal);
-      earned = isCorrect ? maxPts : 0;
-      correctCount = isCorrect ? 1 : 0;
-      totalCount = 1;
+      if (res && res.success) {
+        setEvaluatedQuestions((prev) => ({
+          ...prev,
+          [q.id]: {
+            isCorrect: res.isCorrect,
+            isPartial: Boolean(res.isPartial),
+            correctCount: res.isCorrect ? 1 : 0,
+            totalCount: 1,
+            earnedPoints: res.earnedPoints !== undefined ? res.earnedPoints : (res.isCorrect ? maxPts : 0),
+            explanation: res.explanation,
+            chosenAnswer: chosen,
+          }
+        }));
+        return;
+      }
+    } catch (err) {
+      console.error('Homework verification server error, falling back locally:', err);
     }
 
+    // Local fallback if server call is unavailable
+    const isCorrect = q.correctAnswerId ? (chosen === q.correctAnswerId) : false;
     setEvaluatedQuestions((prev) => ({
       ...prev,
       [q.id]: {
         isCorrect,
-        isPartial,
-        correctCount,
-        totalCount,
-        earnedPoints: earned,
-        chosenAnswer: answerOverride !== undefined ? answerOverride : (mcqAnswers[q.id] || multiSelectAnswers[q.id] || wordBankAnswers[q.id] || textAnswers[q.id])
+        isPartial: false,
+        correctCount: isCorrect ? 1 : 0,
+        totalCount: 1,
+        earnedPoints: isCorrect ? maxPts : 0,
+        chosenAnswer: chosen,
       }
     }));
   };
@@ -500,13 +487,54 @@ export default function StudentQuizSolver({
     );
   };
 
-  // Submit and Calculate Score
-  const handleSubmit = () => {
-    if (solvableQuestions.length === 0) return;
+  // Submit and Calculate Score via Authoritative Secured Server Engine
+  const handleSubmit = async () => {
+    if (solvableQuestions.length === 0 || isSubmitting) return;
 
+    setIsSubmitting(true);
+    try {
+      const studentId = currentUser?.id || 'demo_student';
+      const serverResult = await submitStudentExamAnswers({
+        itemId: item.id,
+        studentId,
+        courseId,
+        answers: {
+          mcqAnswers,
+          multiSelectAnswers,
+          wordBankAnswers,
+          textAnswers,
+        },
+        timeSpentSeconds: item.durationMinutes ? Math.max(0, (item.durationMinutes * 60) - (timeLeft || 0)) : 0,
+        isSecurityTerminated,
+      });
+
+      if (serverResult && serverResult.success) {
+        const res = {
+          totalPoints: serverResult.totalPoints,
+          earnedPoints: serverResult.earnedPoints,
+          percentage: serverResult.percentage,
+          passed: serverResult.isPassed,
+          questionResults: serverResult.questionResults as any,
+        };
+
+        setResults(res);
+        setIsSubmitted(true);
+        setShowPreSubmitModal(false);
+        if (onComplete) {
+          onComplete(res.percentage, res.passed);
+        }
+        return;
+      }
+    } catch (err) {
+      console.error('Submit exam to server failed, falling back to local calculation:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
+
+    // Fallback if offline / server action fails
     let totalPoints = 0;
     let earnedPoints = 0;
-    const qResults: Record<string, { earned: number; max: number; isCorrect: boolean }> = {};
+    const qResults: Record<string, any> = {};
 
     solvableQuestions.forEach((q) => {
       const maxPts = q.points || 1;
@@ -522,7 +550,7 @@ export default function StudentQuizSolver({
 
       if (q.questionType === 'mcq' || q.questionType === 'tf') {
         const chosen = mcqAnswers[q.id];
-        const isCorrect = chosen === q.correctAnswerId;
+        const isCorrect = Boolean(q.correctAnswerId && chosen === q.correctAnswerId);
         const earned = isCorrect ? maxPts : 0;
         earnedPoints += earned;
         qResults[q.id] = { earned, max: maxPts, isCorrect };
@@ -532,47 +560,11 @@ export default function StudentQuizSolver({
         const isExactMatch =
           chosen.length === expected.length &&
           chosen.every((val, idx) => val === expected[idx]);
-
-        const correctPicks = chosen.filter((id) => expected.includes(id)).length;
-        const wrongPicks = chosen.filter((id) => !expected.includes(id)).length;
-        const totalCount = expected.length || 1;
-        let earned = 0;
-
-        if (isExactMatch) {
-          earned = maxPts;
-        } else if (wrongPicks === 0 && correctPicks > 0) {
-          earned = parseFloat(((correctPicks / totalCount) * maxPts).toFixed(2));
-        } else if (correctPicks > wrongPicks && expected.length > 0) {
-          const net = Math.max(0, correctPicks - wrongPicks);
-          earned = parseFloat(((net / totalCount) * maxPts).toFixed(2));
-        } else {
-          earned = 0;
-        }
-
+        const earned = isExactMatch ? maxPts : 0;
         earnedPoints += earned;
         qResults[q.id] = { earned, max: maxPts, isCorrect: isExactMatch };
       } else if (q.questionType === 'word_bank') {
-        const studentBlanks = wordBankAnswers[q.id] || {};
-        const blanks = q.wordBankBlanks || [];
-        let correctCount = 0;
-
-        blanks.forEach((b) => {
-          const studentAns = (studentBlanks[b.blankIndex] || '').trim().toLowerCase();
-          const expectedAns = (b.correctAnswer || '').trim().toLowerCase();
-          if (studentAns && expectedAns && studentAns === expectedAns) {
-            correctCount++;
-          }
-        });
-
-        const totalBlanks = blanks.length || 1;
-        const blankPoints = maxPts / totalBlanks;
-        const earned = parseFloat((correctCount * blankPoints).toFixed(2));
-        earnedPoints += earned;
-        qResults[q.id] = {
-          earned,
-          max: maxPts,
-          isCorrect: totalBlanks > 0 && correctCount === totalBlanks
-        };
+        qResults[q.id] = { earned: 0, max: maxPts, isCorrect: false };
       } else {
         const ans = (textAnswers[q.id] || '').trim().toLowerCase();
         const ideal = (q.idealAnswer || '').trim().toLowerCase();
@@ -899,10 +891,20 @@ export default function StudentQuizSolver({
               <button
                 type="button"
                 onClick={handleSubmit}
-                className="w-full sm:flex-1 py-3 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs shadow-lg shadow-emerald-600/30 transition-transform active:scale-95 flex items-center justify-center gap-2"
+                disabled={isSubmitting}
+                className="w-full sm:flex-1 py-3 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs shadow-lg shadow-emerald-600/30 transition-transform active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
               >
-                <Send className="w-4 h-4" />
-                <span>تأكيد التسليم النهائي</span>
+                {isSubmitting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>جارٍ التصحيح وتوثيق النتيجة...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-4 h-4" />
+                    <span>تأكيد التسليم النهائي</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1616,7 +1618,8 @@ export default function StudentQuizSolver({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" dir="ltr">
                   {q.options.map((opt) => {
                     const isSelected = mcqAnswers[q.id] === opt.id;
-                    const isCorrectAnswer = opt.id === q.correctAnswerId;
+                    const correctAnsId = results?.questionResults?.[q.id]?.correctAnswerId || q.correctAnswerId;
+                    const isCorrectAnswer = opt.id === correctAnsId;
 
                     // Styling logic based on submission / homework evaluation
                     let btnStyle = 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white hover:border-indigo-400';
@@ -1660,7 +1663,7 @@ export default function StudentQuizSolver({
                     {q.options.map((opt) => {
                       const selectedList = multiSelectAnswers[q.id] || [];
                       const isSelected = selectedList.includes(opt.id);
-                      const expectedList = q.correctAnswerIds || (q.correctAnswerId ? [q.correctAnswerId] : []);
+                      const expectedList = results?.questionResults?.[q.id]?.correctAnswerIds || (results?.questionResults?.[q.id]?.correctAnswerId ? [results.questionResults[q.id].correctAnswerId!] : null) || q.correctAnswerIds || (q.correctAnswerId ? [q.correctAnswerId] : []);
                       const isExpected = expectedList.includes(opt.id);
 
                       let btnStyle = 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white hover:border-amber-400';
@@ -1773,13 +1776,13 @@ export default function StudentQuizSolver({
                     </div>
                   )}
 
-                  {(isSubmitted || isEvaluated) && q.idealAnswer && (
+                  {(isSubmitted || isEvaluated) && (results?.questionResults?.[q.id]?.idealAnswer || q.idealAnswer) && (
                     <div className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 space-y-1">
                       <span className="text-xs font-black text-indigo-900 dark:text-indigo-300">
                         النموذج الإرشادي للإجابة (Ideal Answer):
                       </span>
                       <p dir="ltr" className={`font-sans font-bold text-indigo-950 dark:text-indigo-200 text-left ${getOptionFontSizeClass()}`}>
-                        {q.idealAnswer}
+                        {results?.questionResults?.[q.id]?.idealAnswer || q.idealAnswer}
                       </p>
                     </div>
                   )}
@@ -1787,14 +1790,14 @@ export default function StudentQuizSolver({
               )}
 
               {/* Teacher Explanation & Rule: Revealed immediately in Homework, or at end in Exam */}
-              {((isSubmitted || (isHomework && isEvaluated)) && q.explanation) && (
+              {((isSubmitted || (isHomework && isEvaluated)) && (results?.questionResults?.[q.id]?.explanation || evaluatedQuestions[q.id]?.explanation || q.explanation)) && (
                 <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-1.5 animate-in fade-in">
                   <div className="flex items-center gap-1.5 text-xs font-black text-slate-800 dark:text-slate-200">
                     <Sparkles className="w-4 h-4 text-amber-500" />
                     <span>توضيح وقاعدة السؤال (Teacher Explanation):</span>
                   </div>
                   <p className={`text-slate-700 dark:text-slate-300 font-medium leading-relaxed ${getOptionFontSizeClass()}`}>
-                    {q.explanation}
+                    {results?.questionResults?.[q.id]?.explanation || evaluatedQuestions[q.id]?.explanation || q.explanation}
                   </p>
                 </div>
               )}

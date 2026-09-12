@@ -67,7 +67,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
   const [metaDurationMinutes, setMetaDurationMinutes] = useState<number | ''>('');
   const [metaIsUnlimitedTime, setMetaIsUnlimitedTime] = useState(true);
   const [metaPassingScore, setMetaPassingScore] = useState(60);
-  const [metaMaxAttempts, setMetaMaxAttempts] = useState(2);
+  const [metaMaxAttempts, setMetaMaxAttempts] = useState(3);
   const [metaStartDate, setMetaStartDate] = useState('');
   const [metaEndDate, setMetaEndDate] = useState('');
   const [metaIsPrerequisite, setMetaIsPrerequisite] = useState(true);
@@ -121,7 +121,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
           setMetaDurationMinutes(hasDur ? currentItem.durationMinutes! : '');
           setMetaIsUnlimitedTime(!hasDur);
           setMetaPassingScore(currentItem.passingScorePercentage || 60);
-          setMetaMaxAttempts(currentItem.maxExamAttempts || (currentItem.itemType === 'exam' ? 2 : 3));
+          setMetaMaxAttempts(currentItem.maxExamAttempts !== undefined && currentItem.maxExamAttempts !== null && !isNaN(Number(currentItem.maxExamAttempts)) ? Number(currentItem.maxExamAttempts) : 3);
           setMetaStartDate(currentItem.startDate || '');
           setMetaEndDate(currentItem.endDate || '');
           setMetaIsPrerequisite(currentItem.isPrerequisiteRequired);
@@ -440,7 +440,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
         description: metaDescription.trim(),
         durationMinutes: finalDuration,
         passingScorePercentage: metaPassingScore,
-        maxExamAttempts: metaMaxAttempts,
+        maxExamAttempts: Math.max(1, Number(metaMaxAttempts) || 3),
         startDate: metaStartDate || undefined,
         endDate: metaEndDate || undefined,
         isPrerequisiteRequired: metaIsPrerequisite,
@@ -767,20 +767,63 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
 
                 {/* Max Attempts */}
                 <div className="bg-slate-50 dark:bg-slate-800/60 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
-                  <label className="text-xs font-black text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                    <span>عدد محاولات السماح قبل إغلاق الجلسة:</span>
-                    <span className="text-violet-600 font-black text-sm">{metaMaxAttempts} محاولات</span>
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={metaMaxAttempts}
-                    onChange={(e) => setMetaMaxAttempts(Math.max(1, Number(e.target.value)))}
-                    className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-black text-sm"
-                  />
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-black text-slate-700 dark:text-slate-300">
+                      عدد محاولات السماح قبل إغلاق الجلسة:
+                    </label>
+                    <span className="text-violet-600 dark:text-violet-400 font-black text-xs px-2.5 py-0.5 rounded-full bg-violet-100 dark:bg-violet-950/80 border border-violet-200 dark:border-violet-800">
+                      {metaMaxAttempts} {metaMaxAttempts === 1 ? 'محاولة واحدة' : metaMaxAttempts === 2 ? 'محاولتان' : 'محاولات'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setMetaMaxAttempts(Math.max(1, metaMaxAttempts - 1))}
+                      className="w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-black text-lg flex items-center justify-center transition-all shadow-sm active:scale-95"
+                      title="تقليل عدد المحاولات"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={metaMaxAttempts}
+                      onChange={(e) => setMetaMaxAttempts(Math.max(1, Number(e.target.value) || 1))}
+                      className="flex-1 text-center py-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-900 dark:text-white font-black text-base shadow-sm focus:ring-2 focus:ring-violet-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setMetaMaxAttempts(metaMaxAttempts + 1)}
+                      className="w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-black text-lg flex items-center justify-center transition-all shadow-sm active:scale-95"
+                      title="زيادة عدد المحاولات"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  {/* Quick Preset Buttons */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[10px] font-bold text-slate-400">تحديد سريع:</span>
+                    {[1, 2, 3, 5, 10].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setMetaMaxAttempts(preset)}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-black transition-all ${
+                          metaMaxAttempts === preset
+                            ? 'bg-violet-600 text-white shadow-sm ring-2 ring-violet-400'
+                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        {preset} {preset === 3 ? '(الافتراضي)' : ''}
+                      </button>
+                    ))}
+                  </div>
+
                   <p className="text-[11px] font-bold text-slate-500">
-                    {item.itemType === 'homework' ? 'للواجبات يُفضل إتاحة محاولات مرنة للتدريب' : 'للامتحانات الشاملة يُفضل 2 محاولة'}
+                    💡 الوضع الافتراضي للامتحان هو 3 محاولات. يمكنك زيادتها أو تقليلها بحرية تامة، وتُعتمد دائماً درجة المحاولة الأخيرة.
                   </p>
                 </div>
               </div>

@@ -295,7 +295,7 @@ export async function fetchItemsServer(unitId: string): Promise<any[]> {
       durationMinutes: i.duration_minutes || 0,
       totalMarks: i.total_marks || 100,
       passingScorePercentage: i.passing_score_percentage || 60,
-      maxExamAttempts: i.max_exam_attempts || 2,
+      maxExamAttempts: i.max_exam_attempts !== null && i.max_exam_attempts !== undefined ? Number(i.max_exam_attempts) : 3,
       videoSourceType: i.video_source_type || 'internal_secured',
       obfuscatedVideoId: i.obfuscated_video_id || '',
       directVideoUrl: i.direct_video_url || '',
@@ -322,7 +322,7 @@ export async function saveItemServer(item: any): Promise<any> {
     duration_minutes: Number(item.durationMinutes) || 0,
     total_marks: Number(item.totalMarks) || 100,
     passing_score_percentage: Number(item.passingScorePercentage) || 60,
-    max_exam_attempts: Number(item.maxExamAttempts) || 2,
+    max_exam_attempts: item.maxExamAttempts !== undefined && item.maxExamAttempts !== null && !isNaN(Number(item.maxExamAttempts)) ? Math.max(1, Number(item.maxExamAttempts)) : 3,
     video_source_type: item.videoSourceType || 'internal_secured',
     obfuscated_video_id: item.obfuscatedVideoId || null,
     direct_video_url: (item.directVideoUrl && !item.directVideoUrl.startsWith('idb://')) ? item.directVideoUrl : null,
@@ -392,20 +392,83 @@ export async function fetchQuestionsServer(itemId: string): Promise<any[]> {
       return [];
     }
 
-    return (data || []).map((q: any) => ({
-      id: q.id,
-      itemId: q.item_id,
-      questionText: q.question_text,
-      questionImageUrl: q.question_image_url,
-      questionType: q.question_type || 'mcq',
-      options: q.options || [],
-      correctAnswerId: q.correct_answer_id,
-      explanation: q.explanation || '',
-      points: Number(q.points) || 1,
-      orderIndex: q.order_index || 1,
-    }));
+    return (data || []).map((q: any) => {
+      const isOptionsObj = q.options && typeof q.options === 'object' && !Array.isArray(q.options);
+      const optionsArray = Array.isArray(q.options) ? q.options : (q.options?.items || []);
+      return {
+        id: q.id,
+        itemId: q.item_id,
+        questionText: q.question_text,
+        questionImageUrl: q.question_image_url,
+        questionType: q.question_type || 'mcq',
+        options: optionsArray,
+        correctAnswerId: q.correct_answer_id,
+        correctAnswerIds: isOptionsObj ? (q.options.correctAnswerIds || (q.correct_answer_id ? [q.correct_answer_id] : [])) : (q.correct_answer_id ? [q.correct_answer_id] : []),
+        idealAnswer: isOptionsObj ? (q.options.idealAnswer || q.ideal_answer || '') : (q.ideal_answer || ''),
+        wordBankBlanks: isOptionsObj ? (q.options.wordBankBlanks || []) : (q.word_bank_blanks || []),
+        wordBankWords: isOptionsObj ? (q.options.wordBankWords || []) : (q.word_bank_words || []),
+        hint: isOptionsObj ? (q.options.hint || '') : (q.hint || ''),
+        gradingType: q.grading_type || (isOptionsObj ? q.options.gradingType : 'auto'),
+        parentId: q.parent_id || null,
+        explanation: q.explanation || '',
+        points: Number(q.points) || 1,
+        orderIndex: q.order_index || 1,
+      };
+    });
   } catch (err) {
     console.error('fetchQuestionsServer exception:', err);
+    return [];
+  }
+}
+
+// STRICT SECURITY: Student-facing question fetcher that STRIPS all answers, ideal answers, and explanations
+export async function fetchSecuredStudentQuestionsServer(itemId: string): Promise<any[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('*')
+      .eq('item_id', itemId)
+      .order('order_index', { ascending: true });
+
+    if (error) {
+      console.error('fetchSecuredStudentQuestionsServer error:', error);
+      return [];
+    }
+
+    return (data || []).map((q: any) => {
+      const isOptionsObj = q.options && typeof q.options === 'object' && !Array.isArray(q.options);
+      const optionsArray = Array.isArray(q.options) ? q.options : (q.options?.items || []);
+      
+      // Sanitize word bank blanks: remove correctAnswer
+      const rawBlanks = isOptionsObj ? (q.options.wordBankBlanks || []) : (q.word_bank_blanks || []);
+      const sanitizedBlanks = (rawBlanks || []).map((b: any) => ({
+        blankIndex: b.blankIndex,
+        points: b.points,
+        // STRICT SECURITY: DO NOT SEND b.correctAnswer TO STUDENT!
+      }));
+
+      // STRICT SECURITY: Remove all answer pointers, explanations, and ideal answers
+      return {
+        id: q.id,
+        itemId: q.item_id,
+        questionText: q.question_text,
+        questionImageUrl: q.question_image_url,
+        questionType: q.question_type || 'mcq',
+        options: optionsArray.map((opt: any) => ({ id: opt.id, text: opt.text })),
+        points: Number(q.points) || 1,
+        orderIndex: q.order_index || 1,
+        parentId: q.parent_id || null,
+        wordBankWords: isOptionsObj ? q.options.wordBankWords : q.word_bank_words,
+        wordBankBlanks: sanitizedBlanks,
+        // ZERO ANSWERS IN PAYLOAD:
+        correctAnswerId: '',
+        correctAnswerIds: [],
+        idealAnswer: '',
+        explanation: '',
+      };
+    });
+  } catch (err) {
+    console.error('fetchSecuredStudentQuestionsServer exception:', err);
     return [];
   }
 }
@@ -416,18 +479,29 @@ export async function saveQuestionsServer(itemId: string, questions: any[]): Pro
 
     if (!questions || questions.length === 0) return true;
 
-    const rows = questions.map((q: any, idx: number) => ({
-      id: q.id && q.id.length === 36 ? q.id : crypto.randomUUID(),
-      item_id: itemId,
-      question_text: q.questionText || '',
-      question_image_url: q.questionImageUrl || null,
-      question_type: q.questionType || 'mcq',
-      options: q.options || [],
-      correct_answer_id: q.correctAnswerId || '',
-      explanation: q.explanation || null,
-      points: Number(q.points) || 1,
-      order_index: q.orderIndex || idx + 1,
-    }));
+    const rows = questions.map((q: any, idx: number) => {
+      const optionsPayload = {
+        items: Array.isArray(q.options) ? q.options : (q.options?.items || []),
+        correctAnswerIds: q.correctAnswerIds || (q.correctAnswerId ? [q.correctAnswerId] : []),
+        wordBankBlanks: q.wordBankBlanks || [],
+        wordBankWords: q.wordBankWords || [],
+        hint: q.hint || '',
+        idealAnswer: q.idealAnswer || '',
+        gradingType: q.gradingType || 'auto',
+      };
+      return {
+        id: q.id && q.id.length === 36 ? q.id : crypto.randomUUID(),
+        item_id: itemId,
+        question_text: q.questionText || '',
+        question_image_url: q.questionImageUrl || null,
+        question_type: q.questionType || 'mcq',
+        options: optionsPayload,
+        correct_answer_id: q.correctAnswerId || '',
+        explanation: q.explanation || null,
+        points: Number(q.points) || 1,
+        order_index: q.orderIndex || idx + 1,
+      };
+    });
 
     const { error } = await supabaseAdmin.from('quiz_questions').insert(rows);
     if (error) {
@@ -438,6 +512,414 @@ export async function saveQuestionsServer(itemId: string, questions: any[]): Pro
   } catch (err) {
     console.error('saveQuestionsServer exception:', err);
     return false;
+  }
+}
+
+// -------------------------------------------------------------
+// SECURE SERVER-SIDE EXAM SUBMISSION & GRADING
+// Completely prevents client-side answer tampering, verifies attempt limit,
+// and strictly records the last attempt's score.
+// -------------------------------------------------------------
+export async function submitAndGradeExamServer(payload: {
+  itemId: string;
+  studentId: string;
+  courseId: string;
+  answers: {
+    mcqAnswers?: Record<string, string>;
+    multiSelectAnswers?: Record<string, string[]>;
+    wordBankAnswers?: Record<string, Record<number, string>>;
+    textAnswers?: Record<string, string>;
+  };
+  timeSpentSeconds?: number;
+  isSecurityTerminated?: boolean;
+}): Promise<{
+  success: boolean;
+  totalPoints: number;
+  earnedPoints: number;
+  percentage: number;
+  isPassed: boolean;
+  attemptsCount: number;
+  maxExamAttempts: number;
+  isExhausted: boolean;
+  questionResults: Record<string, { earned: number; max: number; isCorrect: boolean }>;
+  error?: string;
+}> {
+  try {
+    const { itemId, studentId, courseId, answers, isSecurityTerminated } = payload;
+
+    if (!itemId || !studentId || !courseId) {
+      return {
+        success: false,
+        totalPoints: 0,
+        earnedPoints: 0,
+        percentage: 0,
+        isPassed: false,
+        attemptsCount: 0,
+        maxExamAttempts: 3,
+        isExhausted: false,
+        questionResults: {},
+        error: 'بيانات غير مكتملة',
+      };
+    }
+
+    // 1. Fetch item configuration to get passing score and max attempts
+    const { data: itemData, error: itemErr } = await supabaseAdmin
+      .from('unit_items')
+      .select('passing_score_percentage, max_exam_attempts, total_marks')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (itemErr) {
+      console.warn('submitAndGradeExamServer item fetch warning:', itemErr);
+    }
+
+    const passingScorePercentage = itemData?.passing_score_percentage ?? 60;
+    const maxExamAttempts = itemData?.max_exam_attempts !== null && itemData?.max_exam_attempts !== undefined
+      ? Number(itemData.max_exam_attempts)
+      : 3;
+
+    // 2. Fetch current student progress for this item
+    const { data: existingProg } = await supabaseAdmin
+      .from('student_item_progress')
+      .select('*')
+      .eq('student_id', studentId)
+      .eq('item_id', itemId)
+      .maybeSingle();
+
+    const currentAttempts = Number(existingProg?.attempts_count || 0);
+
+    // If student has already exhausted attempts and did not pass, lock out
+    if (currentAttempts >= maxExamAttempts && !existingProg?.is_passed) {
+      return {
+        success: false,
+        totalPoints: 0,
+        earnedPoints: 0,
+        percentage: existingProg?.last_score || 0,
+        isPassed: false,
+        attemptsCount: currentAttempts,
+        maxExamAttempts,
+        isExhausted: true,
+        questionResults: {},
+        error: `عذراً، لقد استنفدت جميع المحاولات المسموح بها (${maxExamAttempts} محاولات). يرجى مراجعة المعلم أو المساعد لفتح محاولة إضافية.`,
+      };
+    }
+
+    // 3. Fetch true questions with answers securely from database
+    const { data: questionsData, error: qErr } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('*')
+      .eq('item_id', itemId)
+      .order('order_index', { ascending: true });
+
+    if (qErr) {
+      console.error('submitAndGradeExamServer questions fetch error:', qErr);
+      throw new Error('فشل جلب أسئلة الاختبار للتقييم');
+    }
+
+    const questions = questionsData || [];
+    let totalPoints = 0;
+    let earnedPoints = 0;
+    const questionResults: Record<
+      string,
+      {
+        earned: number;
+        max: number;
+        isCorrect: boolean;
+        correctAnswerId?: string;
+        correctAnswerIds?: string[];
+        idealAnswer?: string;
+        explanation?: string;
+      }
+    > = {};
+
+    // If exam was terminated due to a security violation, score is strictly 0
+    if (isSecurityTerminated) {
+      questions.forEach((q: any) => {
+        const maxPts = Number(q.points) || 1;
+        totalPoints += maxPts;
+        questionResults[q.id] = { earned: 0, max: maxPts, isCorrect: false };
+      });
+      earnedPoints = 0;
+    } else {
+      // Authoritative server-side evaluation
+      questions.forEach((q: any) => {
+        if (q.question_type === 'passage') return; // Passages do not carry marks directly
+
+        const maxPts = Number(q.points) || 1;
+        totalPoints += maxPts;
+
+        const isOptionsObj = q.options && typeof q.options === 'object' && !Array.isArray(q.options);
+        const correctAnswerId = q.correct_answer_id || '';
+        const correctAnswerIds: string[] = isOptionsObj
+          ? (q.options.correctAnswerIds || (correctAnswerId ? [correctAnswerId] : []))
+          : (correctAnswerId ? [correctAnswerId] : []);
+        const idealAnswer = isOptionsObj ? (q.options.idealAnswer || q.ideal_answer || '') : (q.ideal_answer || '');
+        const wordBankBlanks = isOptionsObj ? (q.options.wordBankBlanks || []) : (q.word_bank_blanks || []);
+
+        if (q.question_type === 'mcq' || q.question_type === 'tf') {
+          const chosen = answers.mcqAnswers?.[q.id];
+          const isCorrect = Boolean(chosen && chosen === correctAnswerId);
+          const earned = isCorrect ? maxPts : 0;
+          earnedPoints += earned;
+          questionResults[q.id] = {
+            earned,
+            max: maxPts,
+            isCorrect,
+            correctAnswerId,
+            correctAnswerIds: [correctAnswerId],
+            idealAnswer: '',
+            explanation: q.explanation || '',
+          };
+        } else if (q.question_type === 'multi_select') {
+          const chosen = (answers.multiSelectAnswers?.[q.id] || []).slice().sort();
+          const expected = correctAnswerIds.slice().sort();
+          const isExactMatch =
+            chosen.length === expected.length &&
+            chosen.every((val, idx) => val === expected[idx]);
+
+          const correctPicks = chosen.filter((id) => expected.includes(id)).length;
+          const wrongPicks = chosen.filter((id) => !expected.includes(id)).length;
+          const totalCount = expected.length || 1;
+          let earned = 0;
+
+          if (isExactMatch) {
+            earned = maxPts;
+          } else if (wrongPicks === 0 && correctPicks > 0) {
+            earned = parseFloat(((correctPicks / totalCount) * maxPts).toFixed(2));
+          } else if (correctPicks > wrongPicks && expected.length > 0) {
+            const net = Math.max(0, correctPicks - wrongPicks);
+            earned = parseFloat(((net / totalCount) * maxPts).toFixed(2));
+          } else {
+            earned = 0;
+          }
+
+          earnedPoints += earned;
+          questionResults[q.id] = {
+            earned,
+            max: maxPts,
+            isCorrect: isExactMatch,
+            correctAnswerId: correctAnswerId || correctAnswerIds[0] || '',
+            correctAnswerIds,
+            idealAnswer: '',
+            explanation: q.explanation || '',
+          };
+        } else if (q.question_type === 'word_bank') {
+          const studentBlanks = answers.wordBankAnswers?.[q.id] || {};
+          let correctCount = 0;
+
+          wordBankBlanks.forEach((b: any) => {
+            const studentAns = (studentBlanks[b.blankIndex] || '').trim().toLowerCase();
+            const expectedAns = (b.correctAnswer || '').trim().toLowerCase();
+            if (studentAns && expectedAns && studentAns === expectedAns) {
+              correctCount++;
+            }
+          });
+
+          const totalBlanks = wordBankBlanks.length || 1;
+          const blankPoints = maxPts / totalBlanks;
+          const earned = parseFloat((correctCount * blankPoints).toFixed(2));
+          earnedPoints += earned;
+          questionResults[q.id] = {
+            earned,
+            max: maxPts,
+            isCorrect: totalBlanks > 0 && correctCount === totalBlanks,
+            correctAnswerId: '',
+            correctAnswerIds: [],
+            idealAnswer: wordBankBlanks.map((b: any) => b.correctAnswer).join(', '),
+            explanation: q.explanation || '',
+          };
+        } else {
+          // Text / Essay / Rewrite
+          const ans = (answers.textAnswers?.[q.id] || '').trim().toLowerCase();
+          const ideal = idealAnswer.trim().toLowerCase();
+          const isMatch = Boolean(ideal && ans === ideal);
+          const earned = isMatch ? maxPts : 0;
+          earnedPoints += earned;
+          questionResults[q.id] = {
+            earned,
+            max: maxPts,
+            isCorrect: isMatch,
+            correctAnswerId: '',
+            correctAnswerIds: [],
+            idealAnswer: idealAnswer,
+            explanation: q.explanation || '',
+          };
+        }
+      });
+    }
+
+    const percentage = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
+    const isPassed = percentage >= passingScorePercentage;
+    const newAttemptsCount = currentAttempts + 1;
+    const isExhausted = newAttemptsCount >= maxExamAttempts && !isPassed;
+
+    // Strict rule: "تتتاخد درجة الامتحان الأخير، يعني آخر مرة هو دخلها... فبتتتاخد درجة الامتحان الأخير بس"
+    const recordPayload = {
+      id: existingProg?.id || crypto.randomUUID(),
+      student_id: studentId,
+      course_id: courseId,
+      item_id: itemId,
+      status: isPassed ? 'completed' : (isExhausted ? 'failed_exhausted' : 'in_progress'),
+      attempts_count: newAttemptsCount,
+      highest_score: percentage, // strictly set to last attempt score
+      last_score: percentage,    // exact last attempt score
+      is_passed: isPassed,
+      student_answers: answers,
+      completed_at: isPassed ? new Date().toISOString() : null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error: upsertErr } = await supabaseAdmin
+      .from('student_item_progress')
+      .upsert(recordPayload, { onConflict: 'student_id,item_id' });
+
+    if (upsertErr) {
+      console.warn('submitAndGradeExamServer upsert error:', upsertErr);
+    }
+
+    return {
+      success: true,
+      totalPoints,
+      earnedPoints,
+      percentage,
+      isPassed,
+      attemptsCount: newAttemptsCount,
+      maxExamAttempts,
+      isExhausted,
+      questionResults,
+    };
+  } catch (err: any) {
+    console.error('submitAndGradeExamServer exception:', err);
+    return {
+      success: false,
+      totalPoints: 0,
+      earnedPoints: 0,
+      percentage: 0,
+      isPassed: false,
+      attemptsCount: 0,
+      maxExamAttempts: 3,
+      isExhausted: false,
+      questionResults: {},
+      error: err?.message || 'حدث خطأ غير متوقع أثناء تسليم الاختبار',
+    };
+  }
+}
+
+// Single question validation for interactive homework practice
+export async function verifyHomeworkQuestionAnswerServer(payload: {
+  itemId: string;
+  questionId: string;
+  chosenAnswer: any;
+}): Promise<{
+  success: boolean;
+  isCorrect: boolean;
+  isPartial?: boolean;
+  earnedPoints: number;
+  maxPoints: number;
+  explanation?: string;
+}> {
+  try {
+    const { itemId, questionId, chosenAnswer } = payload;
+    const { data: q, error } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('*')
+      .eq('item_id', itemId)
+      .eq('id', questionId)
+      .maybeSingle();
+
+    if (error || !q) {
+      return { success: false, isCorrect: false, earnedPoints: 0, maxPoints: 1 };
+    }
+
+    const maxPts = Number(q.points) || 1;
+    const isOptionsObj = q.options && typeof q.options === 'object' && !Array.isArray(q.options);
+    const correctAnswerId = q.correct_answer_id || '';
+    const explanation = q.explanation || '';
+
+    if (q.question_type === 'mcq' || q.question_type === 'tf') {
+      const isCorrect = chosenAnswer === correctAnswerId;
+      return {
+        success: true,
+        isCorrect,
+        earnedPoints: isCorrect ? maxPts : 0,
+        maxPoints: maxPts,
+        explanation: isCorrect ? explanation : undefined,
+      };
+    }
+
+    if (q.question_type === 'multi_select') {
+      const correctAnswerIds: string[] = isOptionsObj
+        ? (q.options.correctAnswerIds || (correctAnswerId ? [correctAnswerId] : []))
+        : (correctAnswerId ? [correctAnswerId] : []);
+      const chosen: string[] = (Array.isArray(chosenAnswer) ? chosenAnswer : []).slice().sort();
+      const expected = correctAnswerIds.slice().sort();
+      const isExactMatch =
+        chosen.length === expected.length &&
+        chosen.every((val, idx) => val === expected[idx]);
+
+      const correctPicks = chosen.filter((id) => expected.includes(id)).length;
+      const wrongPicks = chosen.filter((id) => !expected.includes(id)).length;
+      const totalCount = expected.length || 1;
+      let earned = 0;
+
+      if (isExactMatch) {
+        earned = maxPts;
+      } else if (wrongPicks === 0 && correctPicks > 0) {
+        earned = parseFloat(((correctPicks / totalCount) * maxPts).toFixed(2));
+      } else if (correctPicks > wrongPicks && expected.length > 0) {
+        const net = Math.max(0, correctPicks - wrongPicks);
+        earned = parseFloat(((net / totalCount) * maxPts).toFixed(2));
+      }
+
+      return {
+        success: true,
+        isCorrect: isExactMatch,
+        earnedPoints: earned,
+        maxPoints: maxPts,
+        explanation,
+      };
+    }
+
+    if (q.question_type === 'word_bank') {
+      const wordBankBlanks = isOptionsObj ? (q.options.wordBankBlanks || []) : (q.word_bank_blanks || []);
+      const studentBlanks = typeof chosenAnswer === 'object' && chosenAnswer !== null ? chosenAnswer : {};
+      let correctCount = 0;
+
+      wordBankBlanks.forEach((b: any) => {
+        const studentAns = (studentBlanks[b.blankIndex] || '').trim().toLowerCase();
+        const expectedAns = (b.correctAnswer || '').trim().toLowerCase();
+        if (studentAns && expectedAns && studentAns === expectedAns) {
+          correctCount++;
+        }
+      });
+
+      const totalBlanks = wordBankBlanks.length || 1;
+      const blankPoints = maxPts / totalBlanks;
+      const earned = parseFloat((correctCount * blankPoints).toFixed(2));
+      const isExact = totalBlanks > 0 && correctCount === totalBlanks;
+
+      return {
+        success: true,
+        isCorrect: isExact,
+        earnedPoints: earned,
+        maxPoints: maxPts,
+        explanation,
+      };
+    }
+
+    // Text / Essay
+    const idealAnswer = isOptionsObj ? (q.options.idealAnswer || q.ideal_answer || '') : (q.ideal_answer || '');
+    const isTextMatch = Boolean(idealAnswer && String(chosenAnswer).trim().toLowerCase() === idealAnswer.trim().toLowerCase());
+    return {
+      success: true,
+      isCorrect: isTextMatch,
+      earnedPoints: isTextMatch ? maxPts : 0,
+      maxPoints: maxPts,
+      explanation,
+    };
+  } catch (err) {
+    console.error('verifyHomeworkQuestionAnswerServer exception:', err);
+    return { success: false, isCorrect: false, earnedPoints: 0, maxPoints: 1 };
   }
 }
 
