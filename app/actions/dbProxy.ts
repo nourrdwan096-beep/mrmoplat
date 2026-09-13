@@ -492,7 +492,7 @@ export async function fetchQuestionsServer(itemId: string): Promise<any[]> {
         wordBankWords: isOptionsObj ? (q.options.wordBankWords || []) : (q.word_bank_words || []),
         hint: isOptionsObj ? (q.options.hint || '') : (q.hint || ''),
         gradingType: q.grading_type || (isOptionsObj ? q.options.gradingType : 'auto'),
-        parentId: q.parent_id || null,
+        parentId: (isOptionsObj ? q.options?.parentId : null) || q.parent_id || null,
         explanation: q.explanation || '',
         points: Number(q.points) || 1,
         orderIndex: q.order_index || 1,
@@ -540,7 +540,7 @@ export async function fetchSecuredStudentQuestionsServer(itemId: string): Promis
         options: optionsArray.map((opt: any) => ({ id: opt.id, text: opt.text })),
         points: Number(q.points) || 1,
         orderIndex: q.order_index || 1,
-        parentId: q.parent_id || null,
+        parentId: (isOptionsObj ? q.options?.parentId : null) || q.parent_id || null,
         wordBankWords: isOptionsObj ? q.options.wordBankWords : q.word_bank_words,
         wordBankBlanks: sanitizedBlanks,
         // ZERO ANSWERS IN PAYLOAD:
@@ -571,6 +571,7 @@ export async function saveQuestionsServer(itemId: string, questions: any[]): Pro
         hint: q.hint || '',
         idealAnswer: q.idealAnswer || '',
         gradingType: q.gradingType || 'auto',
+        parentId: q.parentId || null,
       };
       return {
         id: q.id && q.id.length === 36 ? q.id : crypto.randomUUID(),
@@ -583,7 +584,6 @@ export async function saveQuestionsServer(itemId: string, questions: any[]): Pro
         explanation: q.explanation || null,
         points: Number(q.points) || 1,
         order_index: q.orderIndex || idx + 1,
-        parent_id: q.parentId || null,
       };
     });
 

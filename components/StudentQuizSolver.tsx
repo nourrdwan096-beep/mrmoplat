@@ -63,6 +63,8 @@ interface StudentQuizSolverProps {
   unitTitle?: string;
   studentProgress?: StudentItemProgressData;
   currentUser?: { id?: string; fullName?: string; phone?: string };
+  initialQuestions?: QuestionData[];
+  previewMode?: boolean;
   onComplete?: (score: number, passed: boolean) => void;
   onSecurityViolation?: () => void;
 }
@@ -74,12 +76,14 @@ export default function StudentQuizSolver({
   unitTitle,
   studentProgress,
   currentUser,
+  initialQuestions,
+  previewMode = false,
   onComplete,
   onSecurityViolation
 }: StudentQuizSolverProps) {
   const { theme, toggleTheme } = useTheme();
-  const [questions, setQuestions] = useState<QuestionData[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [questions, setQuestions] = useState<QuestionData[]>(initialQuestions && initialQuestions.length > 0 ? initialQuestions : []);
+  const [loading, setLoading] = useState(!initialQuestions || initialQuestions.length === 0);
 
   // Mode: 'homework' (immediate evaluation per question, strict lockout) vs 'exam' (evaluation at end)
   const isHomework = item.itemType === 'homework';
@@ -193,12 +197,19 @@ export default function StudentQuizSolver({
     : 3;
   const currentAttempts = studentProgress?.attemptsCount || 0;
   const hasPassed = !!studentProgress?.isPassed;
-  // Lock out only when all allowed attempts are exhausted
+  // Lock out only when all allowed attempts are exhausted (never lock out in preview mode)
   const hasExhaustedAttempts = currentAttempts >= maxAttempts;
-  const isLockedOut = hasExhaustedAttempts;
+  const isLockedOut = !previewMode && hasExhaustedAttempts;
 
   // Load questions using secured student endpoint (answers completely stripped server-side)
+  // or use initialQuestions if provided (e.g. teacher preview)
   useEffect(() => {
+    if (initialQuestions && initialQuestions.length > 0) {
+      setQuestions(initialQuestions);
+      setLoading(false);
+      return;
+    }
+
     let isMounted = true;
     async function loadQuestions() {
       setLoading(true);
@@ -217,11 +228,11 @@ export default function StudentQuizSolver({
     return () => {
       isMounted = false;
     };
-  }, [item.id]);
+  }, [item.id, initialQuestions]);
 
   // Security Violation Handler
   const triggerSecurityViolation = React.useCallback((reason: string) => {
-    if (isSubmitted || isSecurityTerminated) return;
+    if (previewMode || isSubmitted || isSecurityTerminated) return;
 
     setViolationCount((prev) => {
       const nextCount = prev + 1;
@@ -242,11 +253,11 @@ export default function StudentQuizSolver({
       }
       return nextCount;
     });
-  }, [isSubmitted, isSecurityTerminated, onSecurityViolation, onComplete]);
+  }, [previewMode, isSubmitted, isSecurityTerminated, onSecurityViolation, onComplete]);
 
   // Anti-Cheat & Strict Security Event Listeners (Active during test, before submission)
   useEffect(() => {
-    if (isSubmitted || isSecurityTerminated || loading || isLockedOut) return;
+    if (previewMode || isSubmitted || isSecurityTerminated || loading || isLockedOut) return;
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
@@ -299,7 +310,7 @@ export default function StudentQuizSolver({
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
-  }, [isSubmitted, isSecurityTerminated, loading, isLockedOut, triggerSecurityViolation]);
+  }, [previewMode, isSubmitted, isSecurityTerminated, loading, isLockedOut, triggerSecurityViolation]);
 
   const toggleFullscreen = async () => {
     try {
@@ -500,6 +511,69 @@ export default function StudentQuizSolver({
   const handleSubmit = async () => {
     if (solvableQuestions.length === 0 || isSubmitting) return;
 
+    if (previewMode) {
+      // In teacher preview, perform immediate local grading with full feedback
+      let totalPoints = 0;
+      let earnedPoints = 0;
+      const qResults: Record<string, any> = {};
+
+      solvableQuestions.forEach((q) => {
+        const maxPts = q.points || 1;
+        totalPoints += maxPts;
+
+        if (q.questionType === 'mcq' || q.questionType === 'tf') {
+          const chosen = mcqAnswers[q.id];
+          const isCorrect = Boolean(q.correctAnswerId && chosen === q.correctAnswerId);
+          const earned = isCorrect ? maxPts : 0;
+          earnedPoints += earned;
+          qResults[q.id] = { earned, max: maxPts, isCorrect, correctAnswerId: q.correctAnswerId, explanation: q.explanation };
+        } else if (q.questionType === 'multi_select') {
+          const chosen = (multiSelectAnswers[q.id] || []).slice().sort();
+          const expected = (q.correctAnswerIds || (q.correctAnswerId ? [q.correctAnswerId] : [])).slice().sort();
+          const isExactMatch =
+            chosen.length === expected.length &&
+            chosen.every((val, idx) => val === expected[idx]);
+          const earned = isExactMatch ? maxPts : 0;
+          earnedPoints += earned;
+          qResults[q.id] = { earned, max: maxPts, isCorrect: isExactMatch, correctAnswerIds: expected, explanation: q.explanation };
+        } else if (q.questionType === 'word_bank') {
+          let earned = 0;
+          const blanks = q.wordBankBlanks || [];
+          const ansMap = wordBankAnswers[q.id] || {};
+          blanks.forEach((b: any) => {
+            if (b.correctAnswer && ansMap[b.blankIndex]?.trim().toLowerCase() === b.correctAnswer.trim().toLowerCase()) {
+              earned += (b.points || 1);
+            }
+          });
+          earnedPoints += earned;
+          qResults[q.id] = { earned, max: maxPts, isCorrect: earned === maxPts, explanation: q.explanation };
+        } else {
+          const ans = (textAnswers[q.id] || '').trim().toLowerCase();
+          const ideal = (q.idealAnswer || '').trim().toLowerCase();
+          const isMatch = Boolean(ideal && ans === ideal);
+          const earned = isMatch ? maxPts : 0;
+          earnedPoints += earned;
+          qResults[q.id] = { earned, max: maxPts, isCorrect: isMatch, idealAnswer: q.idealAnswer, explanation: q.explanation };
+        }
+      });
+
+      earnedPoints = parseFloat(earnedPoints.toFixed(2));
+      const percentage = Math.min(100, Math.round((earnedPoints / (totalPoints || 1)) * 100));
+      const passingRequired = item.passingScorePercentage || 60;
+      const passed = percentage >= passingRequired;
+
+      setResults({
+        totalPoints,
+        earnedPoints,
+        percentage,
+        passed,
+        questionResults: qResults
+      });
+      setIsSubmitted(true);
+      setShowPreSubmitModal(false);
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const studentId = currentUser?.id || 'demo_student';
@@ -606,7 +680,7 @@ export default function StudentQuizSolver({
   };
 
   const handleRetake = () => {
-    if (isLockedOut) return;
+    if (!previewMode && isLockedOut) return;
     setIsSubmitted(false);
     setResults(null);
     setMcqAnswers({});
@@ -1584,7 +1658,7 @@ export default function StudentQuizSolver({
           const isEvaluated = isHomework && Boolean(evaluatedQuestions[q.id]);
           const evalResult = evaluatedQuestions[q.id];
           const qResult = results?.questionResults[q.id];
-          const parentPassage = q.parentId ? passages.find(p => p.id === q.parentId) : null;
+          const parentPassage = q.parentId ? passages.find(p => String(p.id).trim() === String(q.parentId).trim()) : null;
           const displayMode = parentPassage ? (passageDisplayMode[parentPassage.id] || 'normal') : 'hidden';
 
           return (
@@ -1597,34 +1671,35 @@ export default function StudentQuizSolver({
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
               } ${
                 parentPassage && displayMode !== 'hidden' && displayMode !== 'maximized'
-                  ? 'lg:flex lg:flex-row-reverse lg:gap-8'
+                  ? 'lg:flex lg:flex-row lg:items-start lg:gap-8'
                   : 'flex flex-col space-y-5'
               }`}
             >
-              {/* Reference Passage for this question (if any) */}
+              {/* Reference Passage for this question (if any) - Displayed on the Right in RTL */}
               {parentPassage && displayMode !== 'hidden' && (
-                <div className={`${displayMode === 'maximized' ? 'w-full mb-6' : 'lg:w-1/2 flex-shrink-0'} p-5 rounded-2xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-900/50 flex flex-col`}>
+                <div className={`${displayMode === 'maximized' ? 'w-full mb-6' : 'lg:w-1/2 flex-shrink-0 lg:sticky lg:top-6'} p-5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/25 border border-amber-200/80 dark:border-amber-900/50 flex flex-col shadow-sm`}>
                   <div className="flex items-center justify-between mb-3 border-b border-amber-200/60 dark:border-amber-900/50 pb-3">
                     <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400">
                       <BookOpen className="w-5 h-5 shrink-0" />
                       <span className="text-xs font-black uppercase tracking-wider">
-                        القطعة (Passage)
+                        قطعة الفهم (Reading Passage)
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5" dir="rtl">
                       <button
                         type="button"
                         onClick={() => setPassageDisplayMode(prev => ({ ...prev, [parentPassage.id]: displayMode === 'maximized' ? 'normal' : 'maximized' }))}
-                        className="p-1.5 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900 transition-colors"
-                        title={displayMode === 'maximized' ? 'تصغير القطعة' : 'تكبير القطعة'}
+                        className="p-1.5 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900 transition-colors flex items-center gap-1"
+                        title={displayMode === 'maximized' ? 'إعادة للحجم الطبيعي' : 'تكبير القطعة لمساحة كاملة'}
                       >
                         {displayMode === 'maximized' ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                        <span className="text-[10px] font-black">{displayMode === 'maximized' ? 'تصغير' : 'تكبير'}</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => setPassageDisplayMode(prev => ({ ...prev, [parentPassage.id]: 'hidden' }))}
                         className="p-1.5 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900 transition-colors flex items-center gap-1"
-                        title="إخفاء القطعة"
+                        title="إخفاء القطعة مؤقتاً"
                       >
                         <EyeOff className="w-4 h-4" />
                         <span className="text-[10px] font-black">إخفاء</span>
@@ -1633,15 +1708,15 @@ export default function StudentQuizSolver({
                   </div>
                   <div
                     dir="ltr"
-                    className={`flex-1 overflow-y-auto max-h-[60vh] custom-scrollbar font-sans leading-relaxed text-slate-800 dark:text-slate-200 p-4 rounded-xl bg-white dark:bg-slate-900 border border-amber-100 dark:border-amber-900/40 text-left select-text ${getQuestionFontSizeClass()}`}
+                    className={`flex-1 overflow-y-auto max-h-[65vh] custom-scrollbar font-sans leading-relaxed text-slate-800 dark:text-slate-200 p-4 rounded-xl bg-white dark:bg-slate-900 border border-amber-100 dark:border-amber-900/40 text-left select-text ${getQuestionFontSizeClass()}`}
                   >
                     {renderAnnotatedText(parentPassage.id, parentPassage.questionText)}
                   </div>
                 </div>
               )}
 
-              {/* Question Content */}
-              <div className={`flex-1 flex flex-col min-w-0 space-y-5 ${parentPassage && displayMode !== 'hidden' && displayMode !== 'maximized' ? 'lg:pl-8 lg:border-l lg:border-slate-100 dark:lg:border-slate-800' : ''}`}>
+              {/* Question Content - Displayed on the Left in RTL */}
+              <div className={`flex-1 flex flex-col min-w-0 space-y-5 ${parentPassage && displayMode !== 'hidden' && displayMode !== 'maximized' ? 'lg:pr-8 lg:border-r lg:border-slate-100 dark:lg:border-slate-800' : ''}`}>
 
                 {parentPassage && displayMode === 'hidden' && (
                   <button

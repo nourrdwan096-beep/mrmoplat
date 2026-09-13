@@ -1016,6 +1016,8 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                       fullName: 'مستر محمد رضوان (معاينة حية)',
                       phone: '01552191172'
                     }}
+                    initialQuestions={questions}
+                    previewMode={true}
                   />
                 </div>
               </div>
@@ -1272,7 +1274,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                       {parentPassage && (
                         <div className="text-xs font-bold text-amber-700 dark:text-amber-400 bg-amber-100/70 dark:bg-amber-950/40 px-3 py-1.5 rounded-xl inline-flex items-center gap-1.5 border border-amber-200 dark:border-amber-800/30">
                           <BookOpen className="w-3.5 h-3.5" /> 
-                          مرتبط بقطعة: {parentPassage.questionText.slice(0, 45)}...
+                          مرتبط بقطعة: {parentPassage.questionText.replace(/<[^>]+>/g, '').trim().slice(0, 45)}...
                         </div>
                       )}
 
@@ -1486,7 +1488,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                     <option value="">-- سؤال مستقل (غير مرتبط بقطعة) --</option>
                     {passages.map(p => (
                       <option key={p.id} value={p.id}>
-                        {p.questionText.slice(0, 80)}...
+                        {p.questionText.replace(/<[^>]+>/g, '').trim().slice(0, 80)}...
                       </option>
                     ))}
                   </select>
