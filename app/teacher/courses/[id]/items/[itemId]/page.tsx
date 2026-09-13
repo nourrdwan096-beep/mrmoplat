@@ -536,7 +536,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                   {item.itemType === 'homework' ? 'واجب منزلي' : 'امتحان شامل'}
                 </span>
                 <span className="text-xs font-bold text-slate-400">
-                  إجمالي الأسئلة: {questions.length}
+                  إجمالي الأسئلة: {questions.filter(q => q.questionType !== 'passage').length}
                 </span>
               </div>
               <h1 className="text-2xl font-black text-slate-900 dark:text-white">
@@ -586,7 +586,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
             }`}
           >
             <Layers className="w-4 h-4" />
-            <span>بنك الأسئلة ({questions.length})</span>
+            <span>بنك الأسئلة ({questions.filter(q => q.questionType !== 'passage').length})</span>
           </button>
 
           <button
@@ -914,7 +914,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                     className="flex-1 sm:flex-initial px-6 py-3.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-2xl font-black text-xs transition-all flex items-center justify-center gap-2"
                   >
                     <Layers className="w-4 h-4" />
-                    <span>الذهاب لبنك الأسئلة ({questions.length})</span>
+                    <span>الذهاب لبنك الأسئلة ({questions.filter(q => q.questionType !== 'passage').length})</span>
                   </button>
 
                   <button
@@ -969,7 +969,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                         : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
                     }`}
                   >
-                    بيئة الحل التفاعلية ({questions.length} سؤال)
+                    بيئة الحل التفاعلية ({questions.filter(q => q.questionType !== 'passage').length} سؤال)
                   </button>
                 </div>
                 <button
@@ -1115,7 +1115,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                     </div>
                     <div>
                       <span className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white">
-                        {questions.length}
+                        {questions.filter(q => q.questionType !== 'passage').length}
                       </span>
                       <span className="text-xs font-bold text-slate-400 mr-1">سؤال</span>
                     </div>
@@ -1197,7 +1197,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                 <div>
                   <h2 className="text-xl font-black text-slate-900 dark:text-white flex items-center gap-2">
                     <Layers className="w-5 h-5 text-violet-600" />
-                    بنك الأسئلة والقطع المضافة ({questions.length})
+                    بنك الأسئلة والقطع المضافة ({questions.filter(q => q.questionType !== 'passage').length})
                   </h2>
                   <p className="text-xs text-slate-500 font-bold mt-0.5">
                     الدرجة الكلية المحسوبة تلقائياً: <span className="text-violet-600 dark:text-violet-400 font-black">{calculatedTotalMarks} درجة</span>.
@@ -1211,6 +1211,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                   const isMultiSelect = q.questionType === 'multi_select';
                   const isWordBank = q.questionType === 'word_bank';
                   const parentPassage = q.parentId ? passages.find(p => p.id === q.parentId) : null;
+                  const displayIndex = isPassage ? <BookOpen className="w-3.5 h-3.5" /> : questions.slice(0, idx).filter(x => x.questionType !== 'passage').length + 1;
               
               return (
                 <div 
@@ -1227,7 +1228,7 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                     <div className="space-y-3 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="w-6 h-6 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-black text-xs flex items-center justify-center">
-                          {idx + 1}
+                          {displayIndex}
                         </span>
 
                         <span className={`text-xs font-black px-2.5 py-1 rounded-xl ${

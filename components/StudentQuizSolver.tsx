@@ -984,7 +984,7 @@ export default function StudentQuizSolver({
                 <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700/80 flex flex-col items-center justify-center gap-1 text-center">
                   <ListOrdered className="w-5 h-5 text-emerald-500" />
                   <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">عدد الأسئلة</span>
-                  <span className="text-lg font-black text-slate-900 dark:text-white">{questions.length} سؤال</span>
+                  <span className="text-lg font-black text-slate-900 dark:text-white">{solvableQuestions.length} سؤال</span>
                 </div>
                 
                 <div className="bg-slate-50 dark:bg-slate-800/80 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700/80 flex flex-col items-center justify-center gap-1 text-center">
@@ -1567,26 +1567,7 @@ export default function StudentQuizSolver({
         </div>
       </div>
 
-      {/* Reading Passages Box (If any exist) */}
-      {passages.map((passage, pIdx) => (
-        <div
-          key={passage.id}
-          className="p-6 rounded-3xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-900/50 space-y-3"
-        >
-          <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400">
-            <BookOpen className="w-5 h-5 shrink-0" />
-            <span className="text-xs font-black uppercase tracking-wider">
-              Reading Comprehension Passage #{pIdx + 1} (قطعة القراءة والفهم)
-            </span>
-          </div>
-          <div
-            dir="ltr"
-            className={`font-sans leading-relaxed text-slate-800 dark:text-slate-200 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-amber-100 dark:border-amber-900/40 text-left select-text ${getQuestionFontSizeClass()}`}
-          >
-            {renderAnnotatedText(passage.id, passage.questionText)}
-          </div>
-        </div>
-      ))}
+      {/* Reading Passages Box (REMOVED: Passages are now rendered with their linked questions) */}
 
       {/* Solvable Questions Section (Single Question Mode OR Full List) */}
       <div className="space-y-6">
@@ -1601,6 +1582,9 @@ export default function StudentQuizSolver({
           const isEvaluated = isHomework && Boolean(evaluatedQuestions[q.id]);
           const evalResult = evaluatedQuestions[q.id];
           const qResult = results?.questionResults[q.id];
+          const parentPassage = q.parentId ? passages.find(p => p.id === q.parentId) : null;
+          const isFirstForPassage = q.parentId ? solvableQuestions.findIndex(x => x.parentId === q.parentId) === qIndex : false;
+          const shouldShowPassage = parentPassage && (viewMode === 'step_by_step' || isFirstForPassage);
 
           return (
             <div
@@ -1612,6 +1596,24 @@ export default function StudentQuizSolver({
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
               }`}
             >
+              {/* Reference Passage for this question (if any) */}
+              {shouldShowPassage && (
+                <div className="mb-4 p-5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-900/50 space-y-3">
+                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400">
+                    <BookOpen className="w-5 h-5 shrink-0" />
+                    <span className="text-xs font-black uppercase tracking-wider">
+                      Reference Passage (قطعة الفهم المرتبطة بالسؤال)
+                    </span>
+                  </div>
+                  <div
+                    dir="ltr"
+                    className={`font-sans leading-relaxed text-slate-800 dark:text-slate-200 p-4 rounded-xl bg-white dark:bg-slate-900 border border-amber-100 dark:border-amber-900/40 text-left select-text ${getQuestionFontSizeClass()}`}
+                  >
+                    {renderAnnotatedText(parentPassage.id, parentPassage.questionText)}
+                  </div>
+                </div>
+              )}
+
               {/* Question Header: Number, Marks, Flag & Hint Tools */}
               <div className="flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
                 <div className="flex items-center gap-2 flex-wrap">
