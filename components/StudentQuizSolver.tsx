@@ -55,6 +55,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import HonorCertificate from '@/components/HonorCertificate';
+import { ExamCanvasWatermark, ExamCardWatermark, ExamMicroFingerprint } from '@/components/ExamWatermarkOverlay';
 
 interface StudentQuizSolverProps {
   item: UnitItemData;
@@ -125,8 +126,8 @@ export default function StudentQuizSolver({
   const [fontZoomLevel, setFontZoomLevel] = useState<number>(1);
   const zoomLabels = ['85%', '100%', '115%', '130%', '150%'];
 
-  // Text Annotations: highlight & underline words per question
-  const [annotationTool, setAnnotationTool] = useState<'none' | 'yellow' | 'green' | 'underline'>('none');
+  // Text Annotations: highlight & underline words per question (supports yellow, green, underline, eraser)
+  const [annotationTool, setAnnotationTool] = useState<'none' | 'yellow' | 'green' | 'underline' | 'eraser'>('none');
   const [highlightedWords, setHighlightedWords] = useState<Record<string, Record<string, 'yellow' | 'green' | 'underline'>>>({});
 
   // Pre-submission summary modal
@@ -260,13 +261,18 @@ export default function StudentQuizSolver({
     if (previewMode || isSubmitted || isSecurityTerminated || loading || isLockedOut) return;
 
     const handleVisibilityChange = () => {
-      if (document.hidden) {
+      if (document.hidden && hasStarted) {
         triggerSecurityViolation('تم رصد تصغير المتصفح أو الانتقال لعلامة تبويب أخرى');
       }
     };
 
     const handleWindowBlur = () => {
       // Blur indicates clicking outside or opening another window/app
+      if (!hasStarted) return;
+      if (document.hidden) return; // Handled by visibilitychange
+      if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+        return; // Natural text input focus
+      }
       triggerSecurityViolation('تم رصد الخروج من إطار الاختبار أو تشغيل برنامج خارجي');
     };
 
@@ -283,14 +289,19 @@ export default function StudentQuizSolver({
       if (
         e.key === 'F12' ||
         (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
-        (e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.key === 'c' || e.key === 'C' || e.key === 'p' || e.key === 'P'))
+        (e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.key === 'c' || e.key === 'C' || e.key === 'p' || e.key === 'P' || e.key === 's' || e.key === 'S'))
       ) {
         e.preventDefault();
       }
     };
 
     const handleFullscreenChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
+      const inFullscreen = Boolean(document.fullscreenElement);
+      setIsFullscreen(inFullscreen);
+      // If student was in fullscreen during an active exam and exited fullscreen:
+      if (!inFullscreen && hasStarted && item.itemType === 'exam') {
+        triggerSecurityViolation('تم رصد الخروج من وضع ملء الشاشة أثناء سير الاختبار');
+      }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -310,7 +321,7 @@ export default function StudentQuizSolver({
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
-  }, [previewMode, isSubmitted, isSecurityTerminated, loading, isLockedOut, triggerSecurityViolation]);
+  }, [previewMode, isSubmitted, isSecurityTerminated, loading, isLockedOut, hasStarted, item.itemType, triggerSecurityViolation]);
 
   const toggleFullscreen = async () => {
     try {
@@ -471,16 +482,33 @@ export default function StudentQuizSolver({
     setRevealedHints((prev) => ({ ...prev, [questionId]: !prev[questionId] }));
   };
 
-  // Toggle Word Annotation (Highlighter / Underline)
-  const handleWordClick = (questionId: string, wordKey: string) => {
+  // Toggle Word Annotation (Highlighter / Underline / Eraser)
+  const handleWordClick = (questionId: string, wordKey: string, _wordText?: string) => {
     if (annotationTool === 'none') return;
     setHighlightedWords((prev) => {
       const qMap = { ...(prev[questionId] || {}) };
-      if (qMap[wordKey] === annotationTool) {
+      if (annotationTool === 'eraser') {
+        delete qMap[wordKey];
+      } else if (qMap[wordKey] === annotationTool) {
         delete qMap[wordKey];
       } else {
         qMap[wordKey] = annotationTool;
       }
+      return { ...prev, [questionId]: qMap };
+    });
+  };
+
+  // Range Annotation for Multi-Word Selection (Touch & Desktop Mouse)
+  const handleRangeAnnotate = (questionId: string, wordKeys: string[], tool: 'yellow' | 'green' | 'underline' | 'clear') => {
+    setHighlightedWords((prev) => {
+      const qMap = { ...(prev[questionId] || {}) };
+      wordKeys.forEach((key) => {
+        if (tool === 'clear') {
+          delete qMap[key];
+        } else {
+          qMap[key] = tool;
+        }
+      });
       return { ...prev, [questionId]: qMap };
     });
   };
@@ -493,16 +521,19 @@ export default function StudentQuizSolver({
     });
   };
 
-  // Helper to render interactive annotated rich text
+  // Helper to render interactive annotated rich text with touch & mouse selection
   const renderAnnotatedText = (questionId: string, text: string, className: string = '') => {
     const qAnnotations = highlightedWords[questionId] || {};
     return (
       <QuestionRichRenderer
         content={text}
         className={className}
-        onWordClick={(key) => handleWordClick(questionId, key)}
+        questionId={questionId}
+        onWordClick={(key, word) => handleWordClick(questionId, key, word)}
+        onRangeAnnotate={(keys, tool) => handleRangeAnnotate(questionId, keys, tool)}
         annotations={qAnnotations}
         annotationTool={annotationTool}
+        fontSizeClass={getQuestionFontSizeClass()}
       />
     );
   };
@@ -821,14 +852,12 @@ export default function StudentQuizSolver({
       }`}
       dir="rtl"
     >
-      {/* Subtle Security Watermark Across Canvas */}
-      <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden opacity-[0.035] flex flex-wrap gap-24 p-8 text-xs font-mono font-bold select-none text-slate-950 dark:text-white">
-        {Array.from({ length: 16 }).map((_, idx) => (
-          <div key={idx} className="-rotate-12">
-            MR. MOHAMED RADWAN SECURE SYSTEM • {currentUser?.fullName || 'STUDENT'} • {currentUser?.phone || 'SECURE'}
-          </div>
-        ))}
-      </div>
+      {/* Dynamic Security Watermarks Across Canvas */}
+      <ExamCanvasWatermark
+        fullName={currentUser?.fullName}
+        phone={currentUser?.phone}
+        sessionTag={previewMode ? 'معاينة المستر الآمنة' : 'MR. MOHAMED RADWAN SECURE SYSTEM'}
+      />
 
       {/* Security Warning Modal (First Offense Alert) */}
       {showViolationModal && (
@@ -1242,14 +1271,14 @@ export default function StudentQuizSolver({
               </button>
             </div>
 
-            {/* Highlighter & Underline Selector */}
+            {/* Highlighter, Underline & Eraser Selector */}
             <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-2xl p-1 border border-slate-200 dark:border-slate-700">
               <button
                 type="button"
                 onClick={() => setAnnotationTool(annotationTool === 'yellow' ? 'none' : 'yellow')}
                 className={`p-1.5 rounded-xl transition-all ${
                   annotationTool === 'yellow'
-                    ? 'bg-amber-400 text-slate-950 shadow-sm ring-2 ring-amber-500'
+                    ? 'bg-amber-400 text-slate-950 shadow-sm ring-2 ring-amber-500 scale-105'
                     : 'hover:bg-white dark:hover:bg-slate-700 text-amber-500'
                 }`}
                 title="تظليل أصفر (حدد أو اضغط الكلمات)"
@@ -1261,10 +1290,10 @@ export default function StudentQuizSolver({
                 onClick={() => setAnnotationTool(annotationTool === 'green' ? 'none' : 'green')}
                 className={`p-1.5 rounded-xl transition-all ${
                   annotationTool === 'green'
-                    ? 'bg-emerald-400 text-slate-950 shadow-sm ring-2 ring-emerald-500'
+                    ? 'bg-emerald-400 text-slate-950 shadow-sm ring-2 ring-emerald-500 scale-105'
                     : 'hover:bg-white dark:hover:bg-slate-700 text-emerald-500'
                 }`}
-                title="تظليل أخضر"
+                title="تظليل أخضر (حدد أو اضغط الكلمات)"
               >
                 <Highlighter className="w-4 h-4" />
               </button>
@@ -1273,12 +1302,24 @@ export default function StudentQuizSolver({
                 onClick={() => setAnnotationTool(annotationTool === 'underline' ? 'none' : 'underline')}
                 className={`p-1.5 rounded-xl transition-all ${
                   annotationTool === 'underline'
-                    ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-500'
+                    ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-500 scale-105'
                     : 'hover:bg-white dark:hover:bg-slate-700 text-indigo-500'
                 }`}
                 title="تسطير خط تحت الكلمات"
               >
                 <UnderlineIcon className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setAnnotationTool(annotationTool === 'eraser' ? 'none' : 'eraser')}
+                className={`p-1.5 rounded-xl transition-all ${
+                  annotationTool === 'eraser'
+                    ? 'bg-rose-500 text-white shadow-sm ring-2 ring-rose-500 scale-105'
+                    : 'hover:bg-white dark:hover:bg-slate-700 text-rose-500'
+                }`}
+                title="ممحاة التظليلات (اضغط الكلمة المظللة لمسحها)"
+              >
+                <Eraser className="w-4 h-4" />
               </button>
             </div>
 
@@ -1366,6 +1407,28 @@ export default function StudentQuizSolver({
           </div>
 
         </div>
+
+        {/* Active Annotation Tool Notice Banner */}
+        {annotationTool !== 'none' && (
+          <div className="flex items-center justify-between p-2.5 px-4 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-900 dark:text-amber-200 text-xs font-bold animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full animate-ping bg-amber-500" />
+              <span>
+                {annotationTool === 'yellow' && 'أداة التظليل الأصفر مفعلة: اضغط أو حدد أي كلمة لتلوينها بالأصفر.'}
+                {annotationTool === 'green' && 'أداة التظليل الأخضر مفعلة: اضغط أو حدد أي كلمة لتلوينها بالأخضر.'}
+                {annotationTool === 'underline' && 'أداة التسطير مفعلة: اضغط أو حدد أي كلمة لوضع خط تحتها.'}
+                {annotationTool === 'eraser' && 'أداة الممحاة مفعلة: اضغط على أي كلمة مظللة لإزالة تظليلها فوراً.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAnnotationTool('none')}
+              className="px-3 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-950 dark:text-amber-100 text-[11px] font-black transition-colors"
+            >
+              إيقاف التظليل (الوضع العادي)
+            </button>
+          </div>
+        )}
 
       </div>
 
@@ -1665,7 +1728,7 @@ export default function StudentQuizSolver({
             <div
               id={`question_card_${q.id}`}
               key={q.id}
-              className={`p-6 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border transition-all duration-300 shadow-sm relative ${
+              className={`p-6 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border transition-all duration-300 shadow-sm relative overflow-hidden ${
                 isFlagged
                   ? 'border-amber-400 ring-1 ring-amber-400/30'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
@@ -1675,10 +1738,22 @@ export default function StudentQuizSolver({
                   : 'flex flex-col space-y-5'
               }`}
             >
+              {/* Security Watermark inside Question Card Face */}
+              <ExamCardWatermark
+                fullName={currentUser?.fullName}
+                phone={currentUser?.phone}
+              />
+
               {/* Reference Passage for this question (if any) - Displayed on the Right in RTL */}
               {parentPassage && displayMode !== 'hidden' && (
-                <div className={`${displayMode === 'maximized' ? 'w-full mb-6' : 'lg:w-1/2 flex-shrink-0 lg:sticky lg:top-6'} p-5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/25 border border-amber-200/80 dark:border-amber-900/50 flex flex-col shadow-sm`}>
-                  <div className="flex items-center justify-between mb-3 border-b border-amber-200/60 dark:border-amber-900/50 pb-3">
+                <div className={`${displayMode === 'maximized' ? 'w-full mb-6' : 'lg:w-1/2 flex-shrink-0 lg:sticky lg:top-6'} p-5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/25 border border-amber-200/80 dark:border-amber-900/50 flex flex-col shadow-sm relative overflow-hidden`}>
+                  {/* Security Watermark inside Passage Card */}
+                  <ExamCardWatermark
+                    fullName={currentUser?.fullName}
+                    phone={currentUser?.phone}
+                  />
+
+                  <div className="flex items-center justify-between mb-3 border-b border-amber-200/60 dark:border-amber-900/50 pb-3 relative z-10">
                     <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400">
                       <BookOpen className="w-5 h-5 shrink-0" />
                       <span className="text-xs font-black uppercase tracking-wider">
@@ -1686,6 +1761,17 @@ export default function StudentQuizSolver({
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5" dir="rtl">
+                      {Object.keys(highlightedWords[parentPassage.id] || {}).length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleClearAnnotations(parentPassage.id)}
+                          className="p-1 px-2 rounded-lg bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 hover:bg-rose-200 transition-colors flex items-center gap-1 text-[10px] font-black"
+                          title="مسح كل تظليلات هذه القطعة"
+                        >
+                          <Eraser className="w-3 h-3" />
+                          <span>مسح التظليلات</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setPassageDisplayMode(prev => ({ ...prev, [parentPassage.id]: displayMode === 'maximized' ? 'normal' : 'maximized' }))}
@@ -1708,7 +1794,7 @@ export default function StudentQuizSolver({
                   </div>
                   <div
                     dir="ltr"
-                    className={`flex-1 overflow-y-auto max-h-[65vh] custom-scrollbar font-sans leading-relaxed text-slate-800 dark:text-slate-200 p-4 rounded-xl bg-white dark:bg-slate-900 border border-amber-100 dark:border-amber-900/40 text-left select-text ${getQuestionFontSizeClass()}`}
+                    className={`flex-1 overflow-y-auto max-h-[40vh] lg:max-h-[65vh] custom-scrollbar font-sans leading-relaxed text-slate-800 dark:text-slate-200 p-4 rounded-xl bg-white dark:bg-slate-900 border border-amber-100 dark:border-amber-900/40 text-left select-text relative z-10 ${getQuestionFontSizeClass()}`}
                   >
                     {renderAnnotatedText(parentPassage.id, parentPassage.questionText)}
                   </div>
@@ -2096,6 +2182,25 @@ export default function StudentQuizSolver({
                   </button>
                 </div>
               )}
+
+              {/* Micro Fingerprint on Card Footprint */}
+              <div className="pt-3 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between flex-wrap gap-2">
+                <ExamMicroFingerprint
+                  fullName={currentUser?.fullName}
+                  phone={currentUser?.phone}
+                  questionId={q.id}
+                />
+                {Object.keys(highlightedWords[q.id] || {}).length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleClearAnnotations(q.id)}
+                    className="text-[10px] text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 flex items-center gap-1 font-bold transition-colors"
+                  >
+                    <Eraser className="w-3 h-3" />
+                    <span>مسح تظليلات السؤال</span>
+                  </button>
+                )}
+              </div>
 
             </div>
             </div>
