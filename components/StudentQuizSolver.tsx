@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import Link from 'next/link';
 import { useTheme } from '@/context/ThemeContext';
 import {
   QuestionData,
@@ -52,7 +53,9 @@ import {
   Eye,
   Lock,
   Crown,
-  EyeOff
+  EyeOff,
+  Home,
+  LayoutDashboard
 } from 'lucide-react';
 import HonorCertificate from '@/components/HonorCertificate';
 import { ExamCanvasWatermark, ExamCardWatermark, ExamMicroFingerprint } from '@/components/ExamWatermarkOverlay';
@@ -819,6 +822,24 @@ export default function StudentQuizSolver({
             </div>
           )}
         </div>
+
+        {/* Return to Dashboard and Course Navigation */}
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-black text-xs shadow-md transition-all hover:scale-105 active:scale-95"
+          >
+            <Home className="w-4 h-4" />
+            <span>العودة للرئيسية ولوحة التحكم</span>
+          </Link>
+          <Link
+            href={`/courses/${courseId}`}
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs transition-all"
+          >
+            <BookOpen className="w-4 h-4 text-emerald-500" />
+            <span>العودة لدروس الكورس</span>
+          </Link>
+        </div>
       </div>
     );
   }
@@ -841,14 +862,21 @@ export default function StudentQuizSolver({
             تم رصد تكرار مغادرة شاشة الاختبار أو التبديل بين النوافذ والبرامج والتطبيقات الخارجية. تم تطبيق السياسة الأمنية الصارمة للمنصة: إلغاء محاولتك فورا، تسجيل الدرجة (0%)، وخصم محاولة من رصيدك المسموح به لمنع أي محاولات للغش أو تسريب الأسئلة.
           </p>
         </div>
-        <div className="pt-2">
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="px-8 py-3.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-2xl font-black text-xs shadow-lg transition-transform active:scale-95"
+            className="px-6 py-3 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-2xl font-black text-xs shadow-lg transition-transform active:scale-95"
           >
-            تحديث الشاشة والعودة
+            تحديث الشاشة
           </button>
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs shadow-md transition-all active:scale-95"
+          >
+            <Home className="w-4 h-4" />
+            <span>العودة للرئيسية</span>
+          </Link>
         </div>
       </div>
     );
@@ -1555,19 +1583,35 @@ export default function StudentQuizSolver({
                 <span>تنويه أمان: نموذج الإجابة التفصيلي والأسئلة يتاح حصرياً للطلاب الذين اجتازوا الاختبار بنجاح حرصاً على العدالة ونزاهة التقييم.</span>
               </div>
 
-              {/* Retake Button if allowed */}
-              {!isHomework && !isLockedOut && (
-                <div className="pt-2">
+              {/* Action Buttons: Retake & Return to Dashboard */}
+              <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                {!isHomework && !isLockedOut && (
                   <button
                     type="button"
                     onClick={handleRetake}
-                    className="inline-flex items-center gap-2 px-8 py-3.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-black text-sm transition-all shadow-lg shadow-rose-600/30 active:scale-95"
+                    className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs transition-all shadow-lg shadow-rose-600/30 active:scale-95"
                   >
                     <RotateCcw className="w-4 h-4" />
                     <span>إعادة المحاولة الآن ({Math.max(0, maxAttempts - currentAttempts)} محاولات متبقية)</span>
                   </button>
-                </div>
-              )}
+                )}
+
+                <Link
+                  href="/"
+                  className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-black text-xs shadow-md transition-all hover:scale-105 active:scale-95"
+                >
+                  <Home className="w-4 h-4" />
+                  <span>العودة للرئيسية ولوحة التحكم</span>
+                </Link>
+
+                <Link
+                  href={`/courses/${courseId}`}
+                  className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs transition-all"
+                >
+                  <BookOpen className="w-4 h-4 text-emerald-500" />
+                  <span>العودة لدروس الكورس</span>
+                </Link>
+              </div>
 
               {isLockedOut && (
                 <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 text-xs font-bold">
@@ -1648,9 +1692,9 @@ export default function StudentQuizSolver({
                       </div>
                     </div>
 
-                    {/* Retake Button if allowed */}
-                    {!isHomework && !isLockedOut && (
-                      <div className="pt-2">
+                    {/* Action Navigation: Retake and Return */}
+                    <div className="flex flex-wrap items-center justify-center gap-3 pt-3">
+                      {!isHomework && !isLockedOut && (
                         <button
                           type="button"
                           onClick={handleRetake}
@@ -1659,8 +1703,24 @@ export default function StudentQuizSolver({
                           <RotateCcw className="w-3.5 h-3.5" />
                           <span>إعادة المحاولة لتحسين الدرجة ({Math.max(0, maxAttempts - currentAttempts)} محاولات متبقية)</span>
                         </button>
-                      </div>
-                    )}
+                      )}
+
+                      <Link
+                        href="/"
+                        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-black text-xs shadow-md transition-all hover:scale-105 active:scale-95"
+                      >
+                        <Home className="w-3.5 h-3.5" />
+                        <span>العودة للرئيسية ولوحة التحكم</span>
+                      </Link>
+
+                      <Link
+                        href={`/courses/${courseId}`}
+                        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-2xl bg-white/80 dark:bg-slate-800 hover:bg-white dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs transition-all shadow-sm"
+                      >
+                        <BookOpen className="w-3.5 h-3.5 text-emerald-500" />
+                        <span>العودة لدروس الكورس</span>
+                      </Link>
+                    </div>
                   </div>
 
                   {/* Honor Certificate for Exam with Score >= 80% */}

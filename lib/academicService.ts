@@ -1588,14 +1588,15 @@ export function isItemAccessible(
     for (let uIdx = 0; uIdx < currentUnitIndex; uIdx++) {
       const prevUnit = sortedUnits[uIdx];
       const prevItems = unitItemsMap[prevUnit.id] || [];
-      // Any required prerequisite items in previous unit must be completed
+      // Only interactive/essential assessment & lecture items (video, homework, exam) act as mandatory blocking prerequisites
       for (const pItem of prevItems) {
-        if (pItem.isPrerequisiteRequired !== false) {
+        const isCoreAssessmentOrLecture = pItem.itemType === 'video' || pItem.itemType === 'homework' || pItem.itemType === 'exam';
+        if (isCoreAssessmentOrLecture && pItem.isPrerequisiteRequired !== false) {
           const prog = studentProgress[pItem.id];
           if (!prog || !prog.isPassed) {
             return {
               isAccessible: false,
-              reason: `يجب إكمال واجتياز عناصر (${prevUnit.title}) أولاً لفتح هذه الوحدة.`
+              reason: `يجب إكمال واجتياز محاضرات واختبارات (${prevUnit.title}) أولاً لفتح هذه الوحدة.`
             };
           }
         }
@@ -1611,12 +1612,15 @@ export function isItemAccessible(
     if (itemIndex > 0) {
       for (let iIdx = 0; iIdx < itemIndex; iIdx++) {
         const prevItem = currentUnitItems[iIdx];
-        if (prevItem.isPrerequisiteRequired !== false) {
+        // Only interactive lectures & assessments (video, homework, exam) block downstream items.
+        // PDF attachments, concept sheets, and summaries NEVER block exams, homeworks, or lectures.
+        const isCoreAssessmentOrLecture = prevItem.itemType === 'video' || prevItem.itemType === 'homework' || prevItem.itemType === 'exam';
+        if (isCoreAssessmentOrLecture && prevItem.isPrerequisiteRequired !== false) {
           const prog = studentProgress[prevItem.id];
           if (!prog || !prog.isPassed) {
             const itemTypeLabel = prevItem.itemType === 'video' ? 'مشاهدة المحاضرة' :
                                   prevItem.itemType === 'homework' ? 'اجتياز الواجب' :
-                                  prevItem.itemType === 'exam' ? 'اجتياز الامتحان' : 'قراءة الملف';
+                                  prevItem.itemType === 'exam' ? 'اجتياز الامتحان' : 'إكمال العنصر';
             return {
               isAccessible: false,
               reason: `يجب ${itemTypeLabel} (${prevItem.title}) أولاً لفتح هذا الدرس.`

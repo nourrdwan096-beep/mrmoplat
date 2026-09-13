@@ -50,7 +50,8 @@ import {
   Info,
   ExternalLink,
   Menu,
-  X
+  X,
+  Home
 } from 'lucide-react';
 import Footer from '@/components/Footer';
 
@@ -560,6 +561,22 @@ export default function WatchLessonPage() {
 
                 {/* Fast Lesson Actions */}
                 <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <Link
+                    href="/"
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-black text-xs shadow-sm hover:scale-105 active:scale-95 transition-all"
+                  >
+                    <Home className="w-4 h-4" />
+                    <span>الرئيسية ولوحة التحكم</span>
+                  </Link>
+
+                  <Link
+                    href={`/courses/${courseId}`}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs transition-colors"
+                  >
+                    <BookOpen className="w-4 h-4 text-emerald-500" />
+                    <span>فهرس الكورس</span>
+                  </Link>
+
                   {currentItem?.pdfAttachmentUrl && (
                     <a
                       href={currentItem.pdfAttachmentUrl}
