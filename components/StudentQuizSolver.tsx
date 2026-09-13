@@ -51,7 +51,8 @@ import {
   ListOrdered,
   Eye,
   Lock,
-  Crown
+  Crown,
+  EyeOff
 } from 'lucide-react';
 import HonorCertificate from '@/components/HonorCertificate';
 
@@ -133,6 +134,7 @@ export default function StudentQuizSolver({
   // Active question pagination or full list
   const [activeQuestionIndex, setActiveQuestionIndex] = useState<number>(0);
   const [viewMode, setViewMode] = useState<'step_by_step' | 'full_list'>('step_by_step');
+  const [passageDisplayMode, setPassageDisplayMode] = useState<Record<string, 'hidden' | 'normal' | 'maximized'>>({});
 
   // Submission & Results
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
@@ -1583,38 +1585,76 @@ export default function StudentQuizSolver({
           const evalResult = evaluatedQuestions[q.id];
           const qResult = results?.questionResults[q.id];
           const parentPassage = q.parentId ? passages.find(p => p.id === q.parentId) : null;
-          const isFirstForPassage = q.parentId ? solvableQuestions.findIndex(x => x.parentId === q.parentId) === qIndex : false;
-          const shouldShowPassage = parentPassage && (viewMode === 'step_by_step' || isFirstForPassage);
+          const displayMode = parentPassage ? (passageDisplayMode[parentPassage.id] || 'normal') : 'hidden';
 
           return (
             <div
               id={`question_card_${q.id}`}
               key={q.id}
-              className={`p-6 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border transition-all duration-300 space-y-5 shadow-sm relative ${
+              className={`p-6 sm:p-7 rounded-3xl bg-white dark:bg-slate-900 border transition-all duration-300 shadow-sm relative ${
                 isFlagged
                   ? 'border-amber-400 ring-1 ring-amber-400/30'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+              } ${
+                parentPassage && displayMode !== 'hidden' && displayMode !== 'maximized'
+                  ? 'lg:flex lg:flex-row-reverse lg:gap-8'
+                  : 'flex flex-col space-y-5'
               }`}
             >
               {/* Reference Passage for this question (if any) */}
-              {shouldShowPassage && (
-                <div className="mb-4 p-5 rounded-2xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-900/50 space-y-3">
-                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400">
-                    <BookOpen className="w-5 h-5 shrink-0" />
-                    <span className="text-xs font-black uppercase tracking-wider">
-                      Reference Passage (قطعة الفهم المرتبطة بالسؤال)
-                    </span>
+              {parentPassage && displayMode !== 'hidden' && (
+                <div className={`${displayMode === 'maximized' ? 'w-full mb-6' : 'lg:w-1/2 flex-shrink-0'} p-5 rounded-2xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-900/50 flex flex-col`}>
+                  <div className="flex items-center justify-between mb-3 border-b border-amber-200/60 dark:border-amber-900/50 pb-3">
+                    <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400">
+                      <BookOpen className="w-5 h-5 shrink-0" />
+                      <span className="text-xs font-black uppercase tracking-wider">
+                        القطعة (Passage)
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5" dir="rtl">
+                      <button
+                        type="button"
+                        onClick={() => setPassageDisplayMode(prev => ({ ...prev, [parentPassage.id]: displayMode === 'maximized' ? 'normal' : 'maximized' }))}
+                        className="p-1.5 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900 transition-colors"
+                        title={displayMode === 'maximized' ? 'تصغير القطعة' : 'تكبير القطعة'}
+                      >
+                        {displayMode === 'maximized' ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPassageDisplayMode(prev => ({ ...prev, [parentPassage.id]: 'hidden' }))}
+                        className="p-1.5 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900 transition-colors flex items-center gap-1"
+                        title="إخفاء القطعة"
+                      >
+                        <EyeOff className="w-4 h-4" />
+                        <span className="text-[10px] font-black">إخفاء</span>
+                      </button>
+                    </div>
                   </div>
                   <div
                     dir="ltr"
-                    className={`font-sans leading-relaxed text-slate-800 dark:text-slate-200 p-4 rounded-xl bg-white dark:bg-slate-900 border border-amber-100 dark:border-amber-900/40 text-left select-text ${getQuestionFontSizeClass()}`}
+                    className={`flex-1 overflow-y-auto max-h-[60vh] custom-scrollbar font-sans leading-relaxed text-slate-800 dark:text-slate-200 p-4 rounded-xl bg-white dark:bg-slate-900 border border-amber-100 dark:border-amber-900/40 text-left select-text ${getQuestionFontSizeClass()}`}
                   >
                     {renderAnnotatedText(parentPassage.id, parentPassage.questionText)}
                   </div>
                 </div>
               )}
 
-              {/* Question Header: Number, Marks, Flag & Hint Tools */}
+              {/* Question Content */}
+              <div className={`flex-1 flex flex-col min-w-0 space-y-5 ${parentPassage && displayMode !== 'hidden' && displayMode !== 'maximized' ? 'lg:pl-8 lg:border-l lg:border-slate-100 dark:lg:border-slate-800' : ''}`}>
+
+                {parentPassage && displayMode === 'hidden' && (
+                  <button
+                    type="button"
+                    onClick={() => setPassageDisplayMode(prev => ({ ...prev, [parentPassage.id]: 'normal' }))}
+                    className="flex items-center justify-center gap-2 w-full py-3 px-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-950/50 transition-colors font-black text-xs shadow-sm mb-2"
+                  >
+                    <BookOpen className="w-4 h-4" />
+                    <span>إظهار قطعة الفهم (Passage) المرتبطة بهذا السؤال</span>
+                  </button>
+                )}
+
+                {/* Question Header: Number, Marks, Flag & Hint Tools */}
               <div className="flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="w-8 h-8 rounded-xl bg-emerald-600 dark:bg-emerald-500 text-white dark:text-slate-950 text-xs font-black flex items-center justify-center shadow-sm">
@@ -1982,6 +2022,7 @@ export default function StudentQuizSolver({
                 </div>
               )}
 
+            </div>
             </div>
           );
         })}
