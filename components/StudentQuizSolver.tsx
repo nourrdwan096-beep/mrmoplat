@@ -129,6 +129,11 @@ export default function StudentQuizSolver({
   // Text Annotations: highlight & underline words per question (supports yellow, green, underline, eraser)
   const [annotationTool, setAnnotationTool] = useState<'none' | 'yellow' | 'green' | 'underline' | 'eraser'>('none');
   const [highlightedWords, setHighlightedWords] = useState<Record<string, Record<string, 'yellow' | 'green' | 'underline'>>>({});
+  // Fixed toolbar selection: holds selected word keys waiting to be annotated via fixed toolbar
+  const [pendingSelection, setPendingSelection] = useState<{
+    questionId: string;
+    keys: string[];
+  } | null>(null);
 
   // Pre-submission summary modal
   const [showPreSubmitModal, setShowPreSubmitModal] = useState(false);
@@ -521,6 +526,25 @@ export default function StudentQuizSolver({
     });
   };
 
+  // Fixed Toolbar Action: applies chosen color to pending selected text if any, or toggles tool mode
+  const handleApplyToolbarTool = (tool: 'yellow' | 'green' | 'underline' | 'eraser') => {
+    if (pendingSelection && pendingSelection.keys.length > 0) {
+      if (tool === 'eraser') {
+        handleRangeAnnotate(pendingSelection.questionId, pendingSelection.keys, 'clear');
+      } else {
+        handleRangeAnnotate(pendingSelection.questionId, pendingSelection.keys, tool);
+      }
+      setPendingSelection(null);
+      if (typeof window !== 'undefined') {
+        window.getSelection()?.removeAllRanges();
+      }
+      return;
+    }
+
+    // Toggle active tool mode for word-by-word clicks
+    setAnnotationTool((prev) => (prev === tool ? 'none' : tool));
+  };
+
   // Helper to render interactive annotated rich text with touch & mouse selection
   const renderAnnotatedText = (questionId: string, text: string, className: string = '') => {
     const qAnnotations = highlightedWords[questionId] || {};
@@ -531,6 +555,13 @@ export default function StudentQuizSolver({
         questionId={questionId}
         onWordClick={(key, word) => handleWordClick(questionId, key, word)}
         onRangeAnnotate={(keys, tool) => handleRangeAnnotate(questionId, keys, tool)}
+        onSelectionChange={(qId, keys) => {
+          if (keys && keys.length > 0) {
+            setPendingSelection({ questionId: qId, keys });
+          } else {
+            setPendingSelection((prev) => (prev?.questionId === qId ? null : prev));
+          }
+        }}
         annotations={qAnnotations}
         annotationTool={annotationTool}
         fontSizeClass={getQuestionFontSizeClass()}
@@ -1271,56 +1302,88 @@ export default function StudentQuizSolver({
               </button>
             </div>
 
-            {/* Highlighter, Underline & Eraser Selector */}
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-2xl p-1 border border-slate-200 dark:border-slate-700">
-              <button
-                type="button"
-                onClick={() => setAnnotationTool(annotationTool === 'yellow' ? 'none' : 'yellow')}
-                className={`p-1.5 rounded-xl transition-all ${
-                  annotationTool === 'yellow'
-                    ? 'bg-amber-400 text-slate-950 shadow-sm ring-2 ring-amber-500 scale-105'
-                    : 'hover:bg-white dark:hover:bg-slate-700 text-amber-500'
-                }`}
-                title="تظليل أصفر (حدد أو اضغط الكلمات)"
-              >
-                <Highlighter className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setAnnotationTool(annotationTool === 'green' ? 'none' : 'green')}
-                className={`p-1.5 rounded-xl transition-all ${
-                  annotationTool === 'green'
-                    ? 'bg-emerald-400 text-slate-950 shadow-sm ring-2 ring-emerald-500 scale-105'
-                    : 'hover:bg-white dark:hover:bg-slate-700 text-emerald-500'
-                }`}
-                title="تظليل أخضر (حدد أو اضغط الكلمات)"
-              >
-                <Highlighter className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setAnnotationTool(annotationTool === 'underline' ? 'none' : 'underline')}
-                className={`p-1.5 rounded-xl transition-all ${
-                  annotationTool === 'underline'
-                    ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-500 scale-105'
-                    : 'hover:bg-white dark:hover:bg-slate-700 text-indigo-500'
-                }`}
-                title="تسطير خط تحت الكلمات"
-              >
-                <UnderlineIcon className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setAnnotationTool(annotationTool === 'eraser' ? 'none' : 'eraser')}
-                className={`p-1.5 rounded-xl transition-all ${
-                  annotationTool === 'eraser'
-                    ? 'bg-rose-500 text-white shadow-sm ring-2 ring-rose-500 scale-105'
-                    : 'hover:bg-white dark:hover:bg-slate-700 text-rose-500'
-                }`}
-                title="ممحاة التظليلات (اضغط الكلمة المظللة لمسحها)"
-              >
-                <Eraser className="w-4 h-4" />
-              </button>
+            {/* Highlighter, Underline & Eraser Selector (Fixed Location) */}
+            <div className="flex items-center gap-1.5">
+              {pendingSelection && pendingSelection.keys.length > 0 && (
+                <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-900 dark:text-indigo-200 text-[11px] font-black animate-in fade-in">
+                  <span>تم تحديد ({pendingSelection.keys.length}) كلمة: اختر لوناً</span>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setPendingSelection(null);
+                      if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges();
+                    }}
+                    className="text-slate-400 hover:text-rose-500 font-black text-xs px-1"
+                    title="إلغاء التحديد"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              <div className="flex items-center bg-slate-100 dark:bg-slate-800 rounded-2xl p-1 border border-slate-200 dark:border-slate-700">
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => handleApplyToolbarTool('yellow')}
+                  className={`p-1.5 rounded-xl transition-all ${
+                    annotationTool === 'yellow'
+                      ? 'bg-amber-400 text-slate-950 shadow-sm ring-2 ring-amber-500 scale-105'
+                      : pendingSelection && pendingSelection.keys.length > 0
+                      ? 'hover:bg-amber-100 dark:hover:bg-amber-950 text-amber-600 dark:text-amber-400 ring-1 ring-amber-400/50'
+                      : 'hover:bg-white dark:hover:bg-slate-700 text-amber-500'
+                  }`}
+                  title={pendingSelection && pendingSelection.keys.length > 0 ? 'تظليل النص المحدد بالأصفر' : 'تظليل أصفر'}
+                >
+                  <Highlighter className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => handleApplyToolbarTool('green')}
+                  className={`p-1.5 rounded-xl transition-all ${
+                    annotationTool === 'green'
+                      ? 'bg-emerald-400 text-slate-950 shadow-sm ring-2 ring-emerald-500 scale-105'
+                      : pendingSelection && pendingSelection.keys.length > 0
+                      ? 'hover:bg-emerald-100 dark:hover:bg-emerald-950 text-emerald-600 dark:text-emerald-400 ring-1 ring-emerald-400/50'
+                      : 'hover:bg-white dark:hover:bg-slate-700 text-emerald-500'
+                  }`}
+                  title={pendingSelection && pendingSelection.keys.length > 0 ? 'تظليل النص المحدد بالأخضر' : 'تظليل أخضر'}
+                >
+                  <Highlighter className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => handleApplyToolbarTool('underline')}
+                  className={`p-1.5 rounded-xl transition-all ${
+                    annotationTool === 'underline'
+                      ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-500 scale-105'
+                      : pendingSelection && pendingSelection.keys.length > 0
+                      ? 'hover:bg-indigo-100 dark:hover:bg-indigo-950 text-indigo-600 dark:text-indigo-400 ring-1 ring-indigo-400/50'
+                      : 'hover:bg-white dark:hover:bg-slate-700 text-indigo-500'
+                  }`}
+                  title={pendingSelection && pendingSelection.keys.length > 0 ? 'وضع خط تحت النص المحدد' : 'تسطير خط'}
+                >
+                  <UnderlineIcon className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => handleApplyToolbarTool('eraser')}
+                  className={`p-1.5 rounded-xl transition-all ${
+                    annotationTool === 'eraser'
+                      ? 'bg-rose-500 text-white shadow-sm ring-2 ring-rose-500 scale-105'
+                      : pendingSelection && pendingSelection.keys.length > 0
+                      ? 'hover:bg-rose-100 dark:hover:bg-rose-950 text-rose-600 dark:text-rose-400 ring-1 ring-rose-400/50'
+                      : 'hover:bg-white dark:hover:bg-slate-700 text-rose-500'
+                  }`}
+                  title={pendingSelection && pendingSelection.keys.length > 0 ? 'مسح التظليل عن النص المحدد' : 'ممحاة التظليلات'}
+                >
+                  <Eraser className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Theme Toggle Button */}
@@ -1407,6 +1470,27 @@ export default function StudentQuizSolver({
           </div>
 
         </div>
+
+        {/* Pending Selection Notice Banner (especially visible on mobile) */}
+        {pendingSelection && pendingSelection.keys.length > 0 && (
+          <div className="sm:hidden flex items-center justify-between p-2 px-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-900 dark:text-indigo-200 text-xs font-bold animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-indigo-500" />
+              <span>تم تحديد ({pendingSelection.keys.length}) كلمة: اختر لوناً من الشريط العلوي</span>
+            </div>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setPendingSelection(null);
+                if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges();
+              }}
+              className="px-2 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-950 dark:text-indigo-100 text-[10px] font-black"
+            >
+              إلغاء
+            </button>
+          </div>
+        )}
 
         {/* Active Annotation Tool Notice Banner */}
         {annotationTool !== 'none' && (

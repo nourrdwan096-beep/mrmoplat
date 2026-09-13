@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import React, { useMemo, useEffect, useRef, useCallback } from 'react';
 
 export type AnnotationType = 'yellow' | 'green' | 'underline';
 
@@ -12,6 +12,7 @@ interface QuestionRichRendererProps {
   questionId?: string;
   onWordClick?: (wordKey: string, wordText: string) => void;
   onRangeAnnotate?: (wordKeys: string[], tool: AnnotationType | 'clear') => void;
+  onSelectionChange?: (questionId: string, wordKeys: string[]) => void;
   annotations?: Record<string, AnnotationType>;
   annotationTool?: 'none' | 'yellow' | 'green' | 'underline' | 'eraser';
   fontSizeClass?: string;
@@ -46,6 +47,7 @@ export default function QuestionRichRenderer({
   questionId,
   onWordClick,
   onRangeAnnotate,
+  onSelectionChange,
   annotations = {},
   annotationTool = 'none',
   fontSizeClass = ''
@@ -53,19 +55,6 @@ export default function QuestionRichRenderer({
   const containerRef = useRef<HTMLSpanElement>(null);
   const rawText = html !== undefined ? html : (content || '');
   const sanitized = useMemo(() => sanitizeQuestionHtml(rawText), [rawText]);
-
-  // Floating Selection Popup State (for touch & mouse selection)
-  const [selectionPopup, setSelectionPopup] = useState<{
-    visible: boolean;
-    x: number;
-    y: number;
-    selectedKeys: string[];
-  }>({
-    visible: false,
-    x: 0,
-    y: 0,
-    selectedKeys: []
-  });
 
   // Tokenize the HTML / text into tags, interactive words, and spaces
   const tokens: ParsedToken[] = useMemo(() => {
@@ -94,18 +83,17 @@ export default function QuestionRichRenderer({
   const handleSelectionCheck = useCallback(() => {
     if (typeof window === 'undefined') return;
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount) {
-      // If clicked outside or selection collapsed, close popup
-      setSelectionPopup((prev) => (prev.visible ? { ...prev, visible: false } : prev));
+    const container = containerRef.current;
+    if (!sel || sel.isCollapsed || !sel.rangeCount || !container) {
       return;
     }
 
     const range = sel.getRangeAt(0);
-    const container = containerRef.current;
-    if (!container || !container.contains(range.commonAncestorContainer)) {
-      setSelectionPopup((prev) => (prev.visible ? { ...prev, visible: false } : prev));
-      return;
-    }
+    // Only process if selection touches this container
+    const isInside = container.contains(range.commonAncestorContainer) ||
+      (range.intersectsNode && range.intersectsNode(container));
+
+    if (!isInside) return;
 
     // Find all word token elements within the selection range
     const wordElements = container.querySelectorAll<HTMLElement>('[data-token-key]');
@@ -118,7 +106,6 @@ export default function QuestionRichRenderer({
           if (k) matchedKeys.push(k);
         }
       } catch {
-        // Fallback for older browsers
         const text = el.textContent || '';
         if (text && sel.toString().includes(text)) {
           const k = el.getAttribute('data-token-key');
@@ -127,10 +114,7 @@ export default function QuestionRichRenderer({
       }
     });
 
-    if (matchedKeys.length === 0) {
-      setSelectionPopup((prev) => (prev.visible ? { ...prev, visible: false } : prev));
-      return;
-    }
+    if (matchedKeys.length === 0) return;
 
     // If an annotation tool is ALREADY active (e.g. Yellow Highlighter), apply it immediately!
     if (annotationTool === 'yellow' || annotationTool === 'green' || annotationTool === 'underline') {
@@ -140,6 +124,7 @@ export default function QuestionRichRenderer({
         matchedKeys.forEach((k) => onWordClick(k, ''));
       }
       sel.removeAllRanges();
+      if (questionId && onSelectionChange) onSelectionChange(questionId, []);
       return;
     }
 
@@ -148,20 +133,16 @@ export default function QuestionRichRenderer({
         onRangeAnnotate(matchedKeys, 'clear');
       }
       sel.removeAllRanges();
+      if (questionId && onSelectionChange) onSelectionChange(questionId, []);
       return;
     }
 
-    // Otherwise, show the floating mini action menu above the selection
-    const rect = range.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-
-    setSelectionPopup({
-      visible: true,
-      x: Math.max(10, rect.left - containerRect.left + rect.width / 2),
-      y: Math.max(0, rect.top - containerRect.top - 44),
-      selectedKeys: matchedKeys
-    });
-  }, [annotationTool, onRangeAnnotate, onWordClick]);
+    // When no tool is active, record the selected keys quietly without showing any popup!
+    // The student can then look up at the fixed toolbar and choose a color to apply cleanly.
+    if (questionId && onSelectionChange) {
+      onSelectionChange(questionId, matchedKeys);
+    }
+  }, [annotationTool, onRangeAnnotate, onSelectionChange, onWordClick, questionId]);
 
   // Listen for selection events on mouseup and touchend
   useEffect(() => {
@@ -183,18 +164,6 @@ export default function QuestionRichRenderer({
     };
   }, [handleSelectionCheck]);
 
-  const applyPopupAnnotation = (type: AnnotationType | 'clear') => {
-    if (onRangeAnnotate && selectionPopup.selectedKeys.length > 0) {
-      onRangeAnnotate(selectionPopup.selectedKeys, type);
-    } else if (onWordClick && selectionPopup.selectedKeys.length > 0) {
-      selectionPopup.selectedKeys.forEach((k) => onWordClick(k, ''));
-    }
-    setSelectionPopup({ visible: false, x: 0, y: 0, selectedKeys: [] });
-    if (typeof window !== 'undefined') {
-      window.getSelection()?.removeAllRanges();
-    }
-  };
-
   // Cursor style based on active tool
   const cursorStyle = useMemo(() => {
     if (annotationTool === 'yellow' || annotationTool === 'green') return 'cursor-text';
@@ -210,73 +179,6 @@ export default function QuestionRichRenderer({
       data-question-id={questionId}
       className={`relative inline-block max-w-full select-text leading-relaxed ${cursorStyle} ${fontSizeClass} ${className}`}
     >
-      {/* Floating Action Menu for Text Selection (Touch & Desktop) */}
-      {selectionPopup.visible && (
-        <span
-          className="absolute z-40 -translate-x-1/2 flex items-center gap-1.5 p-1.5 rounded-2xl bg-slate-900/95 dark:bg-slate-800/95 text-white shadow-xl backdrop-blur-md border border-slate-700 animate-in fade-in zoom-in-95 select-none"
-          style={{ left: `${selectionPopup.x}px`, top: `${selectionPopup.y}px` }}
-          dir="rtl"
-        >
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              applyPopupAnnotation('yellow');
-            }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 font-black text-xs shadow-xs transition-transform active:scale-95"
-            title="تظليل أصفر"
-          >
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 border border-amber-600" />
-            <span>أصفر</span>
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              applyPopupAnnotation('green');
-            }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-400 hover:bg-emerald-500 text-slate-950 font-black text-xs shadow-xs transition-transform active:scale-95"
-            title="تظليل أخضر"
-          >
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 border border-emerald-600" />
-            <span>أخضر</span>
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              applyPopupAnnotation('underline');
-            }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs shadow-xs transition-transform active:scale-95"
-            title="وضع خط"
-          >
-            <span className="underline font-black text-xs">U</span>
-            <span>تسطير</span>
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              applyPopupAnnotation('clear');
-            }}
-            className="px-2 py-1 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-200 font-bold text-xs transition-colors"
-            title="إلغاء التظليل"
-          >
-            مسح
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectionPopup({ visible: false, x: 0, y: 0, selectedKeys: [] });
-            }}
-            className="px-1.5 py-1 text-slate-400 hover:text-white text-xs"
-          >
-            ✕
-          </button>
-        </span>
-      )}
-
       {/* Render Tokens */}
       {tokens.map((token, idx) => {
         if (token.type === 'space') {

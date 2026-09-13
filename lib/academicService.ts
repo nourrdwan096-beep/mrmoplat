@@ -880,9 +880,9 @@ export async function fetchSecuredStudentQuestions(itemId: string): Promise<Ques
     console.warn('fetchSecuredStudentQuestionsServer error, falling back:', err);
   }
 
-  // Fallback: load questions and sanitize them immediately before returning to student
-  const fullQuestions = await fetchQuestionsByItem(itemId);
-  return fullQuestions.map((q) => ({
+  // Fallback: strictly sanitize any cached local questions without fetching unmasked answers
+  const cachedQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []).filter((q) => q.itemId === itemId);
+  return cachedQuestions.map((q) => ({
     ...q,
     correctAnswerId: '',
     correctAnswerIds: [],
@@ -893,7 +893,7 @@ export async function fetchSecuredStudentQuestions(itemId: string): Promise<Ques
       points: b.points,
       correctAnswer: '',
     })),
-  }));
+  })).sort((a, b) => a.orderIndex - b.orderIndex);
 }
 
 // Submit student answers to server for authoritative scoring

@@ -861,6 +861,25 @@ export async function submitAndGradeExamServer(payload: {
       console.warn('submitAndGradeExamServer upsert error:', upsertErr);
     }
 
+    // SECURITY HARDENING: If student did not pass the exam, NEVER return model answers,
+    // ideal answers, or explanations to prevent cheating or inspection in network DevTools!
+    const sanitizedQuestionResults = isPassed
+      ? questionResults
+      : Object.fromEntries(
+          Object.entries(questionResults).map(([qId, res]) => [
+            qId,
+            {
+              earned: res.earned,
+              max: res.max,
+              isCorrect: res.isCorrect,
+              correctAnswerId: '',
+              correctAnswerIds: [],
+              idealAnswer: '',
+              explanation: '',
+            },
+          ])
+        );
+
     return {
       success: true,
       totalPoints,
@@ -870,7 +889,7 @@ export async function submitAndGradeExamServer(payload: {
       attemptsCount: newAttemptsCount,
       maxExamAttempts,
       isExhausted,
-      questionResults,
+      questionResults: sanitizedQuestionResults,
     };
   } catch (err: any) {
     console.error('submitAndGradeExamServer exception:', err);
