@@ -1472,8 +1472,8 @@ export default function ItemBuilderPage({ params }: { params: Promise<{ id: stri
                 </div>
               </div>
 
-              {/* Passage Link (if not passage / word_bank) */}
-              {questionType !== 'passage' && questionType !== 'word_bank' && passages.length > 0 && (
+              {/* Passage Link (if not passage) */}
+              {questionType !== 'passage' && passages.length > 0 && (
                 <div>
                   <label className="block text-xs font-black text-slate-700 dark:text-slate-300 mb-2">
                     الربط بقطعة فهم (اختياري - لتظهر القطعة أمام الطالب أثناء حل هذا السؤال)

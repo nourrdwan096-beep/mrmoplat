@@ -583,6 +583,7 @@ export async function saveQuestionsServer(itemId: string, questions: any[]): Pro
         explanation: q.explanation || null,
         points: Number(q.points) || 1,
         order_index: q.orderIndex || idx + 1,
+        parent_id: q.parentId || null,
       };
     });
 
