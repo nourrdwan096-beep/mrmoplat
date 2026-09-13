@@ -949,6 +949,240 @@ export async function fetchStudentProgressServer(studentId: string, courseId?: s
   }
 }
 
+// -------------------------------------------------------------
+// AUTHORITATIVE ATTEMPTS MANAGEMENT (GRANT EXTRA / FULL RESET)
+// -------------------------------------------------------------
+export async function grantStudentExtraAttemptsServer(
+  studentId: string,
+  courseId: string,
+  itemId: string,
+  extraAttemptsCount: number = 1,
+  teacherNote?: string
+): Promise<{
+  success: boolean;
+  message: string;
+  attemptsCount: number;
+  maxAttempts: number;
+  isPassed: boolean;
+}> {
+  try {
+    if (!studentId || !courseId || !itemId) {
+      return {
+        success: false,
+        message: 'بيانات غير مكتملة',
+        attemptsCount: 0,
+        maxAttempts: 3,
+        isPassed: false,
+      };
+    }
+
+    // 1. Fetch item max attempts & title
+    const { data: itemData } = await supabaseAdmin
+      .from('unit_items')
+      .select('id, title, max_exam_attempts, item_type')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    const maxAttempts = itemData?.max_exam_attempts !== null && itemData?.max_exam_attempts !== undefined
+      ? Math.max(1, Number(itemData.max_exam_attempts))
+      : 3;
+
+    // 2. Fetch existing student progress
+    const { data: existingProg } = await supabaseAdmin
+      .from('student_item_progress')
+      .select('*')
+      .eq('student_id', studentId)
+      .eq('item_id', itemId)
+      .maybeSingle();
+
+    const currentAttempts = Number(existingProg?.attempts_count || 0);
+
+    // Calculate new attempts count: ensure the student has room for `extraAttemptsCount` attempts
+    let newAttemptsCount = 0;
+    if (currentAttempts >= maxAttempts) {
+      newAttemptsCount = Math.max(0, maxAttempts - extraAttemptsCount);
+    } else {
+      newAttemptsCount = Math.max(0, currentAttempts - extraAttemptsCount);
+    }
+
+    const recordPayload = {
+      id: existingProg?.id || crypto.randomUUID(),
+      student_id: studentId,
+      course_id: courseId,
+      item_id: itemId,
+      status: 'in_progress',
+      attempts_count: newAttemptsCount,
+      highest_score: 0, // Reset so only the new retake score is evaluated
+      last_score: 0,
+      is_passed: false,
+      student_answers: null,
+      completed_at: null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error: upsertErr } = await supabaseAdmin
+      .from('student_item_progress')
+      .upsert(recordPayload, { onConflict: 'student_id,item_id' });
+
+    if (upsertErr) {
+      console.error('grantStudentExtraAttemptsServer upsert error:', upsertErr);
+      return {
+        success: false,
+        message: `فشل تسجيل منح المحاولة في قاعدة البيانات: ${upsertErr.message}`,
+        attemptsCount: currentAttempts,
+        maxAttempts,
+        isPassed: false,
+      };
+    }
+
+    // Audit log
+    try {
+      await supabaseAdmin.from('audit_logs').insert({
+        id: crypto.randomUUID(),
+        actor_name: 'مستر محمد رضوان (المعلم)',
+        actor_role: 'teacher',
+        action_type: 'grant_extra_attempt',
+        target_entity: 'student_item_progress',
+        target_id: recordPayload.id,
+        details: {
+          studentId,
+          courseId,
+          itemId,
+          itemTitle: itemData?.title || '',
+          extraAttemptsCount,
+          newAttemptsCount,
+          maxAttempts,
+          teacherNote: teacherNote || 'منح فرصة إضافية استثنائية من المعلم',
+          grantedAt: new Date().toISOString(),
+        },
+      });
+    } catch (auditErr) {
+      console.warn('Audit log write non-fatal error:', auditErr);
+    }
+
+    return {
+      success: true,
+      message: `تم منح الطالب فرصة إضافية بنجاح! تم فتح الاختبار وأصبحت المحاولات المستهلكة (${newAttemptsCount} من ${maxAttempts}).`,
+      attemptsCount: newAttemptsCount,
+      maxAttempts,
+      isPassed: false,
+    };
+  } catch (err: any) {
+    console.error('grantStudentExtraAttemptsServer exception:', err);
+    return {
+      success: false,
+      message: err?.message || 'حدث خطأ غير متوقع أثناء معالجة الطلب على السيرفر',
+      attemptsCount: 0,
+      maxAttempts: 3,
+      isPassed: false,
+    };
+  }
+}
+
+export async function resetStudentItemProgressServer(
+  studentId: string,
+  courseId: string,
+  itemId: string,
+  teacherNote?: string
+): Promise<{
+  success: boolean;
+  message: string;
+  attemptsCount: number;
+  isPassed: boolean;
+}> {
+  try {
+    if (!studentId || !courseId || !itemId) {
+      return {
+        success: false,
+        message: 'بيانات غير مكتملة',
+        attemptsCount: 0,
+        isPassed: false,
+      };
+    }
+
+    // 1. Fetch item title
+    const { data: itemData } = await supabaseAdmin
+      .from('unit_items')
+      .select('id, title, item_type')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    // 2. Fetch existing progress
+    const { data: existingProg } = await supabaseAdmin
+      .from('student_item_progress')
+      .select('*')
+      .eq('student_id', studentId)
+      .eq('item_id', itemId)
+      .maybeSingle();
+
+    const recordPayload = {
+      id: existingProg?.id || crypto.randomUUID(),
+      student_id: studentId,
+      course_id: courseId,
+      item_id: itemId,
+      status: 'in_progress',
+      attempts_count: 0,
+      highest_score: 0,
+      last_score: 0,
+      is_passed: false,
+      student_answers: null,
+      completed_at: null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error: upsertErr } = await supabaseAdmin
+      .from('student_item_progress')
+      .upsert(recordPayload, { onConflict: 'student_id,item_id' });
+
+    if (upsertErr) {
+      console.error('resetStudentItemProgressServer upsert error:', upsertErr);
+      return {
+        success: false,
+        message: `فشل إعادة التعيين في السيرفر: ${upsertErr.message}`,
+        attemptsCount: 0,
+        isPassed: false,
+      };
+    }
+
+    // Audit log
+    try {
+      await supabaseAdmin.from('audit_logs').insert({
+        id: crypto.randomUUID(),
+        actor_name: 'مستر محمد رضوان (المعلم)',
+        actor_role: 'teacher',
+        action_type: 'reset_exam_progress',
+        target_entity: 'student_item_progress',
+        target_id: recordPayload.id,
+        details: {
+          studentId,
+          courseId,
+          itemId,
+          itemTitle: itemData?.title || '',
+          teacherNote: teacherNote || 'إعادة تعيين شاملة وتصفير لكافة المحاولات والدرجات السابقة',
+          resetAt: new Date().toISOString(),
+        },
+      });
+    } catch (auditErr) {
+      console.warn('Audit log write non-fatal error:', auditErr);
+    }
+
+    return {
+      success: true,
+      message: 'تم تصفير وإعادة تعيين كافة المحاولات والدرجات للاختبار بنجاح (0 محاولات مستهلكة).',
+      attemptsCount: 0,
+      isPassed: false,
+    };
+  } catch (err: any) {
+    console.error('resetStudentItemProgressServer exception:', err);
+    return {
+      success: false,
+      message: err?.message || 'حدث خطأ غير متوقع أثناء إعادة التعيين على السيرفر',
+      attemptsCount: 0,
+      isPassed: false,
+    };
+  }
+}
+
 // Single question validation for interactive homework practice
 export async function verifyHomeworkQuestionAnswerServer(payload: {
   itemId: string;

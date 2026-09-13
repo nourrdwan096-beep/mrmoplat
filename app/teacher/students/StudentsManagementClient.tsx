@@ -9,7 +9,7 @@ import {
   Mail, MonitorSmartphone, Eye, EyeOff, Lock, Loader2,
   Trash2, AlertTriangle, Send, BookOpen, Award, CheckCircle2,
   RotateCcw, X, MessageSquare, AlertCircle, RefreshCw, ChevronDown,
-  Sparkles, ExternalLink
+  Sparkles, ExternalLink, Plus
 } from 'lucide-react';
 import { fetchStudents, updateStudentStatus, deleteStudent, StudentProfile } from '@/lib/studentService';
 import { sendMessage } from '@/lib/messagingService';
@@ -18,6 +18,7 @@ import {
   fetchStudentEnrolledCourseIds, 
   fetchStudentProgress, 
   grantStudentExtraAttempts,
+  resetStudentItemProgress,
   CourseData, 
   StudentItemProgressData 
 } from '@/lib/academicService';
@@ -282,6 +283,20 @@ export default function StudentsManagementClient() {
       alert(res.message);
       const updatedProg = await fetchStudentProgress(detailsTargetStudent.id, courseId);
       setStudentProgressMap(prev => ({ ...prev, [courseId]: updatedProg }));
+    } else {
+      alert(res.message || 'فشلت عملية منح المحاولة');
+    }
+  };
+
+  const handleResetItemProgress = async (courseId: string, itemId: string) => {
+    if (!detailsTargetStudent) return;
+    const res = await resetStudentItemProgress(detailsTargetStudent.id, courseId, itemId, 'تصفير شامل للمحاولات والدرجات');
+    if (res.success) {
+      alert(res.message);
+      const updatedProg = await fetchStudentProgress(detailsTargetStudent.id, courseId);
+      setStudentProgressMap(prev => ({ ...prev, [courseId]: updatedProg }));
+    } else {
+      alert(res.message || 'فشلت إعادة التعيين');
     }
   };
 
@@ -1029,14 +1044,23 @@ export default function StudentsManagementClient() {
                                     المحاولات: {prog.attemptsCount} • الدرجة: {prog.highestScore}%
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 shrink-0">
                                   <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${prog.isPassed ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400' : 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400'}`}>
                                     {prog.isPassed ? 'ناجح' : 'إعادة'}
                                   </span>
+                                  {/* Grant extra attempt (+1) */}
                                   <button
                                     onClick={() => handleGrantExtraAttempt(course.id, prog.itemId)}
-                                    className="p-1.5 text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-950/40 rounded-lg transition-colors"
-                                    title="منح محاولة إضافية"
+                                    className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded-lg transition-colors"
+                                    title="منح محاولة إضافية واحدة (+1)"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                  {/* Full reset (0) */}
+                                  <button
+                                    onClick={() => handleResetItemProgress(course.id, prog.itemId)}
+                                    className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-lg transition-colors"
+                                    title="تصفير شامل لكافة المحاولات والدرجات (0 محاولات)"
                                   >
                                     <RotateCcw className="w-3.5 h-3.5" />
                                   </button>

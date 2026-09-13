@@ -88,8 +88,12 @@ export default function WatchLessonPage() {
         if (!isMounted) return;
         setCourse(foundCourse);
 
-        // Check Device Limits and Enrollment for students
-        if (currentUser?.id && currentRole === 'student') {
+        // Check Auth First
+        if (!currentUser) {
+          if (!isMounted) return;
+          setIsNotEnrolled(true);
+        } else if (currentUser?.id && currentRole === 'student') {
+          // Check Device Limits and Enrollment for students
           const devCheck = await registerOrVerifyStudentCourseDevice(currentUser.id, courseId);
           if (!devCheck.allowed) {
             if (!isMounted) return;
@@ -98,7 +102,7 @@ export default function WatchLessonPage() {
             return;
           }
 
-          if (foundCourse && !foundCourse.isFree) {
+          if (foundCourse) {
             const enrolled = await isStudentEnrolledInCourse(currentUser.id, courseId);
             if (!enrolled) {
               if (!isMounted) return;
@@ -243,8 +247,8 @@ export default function WatchLessonPage() {
     );
   }
 
-  // If course is paid and student is not enrolled
-  if (isNotEnrolled && course && !course.isFree) {
+  // If student is not enrolled (paid or free)
+  if (isNotEnrolled && course) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center" dir="rtl">
         <div className="max-w-md w-full bg-slate-900 border border-amber-500/30 rounded-3xl p-8 space-y-6 shadow-2xl shadow-amber-500/10">
@@ -252,9 +256,11 @@ export default function WatchLessonPage() {
             <Ticket className="w-10 h-10" />
           </div>
           <div className="space-y-2">
-            <h2 className="text-2xl font-black text-white">تفعيل الكود مطلوب للمشاهدة</h2>
+            <h2 className="text-2xl font-black text-white">الاشتراك مطلوب للمشاهدة</h2>
             <p className="text-sm font-bold text-slate-300 leading-relaxed">
-              لم تقم بتفعيل كود الاشتراك لهذا الكورس بعد. يرجى إدخال كود التفعيل المستلم من مستر محمد رضوان للاشتراك وفتح المحاضرات.
+              {course.isFree 
+                ? 'هذا الكورس مجاني، ولكن يجب عليك تسجيل الدخول والانضمام إليه أولاً لفتح المحاضرات.'
+                : 'لم تقم بتفعيل كود الاشتراك لهذا الكورس بعد. يرجى إدخال كود التفعيل المستلم من مستر محمد رضوان للاشتراك وفتح المحاضرات.'}
             </p>
           </div>
           <div className="flex flex-col gap-3 pt-2">
@@ -262,7 +268,7 @@ export default function WatchLessonPage() {
               href={`/courses/${courseId}`}
               className="w-full py-3.5 px-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-sm transition-all shadow-lg shadow-indigo-600/30"
             >
-              تفعيل كود الكورس الآن
+              {course.isFree ? 'الانضمام للكورس الآن' : 'تفعيل كود الكورس الآن'}
             </Link>
             <Link
               href="/student/courses"
@@ -436,14 +442,11 @@ export default function WatchLessonPage() {
                       } : undefined}
                       onComplete={async (score, passed) => {
                         const studentId = currentUser?.id || 'demo_student';
-                        await recordStudentItemProgress(studentId, courseId, currentItem.id, score, passed);
                         const refreshed = await fetchStudentProgress(studentId, courseId);
                         setStudentProgress(refreshed);
                       }}
                       onSecurityViolation={async () => {
                         const studentId = currentUser?.id || 'demo_student';
-                        // Record a failed attempt on security violation
-                        await recordStudentItemProgress(studentId, courseId, currentItem.id, 0, false);
                         const refreshed = await fetchStudentProgress(studentId, courseId);
                         setStudentProgress(refreshed);
                       }}

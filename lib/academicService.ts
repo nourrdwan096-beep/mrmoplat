@@ -21,6 +21,8 @@ import {
   submitAndGradeExamServer,
   verifyHomeworkQuestionAnswerServer,
   fetchStudentProgressServer,
+  grantStudentExtraAttemptsServer,
+  resetStudentItemProgressServer,
   fetchCodesServer,
   insertCodesServer,
   markCodeUsedServer,
@@ -1411,142 +1413,92 @@ export async function grantStudentExtraAttempts(
     return { success: false, newAttemptsCount: 0, message: 'بيانات غير مكتملة' };
   }
 
-  const storageKey = `mr_radwan_progress_${studentId}_${courseId}`;
-  const localList = getLocal<StudentItemProgressData[]>(storageKey, []);
-  let progIndex = localList.findIndex(p => p.itemId === itemId);
-  let prog: StudentItemProgressData;
-
-  if (progIndex !== -1) {
-    prog = { ...localList[progIndex] };
-  } else {
-    // Check Supabase
-    let dbProg: any = null;
-    try {
-      const { data } = await supabase
-        .from('student_item_progress')
-        .select('*')
-        .eq('student_id', studentId)
-        .eq('item_id', itemId)
-        .maybeSingle();
-      dbProg = data;
-    } catch (err) {
-      console.warn('Query student_item_progress error:', err);
-    }
-
-    if (dbProg) {
-      prog = {
-        id: dbProg.id,
-        studentId: dbProg.student_id,
-        courseId: dbProg.course_id,
-        itemId: dbProg.item_id,
-        status: dbProg.status,
-        attemptsCount: dbProg.attempts_count || 0,
-        highestScore: Number(dbProg.highest_score || 0),
-        lastScore: Number(dbProg.last_score || 0),
-        isPassed: dbProg.is_passed ?? false,
-        studentAnswers: dbProg.student_answers,
-        completedAt: dbProg.completed_at,
-        updatedAt: dbProg.updated_at,
-      };
+  try {
+    if (resetCompletely) {
+      const serverRes = await resetStudentItemProgressServer(studentId, courseId, itemId, teacherNote);
+      if (serverRes.success) {
+        // Update local cache
+        const storageKey = `mr_radwan_progress_${studentId}_${courseId}`;
+        const localList = getLocal<StudentItemProgressData[]>(storageKey, []);
+        const progIndex = localList.findIndex(p => p.itemId === itemId);
+        if (progIndex !== -1) {
+          localList[progIndex] = {
+            ...localList[progIndex],
+            attemptsCount: 0,
+            status: 'in_progress',
+            isPassed: false,
+            highestScore: 0,
+            lastScore: 0,
+            studentAnswers: null,
+            completedAt: undefined,
+            updatedAt: new Date().toISOString(),
+          };
+          setLocal(storageKey, localList);
+        }
+        return {
+          success: true,
+          newAttemptsCount: 0,
+          message: serverRes.message || 'تم إعادة تعيين محاولات الاختبار بالكامل بنجاح',
+        };
+      }
+      return { success: false, newAttemptsCount: 0, message: serverRes.message || 'فشلت إعادة التعيين' };
     } else {
-      prog = {
-        id: crypto.randomUUID(),
-        studentId,
-        courseId,
-        itemId,
-        status: 'in_progress',
-        attemptsCount: 0,
-        highestScore: 0,
-        lastScore: 0,
-        isPassed: false,
-        completedAt: undefined,
-        updatedAt: new Date().toISOString(),
-      };
-    }
-  }
-
-  if (resetCompletely) {
-    prog.attemptsCount = 0;
-    prog.status = 'in_progress';
-    prog.isPassed = false;
-    prog.highestScore = 0;
-    prog.lastScore = 0;
-    prog.studentAnswers = null;
-    prog.completedAt = undefined;
-  } else {
-    // Reduce attempts by extraAttemptsCount (minimum 0) so the student has new remaining attempts
-    // Clear previous score so that the new attempt's score is strictly what counts:
-    prog.attemptsCount = Math.max(0, prog.attemptsCount - extraAttemptsCount);
-    prog.status = 'in_progress';
-    prog.isPassed = false;
-    prog.highestScore = 0;
-    prog.lastScore = 0;
-    prog.studentAnswers = null;
-    prog.completedAt = undefined;
-  }
-  prog.updatedAt = new Date().toISOString();
-
-  if (progIndex !== -1) {
-    localList[progIndex] = prog;
-  } else {
-    localList.push(prog);
-  }
-  setLocal(storageKey, localList);
-
-  try {
-    await proxyUpsert('student_item_progress', {
-      id: prog.id,
-      student_id: prog.studentId,
-      course_id: prog.courseId,
-      item_id: prog.itemId,
-      status: prog.status,
-      attempts_count: prog.attemptsCount,
-      highest_score: prog.highestScore,
-      last_score: prog.lastScore,
-      is_passed: prog.isPassed,
-      student_answers: prog.studentAnswers || null,
-      completed_at: prog.completedAt || null,
-      updated_at: prog.updatedAt,
-    });
-  } catch (err) {
-    console.warn('Supabase update extra attempts error:', err);
-  }
-
-  // Audit log
-  try {
-    const auditId = crypto.randomUUID();
-    await proxyInsert('audit_logs', {
-      id: auditId,
-      actor_name: 'مستر محمد رضوان (المعلم)',
-      actor_role: 'teacher',
-      action_type: 'grant_extra_attempt',
-      target_entity: 'student_item_progress',
-      target_id: prog.id,
-      details: {
+      const serverRes = await grantStudentExtraAttemptsServer(
         studentId,
         courseId,
         itemId,
         extraAttemptsCount,
-        resetCompletely,
-        remainingAttemptsAllowed: prog.attemptsCount,
-        teacherNote: teacherNote || 'منح فرصة استثنائية بعد التواصل مع ولي الأمر',
-        timestamp: new Date().toISOString()
-      }
-    });
-  } catch (err) {
-    // non-fatal
-  }
+        teacherNote || 'منح فرصة استثنائية من المعلم'
+      );
 
-  return {
-    success: true,
-    newAttemptsCount: prog.attemptsCount,
-    message: resetCompletely
-      ? 'تم إعادة تعيين محاولات الاختبار بالكامل بنجاح'
-      : `تم منح الطالب ${extraAttemptsCount} ${extraAttemptsCount === 1 ? 'فرصة إضافية' : 'فرص إضافية'} بنجاح!`
-  };
+      if (serverRes.success) {
+        // Update local cache
+        const storageKey = `mr_radwan_progress_${studentId}_${courseId}`;
+        const localList = getLocal<StudentItemProgressData[]>(storageKey, []);
+        const progIndex = localList.findIndex(p => p.itemId === itemId);
+        if (progIndex !== -1) {
+          localList[progIndex] = {
+            ...localList[progIndex],
+            attemptsCount: serverRes.attemptsCount,
+            status: 'in_progress',
+            isPassed: false,
+            highestScore: 0,
+            lastScore: 0,
+            studentAnswers: null,
+            completedAt: undefined,
+            updatedAt: new Date().toISOString(),
+          };
+          setLocal(storageKey, localList);
+        }
+        return {
+          success: true,
+          newAttemptsCount: serverRes.attemptsCount,
+          message: serverRes.message,
+        };
+      }
+      return {
+        success: false,
+        newAttemptsCount: serverRes.attemptsCount,
+        message: serverRes.message || 'فشل منح الفرصة الإضافية على السيرفر',
+      };
+    }
+  } catch (err: any) {
+    console.error('grantStudentExtraAttempts exception:', err);
+    return { success: false, newAttemptsCount: 0, message: err?.message || 'حدث خطأ أثناء الاتصال بالخادم' };
+  }
 }
 
-export async function grantExtraAttempt(studentId: string, courseId: string, itemId: string, maxAttempts: number): Promise<boolean> {
+export async function resetStudentItemProgress(
+  studentId: string,
+  courseId: string,
+  itemId: string,
+  teacherNote?: string
+): Promise<{ success: boolean; message: string }> {
+  const res = await grantStudentExtraAttempts(studentId, courseId, itemId, 1, true, teacherNote);
+  return { success: res.success, message: res.message };
+}
+
+export async function grantExtraAttempt(studentId: string, courseId: string, itemId: string, maxAttempts: number = 3): Promise<boolean> {
   const res = await grantStudentExtraAttempts(studentId, courseId, itemId, 1, false);
   return res.success;
 }

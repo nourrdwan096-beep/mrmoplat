@@ -37,6 +37,7 @@ import {
   fetchStudentProgressForTeacher,
   grantExtraAttempt,
   grantStudentExtraAttempts,
+  resetStudentItemProgress,
   CourseData,
   UnitData,
   UnitItemData,
@@ -222,11 +223,14 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
   const [selectedStudentForAttempts, setSelectedStudentForAttempts] = useState<EnrolledStudentData | null>(null);
   const [studentProgressList, setStudentProgressList] = useState<any[]>([]);
   const [loadingStudentProgress, setLoadingStudentProgress] = useState(false);
+  const [actionInProgressItemId, setActionInProgressItemId] = useState<string | null>(null);
+  const [attemptsActionFeedback, setAttemptsActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isDeletingTarget, setIsDeletingTarget] = useState(false);
 
   const openManageAttempts = async (student: EnrolledStudentData) => {
     setSelectedStudentForAttempts(student);
     setLoadingStudentProgress(true);
+    setAttemptsActionFeedback(null);
     try {
       const data = await fetchStudentProgressForTeacher(student.studentId, courseId);
       setStudentProgressList(data || []);
@@ -239,22 +243,61 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
 
   const handleGrantAttempt = async (itemProgress: any) => {
     if (!selectedStudentForAttempts) return;
+    const itemId = itemProgress.item_id || itemProgress.itemId;
+    setActionInProgressItemId(itemId);
+    setAttemptsActionFeedback(null);
     try {
-      const success = await grantExtraAttempt(
+      const res = await grantStudentExtraAttempts(
         selectedStudentForAttempts.studentId, 
         courseId, 
-        itemProgress.item_id,
-        itemProgress.unit_items?.max_exam_attempts || 1
+        itemId,
+        1,
+        false,
+        'منح فرصة استثنائية من المعلم'
       );
-      if (success) {
-        // refresh list
+      if (res.success) {
+        setAttemptsActionFeedback({ type: 'success', message: res.message });
         const updatedList = await fetchCourseEnrolledStudents(courseId);
         setEnrolledStudents(updatedList);
         const data = await fetchStudentProgressForTeacher(selectedStudentForAttempts.studentId, courseId);
         setStudentProgressList(data || []);
+      } else {
+        setAttemptsActionFeedback({ type: 'error', message: res.message || 'فشلت عملية منح المحاولة' });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setAttemptsActionFeedback({ type: 'error', message: err?.message || 'حدث خطأ غير متوقع' });
+    } finally {
+      setActionInProgressItemId(null);
+    }
+  };
+
+  const handleResetAttempts = async (itemProgress: any) => {
+    if (!selectedStudentForAttempts) return;
+    const itemId = itemProgress.item_id || itemProgress.itemId;
+    setActionInProgressItemId(itemId);
+    setAttemptsActionFeedback(null);
+    try {
+      const res = await resetStudentItemProgress(
+        selectedStudentForAttempts.studentId, 
+        courseId, 
+        itemId,
+        'إعادة تعيين وتصفير المحاولات والدرجات بالكامل من المعلم'
+      );
+      if (res.success) {
+        setAttemptsActionFeedback({ type: 'success', message: res.message });
+        const updatedList = await fetchCourseEnrolledStudents(courseId);
+        setEnrolledStudents(updatedList);
+        const data = await fetchStudentProgressForTeacher(selectedStudentForAttempts.studentId, courseId);
+        setStudentProgressList(data || []);
+      } else {
+        setAttemptsActionFeedback({ type: 'error', message: res.message || 'فشلت إعادة التعيين' });
+      }
+    } catch (err: any) {
+      console.error(err);
+      setAttemptsActionFeedback({ type: 'error', message: err?.message || 'حدث خطأ غير متوقع' });
+    } finally {
+      setActionInProgressItemId(null);
     }
   };
 
@@ -3073,53 +3116,96 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
               </div>
 
               <div className="p-6 overflow-y-auto flex-1 space-y-4">
+                {attemptsActionFeedback && (
+                  <div className={`p-4 rounded-2xl flex items-center gap-3 text-xs font-black animate-fade-in ${
+                    attemptsActionFeedback.type === 'success'
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                      : 'bg-rose-50 text-rose-800 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800'
+                  }`}>
+                    {attemptsActionFeedback.type === 'success' ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                    )}
+                    <span>{attemptsActionFeedback.message}</span>
+                  </div>
+                )}
+
                 {loadingStudentProgress ? (
-                  <div className="flex justify-center p-8">
-                    <div className="w-8 h-8 border-4 border-slate-200 border-t-emerald-500 rounded-full animate-spin" />
+                  <div className="flex flex-col items-center justify-center p-12 space-y-3">
+                    <div className="w-10 h-10 border-4 border-slate-200 border-t-emerald-500 rounded-full animate-spin" />
+                    <p className="text-xs font-bold text-slate-500">جاري تحميل سجل المحاولات والدرجات المعتمدة...</p>
                   </div>
                 ) : studentProgressList.length === 0 ? (
-                  <div className="text-center p-8 text-slate-500 font-bold text-sm bg-slate-50 dark:bg-slate-800/50 rounded-2xl">
+                  <div className="text-center p-8 text-slate-500 font-bold text-sm bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200/60 dark:border-slate-800">
                     لم يبدأ هذا الطالب أي واجب أو امتحان في هذا الكورس بعد.
                   </div>
                 ) : (
                   studentProgressList.map((prog) => {
-                    const maxAttempts = prog.unit_items?.max_exam_attempts || 1;
-                    const isExhausted = prog.attempts_count >= maxAttempts && !prog.is_passed;
+                    const itemId = prog.item_id || prog.itemId;
+                    const maxAttempts = prog.unit_items?.max_exam_attempts || 3;
+                    const isExhausted = (prog.attempts_count || 0) >= maxAttempts && !prog.is_passed;
+                    const isBusy = actionInProgressItemId === itemId;
                     
                     return (
-                      <div key={prog.id} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex flex-col sm:flex-row items-center justify-between gap-4">
-                        <div className="flex-1">
-                          <h4 className="text-sm font-black text-slate-900 dark:text-white mb-1">
+                      <div key={prog.id || itemId} className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="flex-1 space-y-2">
+                          <h4 className="text-sm font-black text-slate-900 dark:text-white">
                             {prog.unit_items?.title || 'عنصر غير معروف'}
                           </h4>
                           <div className="flex flex-wrap items-center gap-2 text-xs font-bold">
-                            <span className="px-2 py-0.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
-                              {prog.unit_items?.item_type === 'homework' ? 'واجب' : 'امتحان'}
+                            <span className="px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
+                              {prog.unit_items?.item_type === 'homework' ? 'واجب تفاعلي' : 'امتحان شامل'}
                             </span>
-                            <span className={`px-2 py-0.5 rounded-lg ${
-                              prog.is_passed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                            <span className={`px-2.5 py-1 rounded-lg ${
+                              prog.is_passed 
+                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300' 
+                                : isExhausted
+                                ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300'
+                                : 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300'
                             }`}>
-                              الحالة: {prog.is_passed ? 'ناجح' : (prog.status === 'locked' ? 'مغلق' : 'مفتوح')}
+                              الحالة: {prog.is_passed ? 'ناجح ومعتمد ✓' : isExhausted ? 'استنفد المحاولات ✕' : 'متاح للحل'}
                             </span>
-                            <span className={`px-2 py-0.5 rounded-lg ${
-                              isExhausted ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                            <span className={`px-2.5 py-1 rounded-lg font-black ${
+                              isExhausted 
+                                ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300' 
+                                : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
                             }`}>
-                              المحاولات: {prog.attempts_count} / {maxAttempts}
+                              المحاولات: {prog.attempts_count || 0} / {maxAttempts}
                             </span>
-                            <span className="px-2 py-0.5 rounded-lg bg-indigo-100 text-indigo-700">
-                              أعلى درجة: {prog.highest_score}%
+                            <span className="px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300">
+                              أعلى درجة: {prog.highest_score || 0}%
                             </span>
                           </div>
                         </div>
                         
-                        {isExhausted && (
+                        <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
+                          {/* Grant Extra Attempt (+1) Button */}
                           <button
                             onClick={() => handleGrantAttempt(prog)}
-                            className="px-4 py-2 shrink-0 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-sm transition-transform active:scale-95"
+                            disabled={isBusy}
+                            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-black text-xs shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="منح الطالب محاولة إضافية واحدة لاستكمال الحل"
                           >
-                            منح محاولة إضافية
+                            {isBusy ? (
+                              <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <Plus className="w-3.5 h-3.5" />
+                            )}
+                            <span>منح فرصة إضافية</span>
                           </button>
-                        )}
+
+                          {/* Full Reset Button */}
+                          <button
+                            onClick={() => handleResetAttempts(prog)}
+                            disabled={isBusy}
+                            className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-black text-xs shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="تصفير كافة المحاولات والدرجات بالكامل (0 محاولات)"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>تصفير شامل</span>
+                          </button>
+                        </div>
                       </div>
                     );
                   })
