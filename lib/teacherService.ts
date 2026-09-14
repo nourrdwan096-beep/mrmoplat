@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { proxyUpsert, proxyInsert, proxyUpdate, proxyDelete } from '@/app/actions/dbProxy';
 
 export interface CourseActionPermissions {
   canAddVideos: boolean;
@@ -70,6 +71,9 @@ export interface ActivationCodeData {
   courseTitle?: string;
   code: string;
   batchName?: string;
+  assignedStudentName?: string;
+  studentBirthDate?: string;
+  assignedStudentBirthDate?: string;
   isUsed: boolean;
   usedByStudentName?: string;
   usedAt?: string;
@@ -94,7 +98,7 @@ const LOCAL_ANNOUNCEMENTS_KEY = 'mr_radwan_announcements';
 const LOCAL_DELETED_ANNOUNCEMENTS_KEY = 'mr_radwan_deleted_announcements';
 const LOCAL_NOTES_KEY = 'mr_radwan_teacher_notes';
 const LOCAL_DELETED_NOTES_KEY = 'mr_radwan_deleted_teacher_notes';
-const LOCAL_CODES_KEY = 'mr_radwan_activation_codes';
+const LOCAL_CODES_KEY = 'mr_radwan_codes_db';
 const LOCAL_AUDIT_LOGS_KEY = 'mr_radwan_audit_logs';
 
 // Helper: Seed Default Data if empty
@@ -144,7 +148,7 @@ export async function fetchAssistants(): Promise<AssistantData[]> {
 
   return getLocal<AssistantData[]>(LOCAL_ASSISTANTS_KEY, [
     {
-      id: 'asst-1',
+      id: 'a1000000-0000-4000-8000-000000000001',
       fullName: 'أحمد محمود (مساعد أول ثانوي)',
       assistantRoleTitle: 'مشرف أول ثانوي ومراجعة الواجبات',
       email: 'ahmed.assistant@radwan.edu',
@@ -389,7 +393,7 @@ export async function createAnnouncement(payload: {
   };
 
   try {
-    await supabase.from('announcements').insert([
+    await proxyInsert('announcements', [
       {
         id: newId,
         title: payload.title,
@@ -534,7 +538,7 @@ export async function deleteAnnouncement(id: string): Promise<void> {
 
   // 4. Fallback delete on client supabase
   try {
-    await supabase.from('announcements').delete().eq('id', id);
+    await proxyDelete('announcements', { id: id });
   } catch (err) {
     // Ignore fallback errors
   }
@@ -611,7 +615,7 @@ export async function createTeacherNote(payload: {
   };
 
   try {
-    await supabase.from('teacher_schedules_and_notes').insert([
+    await proxyInsert('teacher_schedules_and_notes', [
       {
         id: newId,
         title: payload.title,
@@ -708,7 +712,7 @@ export async function deleteTeacherNote(id: string): Promise<void> {
   );
 
   try {
-    await supabase.from('teacher_schedules_and_notes').delete().eq('id', id);
+    await proxyDelete('teacher_schedules_and_notes', { id: id });
   } catch (err) {
     console.warn('Supabase deleteTeacherNote error:', err);
   }
@@ -738,11 +742,19 @@ export async function generateCourseCodes(payload: {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
   for (let i = 0; i < payload.count; i++) {
-    let randomPart = '';
-    for (let c = 0; c < 8; c++) {
-      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+    const now = new Date();
+    const y = String(now.getFullYear()).slice(2);
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    const dateTag = `${y}${m}${d}`;
+
+    let part1 = '';
+    let part2 = '';
+    for (let c = 0; c < 4; c++) {
+      part1 += chars.charAt(Math.floor(Math.random() * chars.length));
+      part2 += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    const code = `RADWAN-${randomPart.slice(0, 4)}-${randomPart.slice(4)}`;
+    const code = `MR-${dateTag}-${part1}-${part2}`;
     const item: ActivationCodeData = {
       id: crypto.randomUUID(),
       courseId: payload.courseId,
@@ -755,8 +767,24 @@ export async function generateCourseCodes(payload: {
     generated.push(item);
   }
 
+  // 1. Local storage save
+  const current = getLocal<ActivationCodeData[]>(LOCAL_CODES_KEY, []);
+  setLocal(LOCAL_CODES_KEY, [...generated, ...current]);
+
+  // 2. Persist to API
   try {
-    await supabase.from('course_activation_codes').insert(
+    await fetch('/api/course-codes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codes: generated }),
+    });
+  } catch (apiErr) {
+    console.warn('API /api/course-codes POST error:', apiErr);
+  }
+
+  // 3. Fallback direct supabase
+  try {
+    await proxyInsert('course_activation_codes', 
       generated.map((g) => ({
         id: g.id,
         course_id: g.courseId,
@@ -768,9 +796,6 @@ export async function generateCourseCodes(payload: {
   } catch (err) {
     console.warn('Supabase generateCourseCodes error:', err);
   }
-
-  const current = getLocal<ActivationCodeData[]>(LOCAL_CODES_KEY, []);
-  setLocal(LOCAL_CODES_KEY, [...generated, ...current]);
 
   await logAuditEvent({
     actorName: 'مستر محمد رضوان (Super Admin)',
@@ -784,6 +809,39 @@ export async function generateCourseCodes(payload: {
 }
 
 export async function fetchCourseCodes(courseId?: string): Promise<ActivationCodeData[]> {
+  const allLocal = getLocal<ActivationCodeData[]>(LOCAL_CODES_KEY, []);
+  const localFiltered = courseId ? allLocal.filter((c) => c.courseId === courseId) : allLocal;
+
+  try {
+    const url = courseId ? `/api/course-codes?courseId=${encodeURIComponent(courseId)}` : '/api/course-codes';
+    const res = await fetch(url, { cache: 'no-store' });
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && Array.isArray(json.codes) && json.codes.length > 0) {
+        const localMap = new Map(localFiltered.map(c => [c.code.toUpperCase(), c]));
+        const mapped = json.codes.map((d: any) => {
+          const local = localMap.get((d.code || '').toUpperCase());
+          return {
+            id: d.id,
+            courseId: d.course_id,
+            courseTitle: d.courses?.title || local?.courseTitle,
+            code: d.code,
+            batchName: d.batch_name || local?.batchName,
+            assignedStudentName: local?.assignedStudentName,
+            studentBirthDate: local?.studentBirthDate,
+            isUsed: Boolean(d.is_used),
+            usedByStudentName: local?.usedByStudentName,
+            usedAt: d.used_at || local?.usedAt,
+            createdAt: d.created_at || local?.createdAt,
+          };
+        });
+        return mapped;
+      }
+    }
+  } catch (apiErr) {
+    console.warn('API /api/course-codes fetchCourseCodes error:', apiErr);
+  }
+
   try {
     let query = supabase.from('course_activation_codes').select('*').order('created_at', { ascending: false });
     if (courseId) {
@@ -806,8 +864,7 @@ export async function fetchCourseCodes(courseId?: string): Promise<ActivationCod
     console.warn('Supabase fetchCourseCodes error:', err);
   }
 
-  const all = getLocal<ActivationCodeData[]>(LOCAL_CODES_KEY, []);
-  return courseId ? all.filter((c) => c.courseId === courseId) : all;
+  return localFiltered;
 }
 
 // ----------------- AUDIT LOGS -----------------
@@ -833,7 +890,7 @@ export async function logAuditEvent(payload: {
   };
 
   try {
-    await supabase.from('audit_logs').insert([
+    await proxyInsert('audit_logs', [
       {
         id: logItem.id,
         actor_id: payload.actorId,

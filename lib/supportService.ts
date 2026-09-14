@@ -1,4 +1,3 @@
-import { supabase } from './supabaseClient';
 import { fetchAssistants } from './teacherService';
 
 export interface TicketSender {
@@ -24,7 +23,6 @@ export interface TicketMessage {
   senderName?: string;
 }
 
-
 export interface SupportTicket {
   id: string;
   ticket_number: number;
@@ -35,6 +33,8 @@ export interface SupportTicket {
   studentName?: string;
   student_phone?: string;
   studentPhone?: string;
+  studentStage?: string;
+  studentGrade?: number;
   course_id?: string | null;
   courseId?: string | null;
   course_title?: string | null;
@@ -84,7 +84,8 @@ function saveLocalTickets(tickets: SupportTicket[]) {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(LOCAL_TICKETS_KEY, JSON.stringify(tickets));
-    window.dispatchEvent(new CustomEvent('mr_radwan_tickets_updated'));
+    window.dispatchEvent(new CustomEvent('mr_radwan_support_updated'));
+    window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
   } catch (e) {
     console.warn('saveLocalTickets error:', e);
   }
@@ -104,75 +105,44 @@ function saveLocalMessages(msgs: TicketMessage[]) {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(LOCAL_MESSAGES_KEY, JSON.stringify(msgs));
-    window.dispatchEvent(new CustomEvent('mr_radwan_tickets_updated'));
+    window.dispatchEvent(new CustomEvent('mr_radwan_support_updated'));
+    window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
   } catch (e) {
     console.warn('saveLocalMessages error:', e);
   }
 }
 
 /**
- * Fetch all tickets for a specific student
+ * Fetch all tickets for a specific student (Global API -> Supabase Admin)
  */
 export async function getStudentTickets(studentId: string): Promise<SupportTicket[]> {
-  const local = getLocalTickets().filter((t) => t.student_id === studentId);
-
-  if (!supabase) {
-    return local.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  }
+  const local = getLocalTickets().filter((t) => t.student_id === studentId || t.studentId === studentId);
 
   try {
-    const { data, error } = await supabase
-      .from('support_tickets')
-      .select(`
-        *,
-        course:courses(id, title),
-        assigned_assistant:profiles!support_tickets_assigned_to_assistant_id_fkey(id, full_name),
-        messages:ticket_messages(
-          id,
-          ticket_id,
-          sender_id,
-          sender_role,
-          message,
-          attachment_url,
-          created_at,
-          sender:profiles!ticket_messages_sender_id_fkey(id, full_name, role)
-        )
-      `)
-      .eq('student_id', studentId)
-      .order('created_at', { ascending: false });
+    const res = await fetch(`/api/support/tickets?studentId=${encodeURIComponent(studentId)}`, {
+      cache: 'no-store',
+    });
 
-    if (!error && data && data.length > 0) {
-      // Merge remote with any newly added local tickets
-      const remoteIds = new Set(data.map((d: any) => d.id));
-      const localOnly = local.filter((l) => !remoteIds.has(l.id));
-      const merged = [...data, ...localOnly];
-      saveLocalTickets(merged);
-      return merged;
-    }
-
-    // Try basic select if join fails
-    const { data: basicData, error: basicError } = await supabase
-      .from('support_tickets')
-      .select('*, course:courses(id, title)')
-      .eq('student_id', studentId)
-      .order('created_at', { ascending: false });
-
-    if (!basicError && basicData && basicData.length > 0) {
-      const remoteIds = new Set(basicData.map((d: any) => d.id));
-      const localOnly = local.filter((l) => !remoteIds.has(l.id));
-      const merged = [...basicData, ...localOnly];
-      saveLocalTickets(merged);
-      return merged;
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.tickets)) {
+        // Merge with cache
+        const remoteIds = new Set(data.tickets.map((t: any) => t.id));
+        const localOnly = local.filter((l) => !remoteIds.has(l.id));
+        const merged = [...data.tickets, ...localOnly];
+        saveLocalTickets(merged);
+        return merged;
+      }
     }
   } catch (err) {
-    console.warn('getStudentTickets remote error, using local fallback:', err);
+    console.warn('getStudentTickets API error, using local fallback:', err);
   }
 
-  return local.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  return local.sort((a, b) => new Date(b.createdAt || b.created_at || 0).getTime() - new Date(a.createdAt || a.created_at || 0).getTime());
 }
 
 /**
- * Fetch tickets for staff with smart dispatching
+ * Fetch tickets for staff with smart dispatching (Global API -> Supabase Admin)
  */
 export async function getStaffTickets(
   userId: string = '',
@@ -181,100 +151,64 @@ export async function getStaffTickets(
 ): Promise<SupportTicket[]> {
   const local = getLocalTickets();
 
-  let allTickets: SupportTicket[] = local;
+  try {
+    const params = new URLSearchParams({
+      role: role || 'teacher',
+      assistantId: userId || '',
+    });
 
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('support_tickets')
-        .select(`
-          *,
-          course:courses(id, title),
-          student:profiles!support_tickets_student_id_fkey(id, full_name, phone, stage, grade, education_type),
-          assigned_assistant:profiles!support_tickets_assigned_to_assistant_id_fkey(id, full_name),
-          messages:ticket_messages(
-            id,
-            ticket_id,
-            sender_id,
-            sender_role,
-            message,
-            attachment_url,
-            created_at,
-            sender:profiles!ticket_messages_sender_id_fkey(id, full_name, role)
-          )
-        `)
-        .order('created_at', { ascending: false });
+    const res = await fetch(`/api/support/tickets?${params.toString()}`, {
+      cache: 'no-store',
+    });
 
-      if (!error && data) {
-        const remoteIds = new Set(data.map((d: any) => d.id));
-        const localOnly = local.filter((l) => !remoteIds.has(l.id));
-        allTickets = [...data, ...localOnly];
-        saveLocalTickets(allTickets);
-      } else {
-        const { data: basicData } = await supabase
-          .from('support_tickets')
-          .select('*')
-          .order('created_at', { ascending: false });
-        if (basicData) {
-          const remoteIds = new Set(basicData.map((d: any) => d.id));
-          const localOnly = local.filter((l) => !remoteIds.has(l.id));
-          allTickets = [...basicData, ...localOnly];
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.tickets)) {
+        let remoteTickets = data.tickets;
+
+        // Assistant smart dispatching filter if applicable
+        if (role === 'assistant' && userId) {
+          try {
+            const assistants = await fetchAssistants();
+            const myProfile = assistants.find((a) => a.id === userId);
+            const perm = myProfile?.permissions;
+
+            const canTech = perm ? perm.canHandleTechnicalSupport ?? true : true;
+            const canAcademic = perm ? perm.canHandleAcademicSupport ?? true : true;
+            const canAllCourses = perm ? perm.canManageAllCourses ?? false : false;
+            const assignedIds: string[] = perm?.assignedCourseIds || assignedCourseIds || [];
+
+            remoteTickets = remoteTickets.filter((ticket: any) => {
+              if (ticket.assignedToAssistantId === userId || ticket.assigned_to_assistant_id === userId) return true;
+              if (ticket.ticketType === 'technical' || ticket.ticket_type === 'technical') return canTech;
+              if (ticket.ticketType === 'academic' || ticket.ticket_type === 'academic') {
+                if (!canAcademic) return false;
+                if (canAllCourses) return true;
+                const cId = ticket.courseId || ticket.course_id;
+                if (!cId) return true;
+                return assignedIds.includes(cId);
+              }
+              return true;
+            });
+          } catch {
+            // Keep remoteTickets as is
+          }
         }
+
+        saveLocalTickets(remoteTickets);
+        return remoteTickets;
       }
-    } catch (err) {
-      console.warn('getStaffTickets remote error:', err);
     }
+  } catch (err) {
+    console.warn('getStaffTickets API error, using local fallback:', err);
   }
 
-  // Sort descending
-  allTickets.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-  // Super Admin & Teacher see everything
-  if (role === 'super_admin' || role === 'teacher') {
-    return allTickets;
-  }
-
-  // Assistant: Smart Dispatching filter
-  if (role === 'assistant') {
-    try {
-      const assistants = await fetchAssistants();
-      const myProfile = assistants.find((a) => a.id === userId);
-      const perm = myProfile?.permissions;
-
-      const canTech = perm ? perm.canHandleTechnicalSupport ?? true : true;
-      const canAcademic = perm ? perm.canHandleAcademicSupport ?? true : true;
-      const canAllCourses = perm ? perm.canManageAllCourses ?? false : false;
-      const assignedIds: string[] = perm?.assignedCourseIds || [];
-
-      return allTickets.filter((ticket: any) => {
-        // 1. Explicitly assigned to this assistant
-        if (ticket.assigned_to_assistant_id === userId) return true;
-
-        // 2. Technical Support
-        if (ticket.ticket_type === 'technical') {
-          return canTech;
-        }
-
-        // 3. Academic Support
-        if (ticket.ticket_type === 'academic') {
-          if (!canAcademic) return false;
-          if (canAllCourses) return true;
-          if (!ticket.course_id) return true;
-          return assignedIds.includes(ticket.course_id);
-        }
-
-        return true;
-      });
-    } catch {
-      return allTickets;
-    }
-  }
-
-  return allTickets;
+  // Fallback to local tickets
+  return local.sort((a, b) => new Date(b.createdAt || b.created_at || 0).getTime() - new Date(a.createdAt || a.created_at || 0).getTime());
 }
 
 /**
- * Create a new support ticket
+ * Create a new support ticket (Global API -> Supabase Admin)
  */
 export async function createTicket(data: {
   student_id: string;
@@ -284,147 +218,123 @@ export async function createTicket(data: {
   description: string;
   priority?: 'low' | 'normal' | 'high' | 'urgent';
   student_name?: string;
+  student_phone?: string;
   course_title?: string;
 }): Promise<SupportTicket> {
   const ticketId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'ticket-' + Date.now();
   const ticketNumber = Math.floor(1000 + Math.random() * 9000);
   const now = new Date().toISOString();
 
-  const newTicket: SupportTicket = {
+  // 1. Optimistic local ticket
+  const optimisticTicket: SupportTicket = {
     id: ticketId,
     ticket_number: ticketNumber,
+    ticketNumber: ticketNumber,
     student_id: data.student_id,
+    studentId: data.student_id,
+    student_name: data.student_name || 'طالب المنصة',
+    studentName: data.student_name || 'طالب المنصة',
+    student_phone: data.student_phone || '',
+    studentPhone: data.student_phone || '',
     course_id: data.course_id || null,
+    courseId: data.course_id || null,
+    course_title: data.course_title || 'عام',
+    courseTitle: data.course_title || 'عام',
     ticket_type: data.ticket_type,
+    ticketType: data.ticket_type,
     subject: data.subject,
     description: data.description,
     status: 'open',
     priority: data.priority || 'normal',
     created_at: now,
+    createdAt: now,
     updated_at: now,
+    updatedAt: now,
     course: data.course_id ? { id: data.course_id, title: data.course_title || 'الكورس' } : null,
     student: {
       id: data.student_id,
       full_name: data.student_name || 'طالب',
+      phone: data.student_phone || '',
     },
     messages: [
       {
-        id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg-' + Date.now(),
+        id: 'msg-' + Date.now(),
         ticket_id: ticketId,
+        ticketId: ticketId,
         sender_id: data.student_id,
+        senderId: data.student_id,
         sender_role: 'student',
+        senderRole: 'student',
+        senderName: data.student_name || 'طالب',
         message: data.description,
         created_at: now,
-        sender: {
-          id: data.student_id,
-          full_name: data.student_name || 'طالب',
-          role: 'student',
-        },
+        createdAt: now,
       },
     ],
   };
 
-  // Always save locally immediately
   const existingTickets = getLocalTickets();
-  saveLocalTickets([newTicket, ...existingTickets]);
+  saveLocalTickets([optimisticTicket, ...existingTickets]);
 
-  const existingMsgs = getLocalMessages();
-  if (newTicket.messages && newTicket.messages[0]) {
-    saveLocalMessages([...existingMsgs, newTicket.messages[0]]);
-  }
+  // 2. Global Sync via API Route
+  try {
+    const res = await fetch('/api/support/tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        studentId: data.student_id,
+        studentName: data.student_name,
+        studentPhone: data.student_phone,
+        courseId: data.course_id,
+        ticketType: data.ticket_type,
+        subject: data.subject,
+        description: data.description,
+        priority: data.priority,
+      }),
+    });
 
-  // Attempt Supabase insert in background / sync
-  if (supabase) {
-    try {
-      const { error: ticketError } = await supabase.from('support_tickets').insert([
-        {
-          id: ticketId,
-          ticket_number: ticketNumber,
-          student_id: data.student_id,
-          course_id: data.course_id || null,
-          ticket_type: data.ticket_type,
-          subject: data.subject,
-          description: data.description,
-          status: 'open',
-          priority: data.priority || 'normal',
-          created_at: now,
-          updated_at: now,
-        },
-      ]);
-
-      if (!ticketError) {
-        // Insert message
-        const msgId = newTicket.messages?.[0]?.id || crypto.randomUUID();
-        await supabase.from('ticket_messages').insert([
-          {
-            id: msgId,
-            ticket_id: ticketId,
-            sender_id: data.student_id,
-            sender_role: 'student',
-            message: data.description,
-            created_at: now,
-          },
-        ]);
-      } else {
-        console.warn('Supabase createTicket warning:', ticketError);
+    if (res.ok) {
+      const resData = await res.json();
+      if (resData.success && resData.ticket) {
+        const serverTicket = resData.ticket;
+        const current = getLocalTickets().filter((t) => t.id !== ticketId && t.id !== serverTicket.id);
+        saveLocalTickets([serverTicket, ...current]);
+        return serverTicket;
       }
-    } catch (err) {
-      console.warn('createTicket Supabase sync error:', err);
     }
+  } catch (apiErr) {
+    console.warn('createTicket API sync error, keeping optimistic ticket:', apiErr);
   }
 
-  return newTicket;
+  return optimisticTicket;
 }
 
 /**
- * Get messages for a ticket
+ * Get messages for a ticket (Global API -> Supabase Admin)
  */
 export async function getTicketMessages(ticketId: string): Promise<TicketMessage[]> {
-  const localMsgs = getLocalMessages().filter((m) => m.ticket_id === ticketId);
-
-  if (!supabase) {
-    return localMsgs.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-  }
+  const localMsgs = getLocalMessages().filter((m) => m.ticket_id === ticketId || m.ticketId === ticketId);
 
   try {
-    const { data, error } = await supabase
-      .from('ticket_messages')
-      .select(`
-        *,
-        sender:profiles!ticket_messages_sender_id_fkey(id, full_name, role)
-      `)
-      .eq('ticket_id', ticketId)
-      .order('created_at', { ascending: true });
+    const res = await fetch(`/api/support/messages?ticketId=${encodeURIComponent(ticketId)}`, {
+      cache: 'no-store',
+    });
 
-    if (!error && data && data.length > 0) {
-      const remoteIds = new Set(data.map((d: any) => d.id));
-      const localOnly = localMsgs.filter((l) => !remoteIds.has(l.id));
-      const merged = [...data, ...localOnly];
-      return merged.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    }
-
-    // Basic select fallback
-    const { data: basicData } = await supabase
-      .from('ticket_messages')
-      .select('*')
-      .eq('ticket_id', ticketId)
-      .order('created_at', { ascending: true });
-
-    if (basicData && basicData.length > 0) {
-      const remoteIds = new Set(basicData.map((d: any) => d.id));
-      const localOnly = localMsgs.filter((l) => !remoteIds.has(l.id));
-      const merged = [...basicData, ...localOnly];
-      return merged.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.messages)) {
+        return data.messages;
+      }
     }
   } catch (err) {
-    console.warn('getTicketMessages error:', err);
+    console.warn('getTicketMessages API error, using local fallback:', err);
   }
 
-  return localMsgs.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  return localMsgs.sort((a, b) => new Date(a.createdAt || a.created_at || 0).getTime() - new Date(b.createdAt || b.created_at || 0).getTime());
 }
 
 /**
- * Add a message to a ticket (supports both argument styles)
+ * Add a message to a ticket (Global API -> Supabase Admin)
  */
 export async function addTicketMessage(
   ticketId: string,
@@ -434,9 +344,10 @@ export async function addTicketMessage(
   arg5?: string
 ): Promise<TicketMessage> {
   let senderId = 'anonymous';
-  let senderRole = 'student';
+  let senderRole: TicketMessage['sender_role'] = 'student';
   let senderName = 'مستخدم';
   let message = '';
+  let attachmentUrl: string | undefined = undefined;
 
   if (typeof arg2 === 'object' && arg2 !== null) {
     senderId = arg2.id || 'anonymous';
@@ -453,13 +364,19 @@ export async function addTicketMessage(
   const msgId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg-' + Date.now();
   const now = new Date().toISOString();
 
-  const newMsg: TicketMessage = {
+  // 1. Optimistic message
+  const optimisticMsg: TicketMessage = {
     id: msgId,
     ticket_id: ticketId,
+    ticketId: ticketId,
     sender_id: senderId,
-    sender_role: senderRole as any,
+    senderId: senderId,
+    sender_role: senderRole,
+    senderRole: senderRole,
+    senderName: senderName,
     message: message,
     created_at: now,
+    createdAt: now,
     sender: {
       id: senderId,
       full_name: senderName,
@@ -467,9 +384,8 @@ export async function addTicketMessage(
     },
   };
 
-  // 1. Update local storage
   const allMsgs = getLocalMessages();
-  saveLocalMessages([...allMsgs, newMsg]);
+  saveLocalMessages([...allMsgs, optimisticMsg]);
 
   // Update local ticket status
   const allTickets = getLocalTickets();
@@ -480,64 +396,43 @@ export async function addTicketMessage(
         ...t,
         status: isStaff && t.status === 'open' ? ('in_progress' as const) : t.status,
         updated_at: now,
+        updatedAt: now,
       };
     }
     return t;
   });
   saveLocalTickets(updatedTickets);
 
-  // Dispatch events for real-time reactivity
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('mr_radwan_support_updated'));
-    window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
-  }
+  // 2. Global API sync
+  try {
+    const res = await fetch('/api/support/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticketId,
+        senderId,
+        senderRole,
+        senderName,
+        message,
+        attachmentUrl,
+      }),
+    });
 
-  // 2. Sync to Supabase
-  if (supabase) {
-    try {
-      // Auto update ticket status if open
-      if (isStaff) {
-        await supabase
-          .from('support_tickets')
-          .update({ status: 'in_progress', updated_at: now })
-          .eq('id', ticketId);
-      } else {
-        await supabase
-          .from('support_tickets')
-          .update({ updated_at: now })
-          .eq('id', ticketId);
+    if (res.ok) {
+      const resData = await res.json();
+      if (resData.success && resData.message) {
+        return resData.message;
       }
-
-      // Check valid UUID for senderId
-      let safeSenderId = senderId;
-      if (
-        (!safeSenderId || safeSenderId === 'teacher-radwan-01' || safeSenderId === 'staff-master') &&
-        (senderRole === 'teacher' || senderRole === 'super_admin')
-      ) {
-        safeSenderId = 'a0000000-0000-4000-8000-000000000001';
-      }
-
-      await supabase.from('ticket_messages').insert([
-        {
-          id: msgId,
-          ticket_id: ticketId,
-          sender_id: safeSenderId,
-          sender_role: senderRole,
-          message: message,
-          created_at: now,
-        },
-      ]);
-    } catch (err) {
-      console.warn('addTicketMessage Supabase sync error:', err);
     }
+  } catch (apiErr) {
+    console.warn('addTicketMessage API sync error:', apiErr);
   }
 
-  return newMsg;
+  return optimisticMsg;
 }
 
-
 /**
- * Update ticket status
+ * Update ticket status (Global API -> Supabase Admin)
  */
 export async function updateTicketStatus(
   ticketId: string,
@@ -547,15 +442,12 @@ export async function updateTicketStatus(
 ): Promise<SupportTicket | null> {
   const now = new Date().toISOString();
   let assignedTo: { id: string; name: string } | null = null;
-  let finalActor: { id?: string; name?: string; role?: string } | undefined = actor;
 
-  if (assignedToOrActor && 'role' in assignedToOrActor) {
-    finalActor = assignedToOrActor as { id?: string; name?: string; role?: string };
-  } else if (assignedToOrActor && 'id' in assignedToOrActor) {
+  if (assignedToOrActor && 'id' in assignedToOrActor && 'name' in assignedToOrActor) {
     assignedTo = assignedToOrActor as { id: string; name: string };
   }
 
-  // Update local
+  // 1. Optimistic update
   const allTickets = getLocalTickets();
   let updatedTicket: SupportTicket | null = null;
   const updatedList = allTickets.map((t) => {
@@ -576,27 +468,33 @@ export async function updateTicketStatus(
   });
   saveLocalTickets(updatedList);
 
-  // Update Supabase
-  if (supabase) {
-    try {
-      const updateData: Record<string, any> = { status, updated_at: now };
-      if (assignedTo?.id) {
-        updateData.assigned_to_assistant_id = assignedTo.id;
+  // 2. Global API update
+  try {
+    const res = await fetch('/api/support/tickets', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticketId,
+        status,
+        assignedToAssistantId: assignedTo ? assignedTo.id : undefined,
+      }),
+    });
+
+    if (res.ok) {
+      const resData = await res.json();
+      if (resData.success && resData.ticket) {
+        return resData.ticket;
       }
-      await supabase
-        .from('support_tickets')
-        .update(updateData)
-        .eq('id', ticketId);
-    } catch (err) {
-      console.warn('updateTicketStatus Supabase error:', err);
     }
+  } catch (apiErr) {
+    console.warn('updateTicketStatus API sync error:', apiErr);
   }
 
   return updatedTicket;
 }
 
 /**
- * Assign ticket to assistant
+ * Assign ticket to assistant (Global API -> Supabase Admin)
  */
 export async function assignTicketToAssistant(
   ticketId: string,
@@ -606,7 +504,7 @@ export async function assignTicketToAssistant(
 ): Promise<SupportTicket | null> {
   const now = new Date().toISOString();
 
-  // Update local
+  // 1. Optimistic update
   const allTickets = getLocalTickets();
   let updatedTicket: SupportTicket | null = null;
   const updatedList = allTickets.map((t) => {
@@ -614,9 +512,12 @@ export async function assignTicketToAssistant(
       updatedTicket = {
         ...t,
         assigned_to_assistant_id: assistantId,
+        assignedToAssistantId: assistantId,
+        assignedAssistantName: assistantName,
         assigned_assistant: { id: assistantId, full_name: assistantName },
         status: 'in_progress',
         updated_at: now,
+        updatedAt: now,
       };
       return updatedTicket;
     }
@@ -624,20 +525,26 @@ export async function assignTicketToAssistant(
   });
   saveLocalTickets(updatedList);
 
-  // Update Supabase
-  if (supabase) {
-    try {
-      await supabase
-        .from('support_tickets')
-        .update({
-          assigned_to_assistant_id: assistantId,
-          status: 'in_progress',
-          updated_at: now,
-        })
-        .eq('id', ticketId);
-    } catch (err) {
-      console.warn('assignTicketToAssistant Supabase error:', err);
+  // 2. Global API sync
+  try {
+    const res = await fetch('/api/support/tickets', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticketId,
+        status: 'in_progress',
+        assignedToAssistantId: assistantId,
+      }),
+    });
+
+    if (res.ok) {
+      const resData = await res.json();
+      if (resData.success && resData.ticket) {
+        return resData.ticket;
+      }
     }
+  } catch (apiErr) {
+    console.warn('assignTicketToAssistant API sync error:', apiErr);
   }
 
   return updatedTicket;
@@ -678,7 +585,7 @@ export async function createSupportTicket(data: {
     description: data.description,
     priority: data.priority,
     student_name: data.studentName || data.student_name,
+    student_phone: data.studentPhone,
     course_title: data.courseTitle || data.course_title,
   });
 }
-

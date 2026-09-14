@@ -37,12 +37,19 @@ export default function TicketChat({ ticket, currentUser, onMessageSent }: Ticke
       fetchMessages();
     };
 
+    const interval = setInterval(() => {
+      fetchMessages();
+    }, 4000);
+
     window.addEventListener('mr_radwan_support_updated', handleUpdate);
     window.addEventListener('storage', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
 
     return () => {
+      clearInterval(interval);
       window.removeEventListener('mr_radwan_support_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ticket.id]);

@@ -44,12 +44,19 @@ export default function StudentSupportDashboard({
       loadTickets();
     };
 
+    const interval = setInterval(() => {
+      loadTickets();
+    }, 6000);
+
     window.addEventListener('mr_radwan_support_updated', handleUpdate);
     window.addEventListener('storage', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
 
     return () => {
+      clearInterval(interval);
       window.removeEventListener('mr_radwan_support_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
     };
   }, [loadTickets]);
 

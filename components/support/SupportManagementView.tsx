@@ -118,30 +118,43 @@ export function SupportManagementView({
       loadData(true);
     };
 
+    const interval = setInterval(() => {
+      loadData(true);
+    }, 6000);
+
     window.addEventListener('mr_radwan_support_updated', handleUpdate);
     window.addEventListener('storage', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
 
     return () => {
+      clearInterval(interval);
       window.removeEventListener('mr_radwan_support_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
     };
   }, [loadData]);
 
-  // Load messages when selected ticket changes
+  // Load messages when selected ticket changes with live polling
   useEffect(() => {
     if (!selectedTicket?.id) return;
-    async function loadMsg() {
-      setMessagesLoading(true);
+    async function loadMsg(silent = false) {
+      if (!silent) setMessagesLoading(true);
       try {
         const msgs = await getTicketMessages(selectedTicket!.id);
         setMessages(msgs || []);
       } catch (err) {
         console.error('Failed to load ticket messages:', err);
       } finally {
-        setMessagesLoading(false);
+        if (!silent) setMessagesLoading(false);
       }
     }
     loadMsg();
+
+    const interval = setInterval(() => {
+      loadMsg(true);
+    }, 4000);
+
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTicket?.id]);
 

@@ -141,14 +141,18 @@ export default function NotificationBell() {
     // Listen to custom local storage sync updates
     const handleUpdate = () => loadNotifications(true);
     window.addEventListener('mr_radwan_notifications_updated', handleUpdate);
+    window.addEventListener('mr_radwan_support_updated', handleUpdate);
+    window.addEventListener('focus', handleUpdate);
 
-    // Periodic poll every 30 seconds for live updates
+    // Periodic poll every 10 seconds for live global notifications
     const interval = setInterval(() => {
       loadNotifications(true);
-    }, 30000);
+    }, 10000);
 
     return () => {
       window.removeEventListener('mr_radwan_notifications_updated', handleUpdate);
+      window.removeEventListener('mr_radwan_support_updated', handleUpdate);
+      window.removeEventListener('focus', handleUpdate);
       clearInterval(interval);
     };
   }, [loadNotifications]);

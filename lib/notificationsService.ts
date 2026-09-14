@@ -215,6 +215,33 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
   if (!user || !user.id) return [];
 
   const readIds = getStoredReadIds(user.id);
+
+  // 1. Primary: Global Live Notifications from API Route (Server Supabase Admin)
+  try {
+    const params = new URLSearchParams({
+      userId: user.id,
+      role: user.role,
+      stage: user.stage || '',
+      grade: String(user.grade || ''),
+    });
+
+    const res = await fetch(`/api/notifications?${params.toString()}`, {
+      cache: 'no-store',
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.notifications)) {
+        return data.notifications.map((n: AppNotification) => ({
+          ...n,
+          isRead: readIds.has(n.id),
+        }));
+      }
+    }
+  } catch (apiErr) {
+    console.warn('API /api/notifications failed, falling back to local aggregator:', apiErr);
+  }
+
   const notifs: AppNotification[] = [];
 
   try {
@@ -408,13 +435,13 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
     else if (role === 'teacher' || role === 'super_admin') {
       // 2.1 New Support Tickets from Students
       try {
-        const { data: tickets } = await supabase
+        const { data: tickets, error: tErr } = await supabase
           .from('support_tickets')
-          .select('id, ticket_number, student_id, student_name, subject, description, ticket_type, status, created_at')
+          .select('id, ticket_number, student_id, subject, description, ticket_type, status, created_at')
           .order('created_at', { ascending: false })
           .limit(20);
 
-        if (tickets && tickets.length > 0) {
+        if (!tErr && tickets && tickets.length > 0) {
           tickets.forEach((ticket: any) => {
             const notifId = `notif_teacher_ticket_${ticket.id}`;
             const sType = ticket.ticket_type === 'academic' ? 'أكاديمي' : 'فني';
@@ -422,7 +449,7 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
               id: notifId,
               type: 'support_ticket_new',
               title: `تذكرة دعم جديدة (${sType}) 🎫`,
-              message: `استفسار جديد من الطالب (${ticket.student_name || 'طالب'}): "${ticket.subject}"`,
+              message: `استفسار جديد: "${ticket.subject}"`,
               timestamp: ticket.created_at || new Date().toISOString(),
               link: `/teacher/support?ticketId=${ticket.id}`,
               ticketId: ticket.id,
@@ -435,6 +462,7 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
       } catch (err) {
         console.warn('Failed to load tickets for teacher:', err);
       }
+
 
       // 2.2 Pending Student Review Requests
       try {
@@ -517,13 +545,13 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
 
       if (canHandleSupport) {
         try {
-          const { data: tickets } = await supabase
+          const { data: tickets, error: tErr } = await supabase
             .from('support_tickets')
-            .select('id, ticket_number, student_id, student_name, subject, description, ticket_type, status, created_at')
+            .select('id, ticket_number, student_id, subject, description, ticket_type, status, created_at')
             .order('created_at', { ascending: false })
             .limit(20);
 
-          if (tickets && tickets.length > 0) {
+          if (!tErr && tickets && tickets.length > 0) {
             tickets.forEach((ticket: any) => {
               // Filter by academic/technical permissions if restricted
               if (assistantPermissions) {
@@ -541,7 +569,7 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
                 id: notifId,
                 type: 'support_ticket_new',
                 title: `تذكرة دعم موجهة لك (${sType}) 🎫`,
-                message: `استفسار جديد من الطالب (${ticket.student_name || 'طالب'}): "${ticket.subject}"`,
+                message: `استفسار جديد: "${ticket.subject}"`,
                 timestamp: ticket.created_at || new Date().toISOString(),
                 link: `/assistant/support?ticketId=${ticket.id}`,
                 ticketId: ticket.id,
@@ -555,6 +583,7 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
           console.warn('Failed to load tickets for assistant:', err);
         }
       }
+
 
       // 3.2 Pending Students (If assistant has student management permission)
       if (assistantPermissions?.canManageStudents) {
