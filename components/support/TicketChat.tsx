@@ -108,7 +108,14 @@ export default function TicketChat({ ticket, currentUser }: TicketChatProps) {
           </div>
         </div>
 
-        {messages.map((msg, idx) => {
+        {messages
+          .filter((msg, idx) => {
+            if (idx === 0 && msg.sender_role === 'student' && msg.message?.trim() === ticket.description?.trim()) {
+              return false;
+            }
+            return true;
+          })
+          .map((msg, idx) => {
           const isMe = msg.sender_id === currentUser.id;
           const isStaff = msg.sender_role === 'teacher' || msg.sender_role === 'assistant';
 

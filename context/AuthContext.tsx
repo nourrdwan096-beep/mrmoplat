@@ -105,6 +105,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   if (userJson) {
     try {
       currentUser = JSON.parse(userJson);
+      // Ensure teacher id is always standard UUID
+      if (currentUser && (currentUser.role === 'teacher' || currentUser.role === 'super_admin')) {
+        if (!currentUser.id || currentUser.id === 'teacher-radwan-01' || currentUser.id === 'staff-master') {
+          currentUser.id = 'a0000000-0000-4000-8000-000000000001';
+        }
+      }
     } catch {
       currentUser = null;
     }
@@ -137,7 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (cleanEmail === TEACHER_CREDENTIALS.email.toLowerCase()) {
       if (cleanPass === TEACHER_CREDENTIALS.password) {
         const teacherProfile: UserProfile = {
-          id: 'teacher-radwan-01',
+          id: 'a0000000-0000-4000-8000-000000000001',
           fullName: 'مستر / محمد رضوان',
           email: TEACHER_CREDENTIALS.email,
           phone: '01552191172',

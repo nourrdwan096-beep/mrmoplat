@@ -326,6 +326,15 @@ export async function addTicketMessage(
       .update(updatePayload)
       .eq('id', ticketId);
 
+    // Normalize senderId if needed
+    let resolvedSenderId = senderId;
+    if (
+      (!resolvedSenderId || resolvedSenderId === 'teacher-radwan-01' || resolvedSenderId === 'staff-master') &&
+      (senderRole === 'teacher' || senderRole === 'super_admin')
+    ) {
+      resolvedSenderId = 'a0000000-0000-4000-8000-000000000001';
+    }
+
     // 2. Insert message
     const msgId = crypto.randomUUID();
     const { data, error } = await supabaseAdmin
@@ -333,7 +342,7 @@ export async function addTicketMessage(
       .insert([{
         id: msgId,
         ticket_id: ticketId,
-        sender_id: senderId,
+        sender_id: resolvedSenderId,
         sender_role: senderRole,
         message: message,
         created_at: new Date().toISOString(),
@@ -351,7 +360,7 @@ export async function addTicketMessage(
         .insert([{
           id: msgId,
           ticket_id: ticketId,
-          sender_id: senderId,
+          sender_id: resolvedSenderId,
           sender_role: senderRole,
           message: message,
           created_at: new Date().toISOString(),
@@ -366,7 +375,7 @@ export async function addTicketMessage(
       try {
         await supabaseAdmin.from('audit_logs').insert([{
           id: crypto.randomUUID(),
-          actor_id: senderId,
+          actor_id: resolvedSenderId,
           actor_name: senderName || 'Staff',
           actor_role: senderRole as any,
           action_type: 'REPLY_SUPPORT_TICKET',

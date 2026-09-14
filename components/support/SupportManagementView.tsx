@@ -629,10 +629,13 @@ export function SupportManagementView({
 
               {/* Chat Messages */}
               <div className="flex-1 overflow-y-auto py-4 space-y-3 pr-2">
-                {/* Initial Ticket Question */}
+                {/* Initial Ticket Question with Subject & Description */}
                 <div className="p-4 rounded-2xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs">
-                  <div className="flex items-center justify-between mb-1.5 text-[10px] text-slate-400 font-bold">
-                    <span>نص استفسار الطالب الأولي</span>
+                  <div className="flex items-center justify-between mb-2 text-[10px] text-slate-400 font-bold border-b border-slate-200/60 dark:border-slate-700/60 pb-1.5">
+                    <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-black">
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>رسالة واستفسار الطالب الأولي</span>
+                    </div>
                     <span>
                       {(() => {
                         const d = new Date(selectedTicket.created_at || selectedTicket.createdAt);
@@ -643,9 +646,22 @@ export function SupportManagementView({
                       })()}
                     </span>
                   </div>
-                  <p className="text-slate-800 dark:text-slate-200 font-semibold leading-relaxed whitespace-pre-line">
-                    {selectedTicket.description}
-                  </p>
+                  {/* Ticket Subject / Title */}
+                  {selectedTicket.subject && (
+                    <div className="mb-2 pb-2 border-b border-slate-200/50 dark:border-slate-700/50">
+                      <span className="text-[10px] font-bold text-slate-400 block mb-0.5">عنوان المشكلة / الموضوع:</span>
+                      <h4 className="text-sm font-black text-slate-900 dark:text-white">
+                        {selectedTicket.subject}
+                      </h4>
+                    </div>
+                  )}
+                  {/* Ticket Description */}
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 block mb-0.5">تفاصيل الاستفسار والمطلوب حله:</span>
+                    <p className="text-slate-800 dark:text-slate-200 font-semibold leading-relaxed whitespace-pre-line text-xs">
+                      {selectedTicket.description}
+                    </p>
+                  </div>
                 </div>
 
                 {messagesLoading ? (
@@ -654,7 +670,15 @@ export function SupportManagementView({
                     <span>جاري تحميل المحادثة...</span>
                   </div>
                 ) : (
-                  messages.map((msg) => {
+                  messages
+                    .filter((msg, idx) => {
+                      // Avoid repeating initial description if it matches the first message and ticket description
+                      if (idx === 0 && msg.sender_role === 'student' && msg.message?.trim() === selectedTicket.description?.trim()) {
+                        return false;
+                      }
+                      return true;
+                    })
+                    .map((msg) => {
                     const sRole = msg.sender_role || msg.senderRole;
                     const isStaff = sRole === 'teacher' || sRole === 'assistant' || sRole === 'super_admin';
                     const sName = msg.sender?.full_name || msg.senderName || (isStaff ? 'إدارة المنصة' : selectedStudentName);
