@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { fetchAssistants, AssistantData } from '@/lib/teacherService';
 import ThemeToggle from '@/components/ThemeToggle';
+import NotificationBell from '@/components/notifications/NotificationBell';
 
 export function AssistantLayout({ children }: { children: React.ReactNode }) {
   const { currentUser, currentRole, logout } = useAuth();
@@ -152,7 +153,8 @@ export function AssistantLayout({ children }: { children: React.ReactNode }) {
           </h1>
           <p className="text-xs text-slate-500 font-bold">{currentUser?.fullName}</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <NotificationBell />
           <ThemeToggle />
           <button
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -184,7 +186,10 @@ export function AssistantLayout({ children }: { children: React.ReactNode }) {
               </h1>
               <p className="text-xs text-slate-500 font-semibold mt-0.5">{currentUser?.fullName}</p>
             </div>
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <NotificationBell />
+              <ThemeToggle />
+            </div>
           </div>
 
           {/* Navigation */}

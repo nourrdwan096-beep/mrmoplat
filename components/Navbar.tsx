@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { useTheme } from '@/context/ThemeContext';
 import { useAuth } from '@/context/AuthContext';
 import ThemeToggle from '@/components/ThemeToggle';
+import NotificationBell from '@/components/notifications/NotificationBell';
 import {
   Sun,
   Moon,
@@ -151,8 +152,11 @@ export default function Navbar({ onOpenLogin, onOpenRegister }: NavbarProps) {
             </Link>
           </nav>
 
-          {/* Left Actions: Theme Toggle + Auth Buttons / User Area */}
+          {/* Left Actions: Notification Bell + Theme Toggle + Auth Buttons / User Area */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Notification Bell (for authenticated users) */}
+            {currentUser && <NotificationBell />}
+
             {/* Theme Toggle (Futuristic Custom Design) */}
             <ThemeToggle />
 

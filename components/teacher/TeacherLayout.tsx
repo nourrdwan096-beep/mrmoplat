@@ -19,6 +19,7 @@ import {
   MessageSquare
 } from 'lucide-react';
 import ThemeToggle from '@/components/ThemeToggle';
+import NotificationBell from '@/components/notifications/NotificationBell';
 
 const SIDEBAR_LINKS = [
   { href: '/teacher', label: 'الرئيسية', icon: LayoutDashboard },
@@ -129,7 +130,8 @@ export function TeacherLayout({ children }: { children: React.ReactNode }) {
         <h1 className="text-xl font-black bg-clip-text text-transparent bg-gradient-to-l from-violet-600 to-indigo-600 dark:from-violet-400 dark:to-indigo-400">
           لوحة الإدارة
         </h1>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <NotificationBell />
           <ThemeToggle />
           <button 
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -148,11 +150,14 @@ export function TeacherLayout({ children }: { children: React.ReactNode }) {
       `}>
         <div className="p-6 flex-1 flex flex-col h-full overflow-y-auto">
           {/* Logo / Header */}
-          <div className="hidden md:flex items-center justify-between mb-10">
+          <div className="hidden md:flex items-center justify-between mb-8">
             <h1 className="text-2xl font-black bg-clip-text text-transparent bg-gradient-to-l from-violet-600 to-indigo-600 dark:from-violet-400 dark:to-indigo-400">
               لوحة الإدارة
             </h1>
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <NotificationBell />
+              <ThemeToggle />
+            </div>
           </div>
 
           <div className="md:hidden flex justify-between items-center mb-8">

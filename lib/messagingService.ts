@@ -196,6 +196,8 @@ export async function sendMessage(payload: {
   return newMsg;
 }
 
+export const saveTeacherMessage = sendMessage;
+
 /**
  * Mark a message as read
  */

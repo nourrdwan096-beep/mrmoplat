@@ -25,6 +25,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useTheme } from '@/context/ThemeContext';
 import ThemeToggle from '@/components/ThemeToggle';
+import NotificationBell from '@/components/notifications/NotificationBell';
 
 const STUDENT_NAV_ITEMS = [
   { id: 'dashboard', label: 'لوحة التحكم', icon: TrendingUp, href: '/student' },
@@ -123,7 +124,8 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
             <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">حساب طالب نشط</p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-2">
+          <NotificationBell />
           <ThemeToggle />
           <button
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -150,28 +152,31 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
             `}
           >
             <div className="p-5 flex flex-col gap-6 flex-1">
-              {/* Profile Card */}
-              <div className="hidden md:flex items-center gap-3.5 bg-slate-50 dark:bg-slate-950 p-3.5 rounded-2xl border border-slate-100 dark:border-slate-800/60">
-                <div className="w-11 h-11 rounded-full overflow-hidden bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 font-black text-lg border border-emerald-200 dark:border-emerald-500/20 shrink-0 relative">
-                  {currentUser.avatarUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img 
-                      src={currentUser.avatarUrl} 
-                      alt={currentUser.fullName || 'الطالب'} 
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    currentUser.fullName?.charAt(0) || 'ط'
-                  )}
+              {/* Profile Card with Notification Bell */}
+              <div className="hidden md:flex items-center justify-between gap-2.5 bg-slate-50 dark:bg-slate-950 p-3 rounded-2xl border border-slate-100 dark:border-slate-800/60">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-full overflow-hidden bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 font-black text-base border border-emerald-200 dark:border-emerald-500/20 shrink-0 relative">
+                    {currentUser.avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img 
+                        src={currentUser.avatarUrl} 
+                        alt={currentUser.fullName || 'الطالب'} 
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      currentUser.fullName?.charAt(0) || 'ط'
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h2 className="font-bold text-xs text-slate-900 dark:text-white truncate">
+                      {currentUser.fullName}
+                    </h2>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                      {currentUser.phone}
+                    </p>
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className="font-bold text-sm text-slate-900 dark:text-white truncate">
-                    {currentUser.fullName}
-                  </h2>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                    {currentUser.phone}
-                  </p>
-                </div>
+                <NotificationBell />
               </div>
 
               {/* Navigation Links */}
