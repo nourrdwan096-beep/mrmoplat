@@ -44,7 +44,7 @@ export default function AssistantHomePage() {
         if (currentAst && currentAst.permissions?.assignedCourseIds && currentAst.permissions.assignedCourseIds.length > 0) {
           const assigned = currentAst.permissions.assignedCourseIds;
           const filtered = allTickets.filter(
-            (t) => !t.courseId || assigned.includes(t.courseId)
+            (t) => !(t.course_id || t.courseId) || assigned.includes((t.course_id || t.courseId) as string)
           );
           setTickets(filtered);
         } else {

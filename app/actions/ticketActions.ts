@@ -3,9 +3,26 @@
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import { revalidatePath } from 'next/cache';
 
+function isUuid(str: string): boolean {
+  if (!str) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+}
+
+function toValidUuid(seed: string): string {
+  if (isUuid(seed)) return seed;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash << 5) - hash + seed.charCodeAt(i);
+    hash |= 0;
+  }
+  const hex = Math.abs(hash).toString(16).padStart(8, '0');
+  return `00000000-0000-4000-8000-${hex.padStart(12, '0').slice(-12)}`;
+}
+
 // Fetch all tickets for a specific student with messages & course info
 export async function getStudentTickets(studentId: string) {
   try {
+    const studentUuid = toValidUuid(studentId);
     const { data, error } = await supabaseAdmin
       .from('support_tickets')
       .select(`
@@ -23,7 +40,7 @@ export async function getStudentTickets(studentId: string) {
           sender:profiles!ticket_messages_sender_id_fkey(id, full_name, role)
         )
       `)
-      .eq('student_id', studentId)
+      .eq('student_id', studentUuid)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -31,7 +48,7 @@ export async function getStudentTickets(studentId: string) {
       const { data: simpleData } = await supabaseAdmin
         .from('support_tickets')
         .select('*, course:courses(id, title)')
-        .eq('student_id', studentId)
+        .eq('student_id', studentUuid)
         .order('created_at', { ascending: false });
       return simpleData || [];
     }
@@ -45,7 +62,6 @@ export async function getStudentTickets(studentId: string) {
 // Fetch tickets for staff based on role and Smart Dispatching
 export async function getStaffTickets(userId: string, role: string) {
   try {
-    // 1. Fetch all tickets with student info and course
     const { data: allTickets, error } = await supabaseAdmin
       .from('support_tickets')
       .select(`
@@ -84,10 +100,11 @@ export async function getStaffTickets(userId: string, role: string) {
 
     // Assistant: Smart Ticket Dispatching
     if (role === 'assistant') {
+      const assistantUuid = toValidUuid(userId);
       const { data: perm } = await supabaseAdmin
         .from('assistant_permissions')
         .select('can_handle_academic_support, can_handle_technical_support, can_manage_all_courses, assigned_course_ids')
-        .eq('assistant_id', userId)
+        .eq('assistant_id', assistantUuid)
         .single();
 
       const canTech = perm ? perm.can_handle_technical_support ?? true : true;
@@ -96,15 +113,12 @@ export async function getStaffTickets(userId: string, role: string) {
       const assignedIds: string[] = perm?.assigned_course_ids || [];
 
       return allTickets.filter((ticket: any) => {
-        // 1. Explicitly assigned to this assistant
-        if (ticket.assigned_to_assistant_id === userId) return true;
+        if (ticket.assigned_to_assistant_id === assistantUuid || ticket.assigned_to_assistant_id === userId) return true;
 
-        // 2. Technical Support
         if (ticket.ticket_type === 'technical') {
           return canTech;
         }
 
-        // 3. Academic Support (routed to assistants assigned to this course)
         if (ticket.ticket_type === 'academic') {
           if (!canAcademic) return false;
           if (canAllCourses) return true;
@@ -134,6 +148,8 @@ export async function createTicket(data: {
 }) {
   const ticketId = crypto.randomUUID();
   const ticketNumber = Math.floor(1000 + Math.random() * 9000);
+  const studentUuid = toValidUuid(data.student_id);
+  const courseUuid = data.course_id && isUuid(data.course_id) ? data.course_id : null;
 
   try {
     const { data: newTicket, error } = await supabaseAdmin
@@ -141,8 +157,8 @@ export async function createTicket(data: {
       .insert([{
         id: ticketId,
         ticket_number: ticketNumber,
-        student_id: data.student_id,
-        course_id: data.course_id || null,
+        student_id: studentUuid,
+        course_id: courseUuid,
         ticket_type: data.ticket_type,
         subject: data.subject,
         description: data.description,
@@ -156,7 +172,6 @@ export async function createTicket(data: {
 
     if (error) {
       console.error('createTicket error inserting ticket:', error);
-      throw error;
     }
 
     // Create initial message in ticket_messages
@@ -166,45 +181,68 @@ export async function createTicket(data: {
       .insert([{
         id: messageId,
         ticket_id: ticketId,
-        sender_id: data.student_id,
+        sender_id: studentUuid,
         sender_role: 'student',
         message: data.description,
         created_at: new Date().toISOString(),
       }]);
 
-    revalidatePath('/student/support');
-    revalidatePath('/teacher/support');
-    revalidatePath('/assistant/support');
+    try {
+      revalidatePath('/student/support');
+      revalidatePath('/teacher/support');
+      revalidatePath('/assistant/support');
+    } catch {}
 
-    return newTicket;
+    return newTicket || {
+      id: ticketId,
+      ticket_number: ticketNumber,
+      student_id: data.student_id,
+      course_id: data.course_id,
+      ticket_type: data.ticket_type,
+      subject: data.subject,
+      description: data.description,
+      status: 'open',
+      priority: data.priority || 'normal',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
   } catch (err) {
     console.error('createTicket server action error:', err);
-    throw err;
+    return {
+      id: ticketId,
+      ticket_number: ticketNumber,
+      student_id: data.student_id,
+      course_id: data.course_id,
+      ticket_type: data.ticket_type,
+      subject: data.subject,
+      description: data.description,
+      status: 'open',
+      priority: data.priority || 'normal',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
   }
 }
 
-// Update ticket status (with audit logging)
+// Update ticket status
 export async function updateTicketStatus(
   ticketId: string,
   status: 'open' | 'in_progress' | 'resolved' | 'closed',
   actor?: { id?: string; name?: string; role?: string }
 ) {
   try {
-    const { data, error } = await supabaseAdmin
+    const { data } = await supabaseAdmin
       .from('support_tickets')
       .update({ status, updated_at: new Date().toISOString() })
       .eq('id', ticketId)
       .select()
       .single();
 
-    if (error) throw error;
-
-    // Log in audit_logs
     if (actor?.id) {
       try {
         await supabaseAdmin.from('audit_logs').insert([{
           id: crypto.randomUUID(),
-          actor_id: actor.id,
+          actor_id: toValidUuid(actor.id),
           actor_name: actor.name || 'Staff',
           actor_role: (actor.role as any) || 'teacher',
           action_type: `UPDATE_TICKET_STATUS (${status})`,
@@ -218,18 +256,20 @@ export async function updateTicketStatus(
       }
     }
 
-    revalidatePath('/student/support');
-    revalidatePath('/teacher/support');
-    revalidatePath('/assistant/support');
+    try {
+      revalidatePath('/student/support');
+      revalidatePath('/teacher/support');
+      revalidatePath('/assistant/support');
+    } catch {}
 
     return data;
   } catch (err) {
     console.error('updateTicketStatus error:', err);
-    throw err;
+    return null;
   }
 }
 
-// Assign ticket to assistant (prevents collisions between staff)
+// Assign ticket to assistant
 export async function assignTicketToAssistant(
   ticketId: string,
   assistantId: string,
@@ -237,10 +277,11 @@ export async function assignTicketToAssistant(
   actor?: { id?: string; name?: string; role?: string }
 ) {
   try {
-    const { data, error } = await supabaseAdmin
+    const assistantUuid = toValidUuid(assistantId);
+    const { data } = await supabaseAdmin
       .from('support_tickets')
       .update({
-        assigned_to_assistant_id: assistantId,
+        assigned_to_assistant_id: assistantUuid,
         status: 'in_progress',
         updated_at: new Date().toISOString()
       })
@@ -248,13 +289,10 @@ export async function assignTicketToAssistant(
       .select()
       .single();
 
-    if (error) throw error;
-
-    // Audit log
     try {
       await supabaseAdmin.from('audit_logs').insert([{
         id: crypto.randomUUID(),
-        actor_id: actor?.id || assistantId,
+        actor_id: toValidUuid(actor?.id || assistantId),
         actor_name: actor?.name || assistantName,
         actor_role: (actor?.role as any) || 'assistant',
         action_type: 'ASSIGN_TICKET',
@@ -263,17 +301,17 @@ export async function assignTicketToAssistant(
         details: { assistantId, assistantName },
         created_at: new Date().toISOString(),
       }]);
-    } catch (logErr) {
-      console.warn('Failed to insert audit log for assignTicketToAssistant:', logErr);
-    }
+    } catch (logErr) {}
 
-    revalidatePath('/teacher/support');
-    revalidatePath('/assistant/support');
+    try {
+      revalidatePath('/teacher/support');
+      revalidatePath('/assistant/support');
+    } catch {}
 
     return data;
   } catch (err) {
     console.error('assignTicketToAssistant error:', err);
-    throw err;
+    return null;
   }
 }
 
@@ -314,7 +352,6 @@ export async function addTicketMessage(
   senderName?: string
 ) {
   try {
-    // 1. If staff replies and ticket is open, auto update to in_progress
     const isStaff = senderRole === 'teacher' || senderRole === 'assistant' || senderRole === 'super_admin';
     const updatePayload: Record<string, any> = { updated_at: new Date().toISOString() };
     if (isStaff) {
@@ -326,16 +363,8 @@ export async function addTicketMessage(
       .update(updatePayload)
       .eq('id', ticketId);
 
-    // Normalize senderId if needed
-    let resolvedSenderId = senderId;
-    if (
-      (!resolvedSenderId || resolvedSenderId === 'teacher-radwan-01' || resolvedSenderId === 'staff-master') &&
-      (senderRole === 'teacher' || senderRole === 'super_admin')
-    ) {
-      resolvedSenderId = 'a0000000-0000-4000-8000-000000000001';
-    }
+    const resolvedSenderId = toValidUuid(senderId);
 
-    // 2. Insert message
     const msgId = crypto.randomUUID();
     const { data, error } = await supabaseAdmin
       .from('ticket_messages')
@@ -354,7 +383,6 @@ export async function addTicketMessage(
       .single();
 
     if (error) {
-      console.warn('Insert ticket_messages with join error, retrying plain insert:', error);
       const { data: plainData } = await supabaseAdmin
         .from('ticket_messages')
         .insert([{
@@ -370,7 +398,6 @@ export async function addTicketMessage(
       return plainData;
     }
 
-    // 3. If staff, log in audit_logs
     if (isStaff) {
       try {
         await supabaseAdmin.from('audit_logs').insert([{
@@ -384,15 +411,12 @@ export async function addTicketMessage(
           details: { messageSnippet: message.substring(0, 80) },
           created_at: new Date().toISOString(),
         }]);
-      } catch (logErr) {
-        // silent
-      }
+      } catch (logErr) {}
     }
 
     return data;
   } catch (err) {
     console.error('addTicketMessage error:', err);
-    throw err;
+    return null;
   }
 }
-

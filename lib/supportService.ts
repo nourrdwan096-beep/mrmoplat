@@ -1,390 +1,684 @@
 import { supabase } from './supabaseClient';
-import { logAuditEvent } from './teacherService';
+import { fetchAssistants } from './teacherService';
+
+export interface TicketSender {
+  id: string;
+  full_name: string;
+  role: string;
+}
 
 export interface TicketMessage {
   id: string;
-  ticketId: string;
-  senderId: string;
-  senderName: string;
-  senderRole: 'student' | 'teacher' | 'assistant' | 'super_admin';
+  ticket_id: string;
+  ticketId?: string;
+  sender_id: string;
+  senderId?: string;
+  sender_role: 'student' | 'teacher' | 'assistant' | 'super_admin';
+  senderRole?: 'student' | 'teacher' | 'assistant' | 'super_admin';
   message: string;
-  createdAt: string;
+  attachment_url?: string | null;
+  attachmentUrl?: string | null;
+  created_at: string;
+  createdAt?: string;
+  sender?: TicketSender | null;
+  senderName?: string;
 }
 
-export interface SupportTicketData {
+
+export interface SupportTicket {
   id: string;
-  ticketNumber: number;
-  studentId: string;
-  studentName: string;
+  ticket_number: number;
+  ticketNumber?: number;
+  student_id: string;
+  studentId?: string;
+  student_name?: string;
+  studentName?: string;
+  student_phone?: string;
   studentPhone?: string;
-  courseId?: string;
-  courseTitle?: string;
-  ticketType: 'technical' | 'academic';
+  course_id?: string | null;
+  courseId?: string | null;
+  course_title?: string | null;
+  courseTitle?: string | null;
+  ticket_type: 'technical' | 'academic';
+  ticketType?: 'technical' | 'academic';
   subject: string;
   description: string;
   status: 'open' | 'in_progress' | 'resolved' | 'closed';
   priority: 'low' | 'normal' | 'high' | 'urgent';
-  assignedToAssistantId?: string;
-  assignedAssistantName?: string;
-  createdAt: string;
-  updatedAt: string;
+  assigned_to_assistant_id?: string | null;
+  assignedToAssistantId?: string | null;
+  assigned_assistant_name?: string | null;
+  assignedAssistantName?: string | null;
+  created_at: string;
+  createdAt?: string;
+  updated_at: string;
+  updatedAt?: string;
+  course?: { id: string; title: string } | null;
+  student?: {
+    id: string;
+    full_name: string;
+    phone?: string;
+    stage?: string;
+    grade?: number;
+    education_type?: string;
+  } | null;
+  assigned_assistant?: { id: string; full_name: string } | null;
   messages?: TicketMessage[];
 }
 
-const LOCAL_TICKETS_KEY = 'mr_radwan_support_tickets';
+const LOCAL_TICKETS_KEY = 'mr_radwan_support_tickets_cache';
+const LOCAL_MESSAGES_KEY = 'mr_radwan_ticket_messages_cache';
 
-function getLocal<T>(key: string, defaultVal: T): T {
-  if (typeof window === 'undefined') return defaultVal;
-  const stored = localStorage.getItem(key);
-  if (!stored) {
-    localStorage.setItem(key, JSON.stringify(defaultVal));
-    return defaultVal;
-  }
+// Helper for local storage
+function getLocalTickets(): SupportTicket[] {
+  if (typeof window === 'undefined') return [];
   try {
-    return JSON.parse(stored);
+    const raw = localStorage.getItem(LOCAL_TICKETS_KEY);
+    return raw ? JSON.parse(raw) : [];
   } catch {
-    return defaultVal;
+    return [];
   }
 }
 
-function setLocal<T>(key: string, data: T): void {
+function saveLocalTickets(tickets: SupportTicket[]) {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(key, JSON.stringify(data));
-  } catch (err: any) {
-    console.warn(`localStorage Quota Exceeded or Error for key ${key}:`, err);
-    if (Array.isArray(data) && data.length > 5) {
-      try {
-        localStorage.setItem(key, JSON.stringify(data.slice(0, 5)));
-        console.log(`Saved truncated version for key ${key}`);
-      } catch (e) {
-        console.error(`Truncation also failed for key ${key}`);
-      }
-    }
+    localStorage.setItem(LOCAL_TICKETS_KEY, JSON.stringify(tickets));
+    window.dispatchEvent(new CustomEvent('mr_radwan_tickets_updated'));
+  } catch (e) {
+    console.warn('saveLocalTickets error:', e);
   }
 }
 
-export async function fetchSupportTickets(filters?: {
-  studentId?: string;
-  courseId?: string;
-  assistantId?: string;
-  assignedCourseIds?: string[];
-  role?: string;
-}): Promise<SupportTicketData[]> {
+function getLocalMessages(): TicketMessage[] {
+  if (typeof window === 'undefined') return [];
   try {
-    let query = supabase
+    const raw = localStorage.getItem(LOCAL_MESSAGES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalMessages(msgs: TicketMessage[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(LOCAL_MESSAGES_KEY, JSON.stringify(msgs));
+    window.dispatchEvent(new CustomEvent('mr_radwan_tickets_updated'));
+  } catch (e) {
+    console.warn('saveLocalMessages error:', e);
+  }
+}
+
+/**
+ * Fetch all tickets for a specific student
+ */
+export async function getStudentTickets(studentId: string): Promise<SupportTicket[]> {
+  const local = getLocalTickets().filter((t) => t.student_id === studentId);
+
+  if (!supabase) {
+    return local.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  }
+
+  try {
+    const { data, error } = await supabase
       .from('support_tickets')
-      .select('*')
+      .select(`
+        *,
+        course:courses(id, title),
+        assigned_assistant:profiles!support_tickets_assigned_to_assistant_id_fkey(id, full_name),
+        messages:ticket_messages(
+          id,
+          ticket_id,
+          sender_id,
+          sender_role,
+          message,
+          attachment_url,
+          created_at,
+          sender:profiles!ticket_messages_sender_id_fkey(id, full_name, role)
+        )
+      `)
+      .eq('student_id', studentId)
       .order('created_at', { ascending: false });
 
-    if (filters?.studentId) {
-      query = query.eq('student_id', filters.studentId);
+    if (!error && data && data.length > 0) {
+      // Merge remote with any newly added local tickets
+      const remoteIds = new Set(data.map((d: any) => d.id));
+      const localOnly = local.filter((l) => !remoteIds.has(l.id));
+      const merged = [...data, ...localOnly];
+      saveLocalTickets(merged);
+      return merged;
     }
 
-    const { data, error } = await query;
-    if (!error && data && data.length > 0) {
-      return data.map((t) => ({
-        id: t.id,
-        ticketNumber: t.ticket_number || 1001,
-        studentId: t.student_id,
-        studentName: t.student_name || 'طالب',
-        studentPhone: t.student_phone,
-        courseId: t.course_id,
-        courseTitle: t.course_title,
-        ticketType: t.ticket_type,
-        subject: t.subject,
-        description: t.description,
-        status: t.status || 'open',
-        priority: t.priority || 'normal',
-        assignedToAssistantId: t.assigned_to_assistant_id,
-        assignedAssistantName: t.assigned_assistant_name,
-        createdAt: t.created_at,
-        updatedAt: t.updated_at || t.created_at,
-      }));
+    // Try basic select if join fails
+    const { data: basicData, error: basicError } = await supabase
+      .from('support_tickets')
+      .select('*, course:courses(id, title)')
+      .eq('student_id', studentId)
+      .order('created_at', { ascending: false });
+
+    if (!basicError && basicData && basicData.length > 0) {
+      const remoteIds = new Set(basicData.map((d: any) => d.id));
+      const localOnly = local.filter((l) => !remoteIds.has(l.id));
+      const merged = [...basicData, ...localOnly];
+      saveLocalTickets(merged);
+      return merged;
     }
   } catch (err) {
-    console.warn('Supabase fetchSupportTickets fallback to local:', err);
+    console.warn('getStudentTickets remote error, using local fallback:', err);
   }
 
-  let tickets = getLocal<SupportTicketData[]>(LOCAL_TICKETS_KEY, [
-    {
-      id: 't-101',
-      ticketNumber: 1042,
-      studentId: 'std-demo-1',
-      studentName: 'محمود عبد الرازق',
-      studentPhone: '01098765432',
-      courseId: 'c1',
-      courseTitle: 'كورس العمالقة - الثانوية العامة (الصف الثالث)',
-      ticketType: 'academic',
-      subject: 'استفسار عن قاعدة Past Perfect في الوحدة الثانية',
-      description: 'يا مستر هل قاعدة Had + V3 بتستخدم دايماً مع Before ولا ممكن تيجي مع Until كمان؟',
-      status: 'open',
-      priority: 'high',
-      createdAt: new Date(Date.now() - 3600000).toISOString(),
-      updatedAt: new Date(Date.now() - 3600000).toISOString(),
-      messages: [
-        {
-          id: 'm-1',
-          ticketId: 't-101',
-          senderId: 'std-demo-1',
-          senderName: 'محمود عبد الرازق',
-          senderRole: 'student',
-          message: 'يا مستر هل قاعدة Had + V3 بتستخدم دايماً مع Before ولا ممكن تيجي مع Until كمان؟',
-          createdAt: new Date(Date.now() - 3600000).toISOString(),
-        },
-      ],
-    },
-    {
-      id: 't-102',
-      ticketNumber: 1043,
-      studentId: 'std-demo-2',
-      studentName: 'نور الدين علي',
-      studentPhone: '01123456789',
-      courseId: 'c2',
-      courseTitle: 'كورس التميز في اللغة الإنجليزية - 1 ثانوي',
-      ticketType: 'technical',
-      subject: 'الفيديو توقف عند الدقيقة 14',
-      description: 'الفيديو رقم 2 في الوحدة الأولى توقف ولا يكتمل، هل المشكلة من سرعة النت عندي ولا السيرفر؟',
-      status: 'in_progress',
-      priority: 'normal',
-      assignedToAssistantId: 'asst-1',
-      assignedAssistantName: 'أحمد محمود',
-      createdAt: new Date(Date.now() - 7200000).toISOString(),
-      updatedAt: new Date(Date.now() - 7200000).toISOString(),
-      messages: [
-        {
-          id: 'm-2',
-          ticketId: 't-102',
-          senderId: 'std-demo-2',
-          senderName: 'نور الدين علي',
-          senderRole: 'student',
-          message: 'الفيديو رقم 2 في الوحدة الأولى توقف ولا يكتمل، هل المشكلة من سرعة النت عندي ولا السيرفر؟',
-          createdAt: new Date(Date.now() - 7200000).toISOString(),
-        },
-        {
-          id: 'm-3',
-          ticketId: 't-102',
-          senderId: 'asst-1',
-          senderName: 'أحمد محمود (مساعد)',
-          senderRole: 'assistant',
-          message: 'أهلاً بك يا نور، قمنا بفحص المشغل وهو يعمل بجودة ممتازة. جرب تقليل الجودة لـ 480p وتحديث الصفحة.',
-          createdAt: new Date(Date.now() - 3600000).toISOString(),
-        },
-      ],
-    },
-  ]);
+  return local.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
 
-  if (filters?.studentId) {
-    tickets = tickets.filter((t) => t.studentId === filters.studentId);
-  }
+/**
+ * Fetch tickets for staff with smart dispatching
+ */
+export async function getStaffTickets(
+  userId: string = '',
+  role: string = 'teacher',
+  assignedCourseIds: string[] = []
+): Promise<SupportTicket[]> {
+  const local = getLocalTickets();
 
-  // Filter for Assistant Smart Dispatch:
-  // If assistant has assignedCourseIds, show:
-  // 1. Technical tickets
-  // 2. Academic tickets only for their assigned courses (or assigned directly to them)
-  if (filters?.role === 'assistant') {
-    if (filters.assignedCourseIds && filters.assignedCourseIds.length > 0) {
-      tickets = tickets.filter(
-        (t) =>
-          t.ticketType === 'technical' ||
-          (t.courseId && filters.assignedCourseIds?.includes(t.courseId)) ||
-          t.assignedToAssistantId === filters.assistantId
-      );
+  let allTickets: SupportTicket[] = local;
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('support_tickets')
+        .select(`
+          *,
+          course:courses(id, title),
+          student:profiles!support_tickets_student_id_fkey(id, full_name, phone, stage, grade, education_type),
+          assigned_assistant:profiles!support_tickets_assigned_to_assistant_id_fkey(id, full_name),
+          messages:ticket_messages(
+            id,
+            ticket_id,
+            sender_id,
+            sender_role,
+            message,
+            attachment_url,
+            created_at,
+            sender:profiles!ticket_messages_sender_id_fkey(id, full_name, role)
+          )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        const remoteIds = new Set(data.map((d: any) => d.id));
+        const localOnly = local.filter((l) => !remoteIds.has(l.id));
+        allTickets = [...data, ...localOnly];
+        saveLocalTickets(allTickets);
+      } else {
+        const { data: basicData } = await supabase
+          .from('support_tickets')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (basicData) {
+          const remoteIds = new Set(basicData.map((d: any) => d.id));
+          const localOnly = local.filter((l) => !remoteIds.has(l.id));
+          allTickets = [...basicData, ...localOnly];
+        }
+      }
+    } catch (err) {
+      console.warn('getStaffTickets remote error:', err);
     }
   }
 
-  return tickets;
+  // Sort descending
+  allTickets.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  // Super Admin & Teacher see everything
+  if (role === 'super_admin' || role === 'teacher') {
+    return allTickets;
+  }
+
+  // Assistant: Smart Dispatching filter
+  if (role === 'assistant') {
+    try {
+      const assistants = await fetchAssistants();
+      const myProfile = assistants.find((a) => a.id === userId);
+      const perm = myProfile?.permissions;
+
+      const canTech = perm ? perm.canHandleTechnicalSupport ?? true : true;
+      const canAcademic = perm ? perm.canHandleAcademicSupport ?? true : true;
+      const canAllCourses = perm ? perm.canManageAllCourses ?? false : false;
+      const assignedIds: string[] = perm?.assignedCourseIds || [];
+
+      return allTickets.filter((ticket: any) => {
+        // 1. Explicitly assigned to this assistant
+        if (ticket.assigned_to_assistant_id === userId) return true;
+
+        // 2. Technical Support
+        if (ticket.ticket_type === 'technical') {
+          return canTech;
+        }
+
+        // 3. Academic Support
+        if (ticket.ticket_type === 'academic') {
+          if (!canAcademic) return false;
+          if (canAllCourses) return true;
+          if (!ticket.course_id) return true;
+          return assignedIds.includes(ticket.course_id);
+        }
+
+        return true;
+      });
+    } catch {
+      return allTickets;
+    }
+  }
+
+  return allTickets;
 }
 
-export async function createSupportTicket(payload: {
-  studentId: string;
-  studentName: string;
-  studentPhone?: string;
-  courseId?: string;
-  courseTitle?: string;
-  ticketType: 'technical' | 'academic';
+/**
+ * Create a new support ticket
+ */
+export async function createTicket(data: {
+  student_id: string;
+  course_id?: string;
+  ticket_type: 'technical' | 'academic';
   subject: string;
   description: string;
   priority?: 'low' | 'normal' | 'high' | 'urgent';
-}): Promise<SupportTicketData> {
-  const newId = crypto.randomUUID();
+  student_name?: string;
+  course_title?: string;
+}): Promise<SupportTicket> {
+  const ticketId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'ticket-' + Date.now();
   const ticketNumber = Math.floor(1000 + Math.random() * 9000);
+  const now = new Date().toISOString();
 
-  const newTicket: SupportTicketData = {
-    id: newId,
-    ticketNumber,
-    studentId: payload.studentId,
-    studentName: payload.studentName,
-    studentPhone: payload.studentPhone,
-    courseId: payload.courseId,
-    courseTitle: payload.courseTitle,
-    ticketType: payload.ticketType,
-    subject: payload.subject,
-    description: payload.description,
+  const newTicket: SupportTicket = {
+    id: ticketId,
+    ticket_number: ticketNumber,
+    student_id: data.student_id,
+    course_id: data.course_id || null,
+    ticket_type: data.ticket_type,
+    subject: data.subject,
+    description: data.description,
     status: 'open',
-    priority: payload.priority || 'normal',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    priority: data.priority || 'normal',
+    created_at: now,
+    updated_at: now,
+    course: data.course_id ? { id: data.course_id, title: data.course_title || 'الكورس' } : null,
+    student: {
+      id: data.student_id,
+      full_name: data.student_name || 'طالب',
+    },
     messages: [
       {
-        id: crypto.randomUUID(),
-        ticketId: newId,
-        senderId: payload.studentId,
-        senderName: payload.studentName,
-        senderRole: 'student',
-        message: payload.description,
-        createdAt: new Date().toISOString(),
+        id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg-' + Date.now(),
+        ticket_id: ticketId,
+        sender_id: data.student_id,
+        sender_role: 'student',
+        message: data.description,
+        created_at: now,
+        sender: {
+          id: data.student_id,
+          full_name: data.student_name || 'طالب',
+          role: 'student',
+        },
       },
     ],
   };
 
-  try {
-    await supabase.from('support_tickets').insert([
-      {
-        id: newId,
-        ticket_number: ticketNumber,
-        student_id: payload.studentId,
-        course_id: payload.courseId,
-        ticket_type: payload.ticketType,
-        subject: payload.subject,
-        description: payload.description,
-        status: 'open',
-        priority: payload.priority || 'normal',
-      },
-    ]);
-  } catch (err) {
-    console.warn('Supabase createSupportTicket error:', err);
+  // Always save locally immediately
+  const existingTickets = getLocalTickets();
+  saveLocalTickets([newTicket, ...existingTickets]);
+
+  const existingMsgs = getLocalMessages();
+  if (newTicket.messages && newTicket.messages[0]) {
+    saveLocalMessages([...existingMsgs, newTicket.messages[0]]);
   }
 
-  const current = getLocal<SupportTicketData[]>(LOCAL_TICKETS_KEY, []);
-  setLocal(LOCAL_TICKETS_KEY, [newTicket, ...current]);
+  // Attempt Supabase insert in background / sync
+  if (supabase) {
+    try {
+      const { error: ticketError } = await supabase.from('support_tickets').insert([
+        {
+          id: ticketId,
+          ticket_number: ticketNumber,
+          student_id: data.student_id,
+          course_id: data.course_id || null,
+          ticket_type: data.ticket_type,
+          subject: data.subject,
+          description: data.description,
+          status: 'open',
+          priority: data.priority || 'normal',
+          created_at: now,
+          updated_at: now,
+        },
+      ]);
+
+      if (!ticketError) {
+        // Insert message
+        const msgId = newTicket.messages?.[0]?.id || crypto.randomUUID();
+        await supabase.from('ticket_messages').insert([
+          {
+            id: msgId,
+            ticket_id: ticketId,
+            sender_id: data.student_id,
+            sender_role: 'student',
+            message: data.description,
+            created_at: now,
+          },
+        ]);
+      } else {
+        console.warn('Supabase createTicket warning:', ticketError);
+      }
+    } catch (err) {
+      console.warn('createTicket Supabase sync error:', err);
+    }
+  }
+
   return newTicket;
 }
 
-export async function updateTicketStatus(
-  ticketId: string,
-  status: SupportTicketData['status'],
-  assignedTo?: { id: string; name: string },
-  actor?: { name: string; role: string; id?: string }
-): Promise<void> {
+/**
+ * Get messages for a ticket
+ */
+export async function getTicketMessages(ticketId: string): Promise<TicketMessage[]> {
+  const localMsgs = getLocalMessages().filter((m) => m.ticket_id === ticketId);
+
+  if (!supabase) {
+    return localMsgs.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  }
+
   try {
-    const updateObj: Record<string, any> = {
-      status,
-      updated_at: new Date().toISOString(),
-    };
-    if (assignedTo) {
-      updateObj.assigned_to_assistant_id = assignedTo.id;
+    const { data, error } = await supabase
+      .from('ticket_messages')
+      .select(`
+        *,
+        sender:profiles!ticket_messages_sender_id_fkey(id, full_name, role)
+      `)
+      .eq('ticket_id', ticketId)
+      .order('created_at', { ascending: true });
+
+    if (!error && data && data.length > 0) {
+      const remoteIds = new Set(data.map((d: any) => d.id));
+      const localOnly = localMsgs.filter((l) => !remoteIds.has(l.id));
+      const merged = [...data, ...localOnly];
+      return merged.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
     }
-    await supabase.from('support_tickets').update(updateObj).eq('id', ticketId);
+
+    // Basic select fallback
+    const { data: basicData } = await supabase
+      .from('ticket_messages')
+      .select('*')
+      .eq('ticket_id', ticketId)
+      .order('created_at', { ascending: true });
+
+    if (basicData && basicData.length > 0) {
+      const remoteIds = new Set(basicData.map((d: any) => d.id));
+      const localOnly = localMsgs.filter((l) => !remoteIds.has(l.id));
+      const merged = [...basicData, ...localOnly];
+      return merged.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    }
   } catch (err) {
-    console.warn('Supabase updateTicketStatus error:', err);
+    console.warn('getTicketMessages error:', err);
   }
 
-  const current = getLocal<SupportTicketData[]>(LOCAL_TICKETS_KEY, []);
-  setLocal(
-    LOCAL_TICKETS_KEY,
-    current.map((t) => {
-      if (t.id === ticketId) {
-        return {
-          ...t,
-          status,
-          assignedToAssistantId: assignedTo ? assignedTo.id : t.assignedToAssistantId,
-          assignedAssistantName: assignedTo ? assignedTo.name : t.assignedAssistantName,
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return t;
-    })
-  );
-
-  if (actor) {
-    await logAuditEvent({
-      actorId: actor.id,
-      actorName: actor.name,
-      actorRole: actor.role,
-      actionType: `UPDATE_TICKET_STATUS (${status})`,
-      targetEntity: 'support_ticket',
-      targetId: ticketId,
-      details: { status, assignedTo: assignedTo?.name },
-    });
-  }
+  return localMsgs.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 }
 
+/**
+ * Add a message to a ticket (supports both argument styles)
+ */
 export async function addTicketMessage(
   ticketId: string,
-  sender: { id: string; name: string; role: TicketMessage['senderRole'] },
-  message: string
+  arg2: string | { id?: string; name?: string; role?: string; fullName?: string },
+  arg3?: string,
+  arg4?: string,
+  arg5?: string
 ): Promise<TicketMessage> {
-  const newMsg: TicketMessage = {
-    id: crypto.randomUUID(),
-    ticketId,
-    senderId: sender.id,
-    senderName: sender.name,
-    senderRole: sender.role,
-    message,
-    createdAt: new Date().toISOString(),
-  };
+  let senderId = 'anonymous';
+  let senderRole = 'student';
+  let senderName = 'مستخدم';
+  let message = '';
 
-  try {
-    await supabase.from('ticket_messages').insert([
-      {
-        id: newMsg.id,
-        ticket_id: ticketId,
-        sender_id: sender.id,
-        sender_role: sender.role,
-        message,
-      },
-    ]);
-  } catch (err) {
-    console.warn('Supabase addTicketMessage error:', err);
+  if (typeof arg2 === 'object' && arg2 !== null) {
+    senderId = arg2.id || 'anonymous';
+    senderRole = (arg2.role as any) || 'student';
+    senderName = arg2.name || arg2.fullName || (senderRole === 'teacher' ? 'مستر محمد رضوان' : senderRole === 'assistant' ? 'فريق المساعدين' : 'طالب');
+    message = arg3 || '';
+  } else {
+    senderId = arg2 || 'anonymous';
+    senderRole = (arg3 as any) || 'student';
+    message = arg4 || '';
+    senderName = arg5 || (senderRole === 'teacher' ? 'مستر محمد رضوان' : senderRole === 'assistant' ? 'فريق المساعدين' : 'طالب');
   }
 
-  const current = getLocal<SupportTicketData[]>(LOCAL_TICKETS_KEY, []);
-  setLocal(
-    LOCAL_TICKETS_KEY,
-    current.map((t) => {
-      if (t.id === ticketId) {
-        return {
-          ...t,
-          updatedAt: new Date().toISOString(),
-          messages: [...(t.messages || []), newMsg],
-        };
+  const msgId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'msg-' + Date.now();
+  const now = new Date().toISOString();
+
+  const newMsg: TicketMessage = {
+    id: msgId,
+    ticket_id: ticketId,
+    sender_id: senderId,
+    sender_role: senderRole as any,
+    message: message,
+    created_at: now,
+    sender: {
+      id: senderId,
+      full_name: senderName,
+      role: senderRole,
+    },
+  };
+
+  // 1. Update local storage
+  const allMsgs = getLocalMessages();
+  saveLocalMessages([...allMsgs, newMsg]);
+
+  // Update local ticket status
+  const allTickets = getLocalTickets();
+  const isStaff = senderRole === 'teacher' || senderRole === 'assistant' || senderRole === 'super_admin';
+  const updatedTickets = allTickets.map((t) => {
+    if (t.id === ticketId) {
+      return {
+        ...t,
+        status: isStaff && t.status === 'open' ? ('in_progress' as const) : t.status,
+        updated_at: now,
+      };
+    }
+    return t;
+  });
+  saveLocalTickets(updatedTickets);
+
+  // Dispatch events for real-time reactivity
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('mr_radwan_support_updated'));
+    window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
+  }
+
+  // 2. Sync to Supabase
+  if (supabase) {
+    try {
+      // Auto update ticket status if open
+      if (isStaff) {
+        await supabase
+          .from('support_tickets')
+          .update({ status: 'in_progress', updated_at: now })
+          .eq('id', ticketId);
+      } else {
+        await supabase
+          .from('support_tickets')
+          .update({ updated_at: now })
+          .eq('id', ticketId);
       }
-      return t;
-    })
-  );
+
+      // Check valid UUID for senderId
+      let safeSenderId = senderId;
+      if (
+        (!safeSenderId || safeSenderId === 'teacher-radwan-01' || safeSenderId === 'staff-master') &&
+        (senderRole === 'teacher' || senderRole === 'super_admin')
+      ) {
+        safeSenderId = 'a0000000-0000-4000-8000-000000000001';
+      }
+
+      await supabase.from('ticket_messages').insert([
+        {
+          id: msgId,
+          ticket_id: ticketId,
+          sender_id: safeSenderId,
+          sender_role: senderRole,
+          message: message,
+          created_at: now,
+        },
+      ]);
+    } catch (err) {
+      console.warn('addTicketMessage Supabase sync error:', err);
+    }
+  }
 
   return newMsg;
 }
 
-export type TicketData = SupportTicketData;
 
-
-export async function fetchTicketMessages(ticketId: string): Promise<TicketMessage[]> {
-  const tickets = await fetchSupportTickets();
-  const ticket = tickets.find((t) => t.id === ticketId);
-  return ticket?.messages || [];
-}
-
-export async function sendTicketMessage(
+/**
+ * Update ticket status
+ */
+export async function updateTicketStatus(
   ticketId: string,
-  senderId: string,
-  senderRole: TicketMessage['senderRole'],
-  senderName: string,
-  message: string
-): Promise<TicketMessage> {
-  return addTicketMessage(ticketId, { id: senderId, name: senderName, role: senderRole }, message);
+  status: 'open' | 'in_progress' | 'resolved' | 'closed',
+  assignedToOrActor?: { id?: string; name?: string; role?: string } | { id: string; name: string } | null,
+  actor?: { id?: string; name?: string; role?: string }
+): Promise<SupportTicket | null> {
+  const now = new Date().toISOString();
+  let assignedTo: { id: string; name: string } | null = null;
+  let finalActor: { id?: string; name?: string; role?: string } | undefined = actor;
+
+  if (assignedToOrActor && 'role' in assignedToOrActor) {
+    finalActor = assignedToOrActor as { id?: string; name?: string; role?: string };
+  } else if (assignedToOrActor && 'id' in assignedToOrActor) {
+    assignedTo = assignedToOrActor as { id: string; name: string };
+  }
+
+  // Update local
+  const allTickets = getLocalTickets();
+  let updatedTicket: SupportTicket | null = null;
+  const updatedList = allTickets.map((t) => {
+    if (t.id === ticketId) {
+      updatedTicket = {
+        ...t,
+        status,
+        assigned_to_assistant_id: assignedTo ? assignedTo.id : t.assigned_to_assistant_id,
+        assignedToAssistantId: assignedTo ? assignedTo.id : t.assignedToAssistantId,
+        assigned_assistant_name: assignedTo ? assignedTo.name : t.assigned_assistant_name,
+        assignedAssistantName: assignedTo ? assignedTo.name : t.assignedAssistantName,
+        updated_at: now,
+        updatedAt: now,
+      };
+      return updatedTicket;
+    }
+    return t;
+  });
+  saveLocalTickets(updatedList);
+
+  // Update Supabase
+  if (supabase) {
+    try {
+      const updateData: Record<string, any> = { status, updated_at: now };
+      if (assignedTo?.id) {
+        updateData.assigned_to_assistant_id = assignedTo.id;
+      }
+      await supabase
+        .from('support_tickets')
+        .update(updateData)
+        .eq('id', ticketId);
+    } catch (err) {
+      console.warn('updateTicketStatus Supabase error:', err);
+    }
+  }
+
+  return updatedTicket;
 }
 
+/**
+ * Assign ticket to assistant
+ */
 export async function assignTicketToAssistant(
   ticketId: string,
   assistantId: string,
   assistantName: string,
-  actor?: { name: string; role: string; id?: string }
-): Promise<void> {
-  const tickets = await fetchSupportTickets();
-  const ticket = tickets.find((t) => t.id === ticketId);
-  const status = ticket?.status || 'in_progress';
-  await updateTicketStatus(ticketId, status, { id: assistantId, name: assistantName }, actor);
+  actor?: { id?: string; name?: string; role?: string }
+): Promise<SupportTicket | null> {
+  const now = new Date().toISOString();
+
+  // Update local
+  const allTickets = getLocalTickets();
+  let updatedTicket: SupportTicket | null = null;
+  const updatedList = allTickets.map((t) => {
+    if (t.id === ticketId) {
+      updatedTicket = {
+        ...t,
+        assigned_to_assistant_id: assistantId,
+        assigned_assistant: { id: assistantId, full_name: assistantName },
+        status: 'in_progress',
+        updated_at: now,
+      };
+      return updatedTicket;
+    }
+    return t;
+  });
+  saveLocalTickets(updatedList);
+
+  // Update Supabase
+  if (supabase) {
+    try {
+      await supabase
+        .from('support_tickets')
+        .update({
+          assigned_to_assistant_id: assistantId,
+          status: 'in_progress',
+          updated_at: now,
+        })
+        .eq('id', ticketId);
+    } catch (err) {
+      console.warn('assignTicketToAssistant Supabase error:', err);
+    }
+  }
+
+  return updatedTicket;
+}
+
+// Aliases and Compatibility Exports
+export type SupportTicketData = SupportTicket;
+export type TicketData = SupportTicket;
+export const fetchStudentTickets = getStudentTickets;
+export const fetchStaffTickets = getStaffTickets;
+export const fetchSupportTickets = getStaffTickets;
+export const fetchTicketMessages = getTicketMessages;
+export const sendTicketMessage = addTicketMessage;
+export const changeTicketStatus = updateTicketStatus;
+export const assignTicket = assignTicketToAssistant;
+
+export async function createSupportTicket(data: {
+  studentId?: string;
+  student_id?: string;
+  courseId?: string;
+  course_id?: string;
+  ticketType?: 'technical' | 'academic';
+  ticket_type?: 'technical' | 'academic';
+  subject: string;
+  description: string;
+  priority?: 'low' | 'normal' | 'high' | 'urgent';
+  studentName?: string;
+  student_name?: string;
+  studentPhone?: string;
+  courseTitle?: string;
+  course_title?: string;
+}): Promise<SupportTicket> {
+  return createTicket({
+    student_id: (data.studentId || data.student_id || '') as string,
+    course_id: data.courseId || data.course_id || undefined,
+    ticket_type: (data.ticketType || data.ticket_type || 'technical') as 'technical' | 'academic',
+    subject: data.subject,
+    description: data.description,
+    priority: data.priority,
+    student_name: data.studentName || data.student_name,
+    course_title: data.courseTitle || data.course_title,
+  });
 }
 
