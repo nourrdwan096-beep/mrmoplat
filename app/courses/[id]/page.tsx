@@ -149,6 +149,11 @@ export default function CourseDetailsPage({ params }: { params: Promise<{ id: st
     if (res.success) {
       setEnrollSuccess(true);
       setIsEnrolled(true);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('mr_radwan_enrollments_updated', {
+          detail: { courseId: course.id, studentId: currentUser.id }
+        }));
+      }
     } else {
       setErrorMessage(res.message);
     }

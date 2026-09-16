@@ -81,6 +81,22 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
       }
     }
     loadCourse();
+
+    const handleEnrollmentUpdate = (e: any) => {
+      if (e?.detail?.courseId === courseId || !e?.detail?.courseId) {
+        setIsEnrolled(true);
+        if (currentUser?.id) {
+          fetchStudentProgress(currentUser.id, courseId).then(p => setProgress(p));
+        }
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('mr_radwan_enrollments_updated', handleEnrollmentUpdate);
+      return () => {
+        window.removeEventListener('mr_radwan_enrollments_updated', handleEnrollmentUpdate);
+      };
+    }
   }, [courseId, currentUser?.id]);
 
   // Metric aggregates
@@ -145,12 +161,16 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
       await new Promise(r => setTimeout(r, 500));
 
       if (res.success) {
+        setIsEnrolled(true);
         setActivationSuccessData({
           courseTitle: res.courseTitle || course?.title || 'كورس مستر محمد رضوان',
           deviceMessage: 'سيتم اعتماد هذا الجهاز كأول جهاز أساسي لك (مثبت للأمان)، ولك صلاحية استخدام جهاز واحد آخر إضافي على نفس الإيميل وكلمة المرور (حد أقصى جهازين فقط).'
         });
         setActivationCode('');
         setShowSuccessModal(true);
+        if (currentUser?.id) {
+          fetchStudentProgress(currentUser.id, courseId).then(p => setProgress(p));
+        }
       } else {
         setRedeemError(res.message || 'الكود غير صحيح أو تم استخدامه مسبقاً');
       }
@@ -175,6 +195,36 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
       });
       const p = await fetchStudentProgress(currentUser.id, courseId);
       setProgress(p);
+    }
+  };
+
+  const handleFreeEnrollment = async () => {
+    if (!currentUser?.id) return;
+    setRedeemLoading(true);
+    setRedeemError('');
+    setRedeemStatusText('جاري تسجيل انضمامك للكورس المجاني...');
+    try {
+      await enrollStudentInCourse(
+        currentUser.id,
+        courseId,
+        'free',
+        0,
+        {
+          fullName: currentUser.fullName,
+          email: currentUser.email,
+          phone: currentUser.phone,
+          parentPhone: currentUser.parentPhone,
+        }
+      );
+      setActivationSuccessData({
+        courseTitle: course?.title || 'كورس مجاني',
+        deviceMessage: 'تم انضمامك للكورس بنجاح. يمكنك الآن بدء التعلم بحرية تامة!',
+      });
+      setShowSuccessModal(true);
+    } catch (err: any) {
+      setRedeemError(err.message || 'فشل الانضمام للكورس.');
+    } finally {
+      setRedeemLoading(false);
     }
   };
 
@@ -374,81 +424,122 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
               </span>
               <h2 className="text-2xl font-black text-slate-900 dark:text-white">انضم للكورس الآن</h2>
               <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-medium">
-                أدخل كود تفعيل الكورس المسلم لك من مستر محمد رضوان للبدء فوراً.
+                {(course?.isFree || (course?.price ?? 0) <= 0) 
+                  ? 'هذا الكورس مجاني ومفتوح. اضغط للانضمام فوراً.' 
+                  : 'أدخل كود تفعيل الكورس المسلم لك من مستر محمد رضوان للبدء فوراً.'}
               </p>
             </div>
 
-            {/* Code Redemption Box */}
-            <div className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
-                  <Ticket className="w-5 h-5" />
+            {(course?.isFree || (course?.price ?? 0) <= 0) ? (
+              <div className="p-5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 space-y-4 text-center">
+                <div className="flex justify-center mb-2">
+                  <div className="w-16 h-16 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+                    <Sparkles className="w-8 h-8" />
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-black text-slate-900 dark:text-white text-sm">تفعيل الكورس بكود التفعيل</h3>
-                  <p className="text-xs text-slate-400">كود مكون من أرقام وحروف مخصص لك</p>
-                </div>
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  value={activationCode}
-                  onChange={e => setActivationCode(e.target.value)}
-                  disabled={redeemLoading}
-                  placeholder="أدخل كود التفعيل هنا..."
-                  className="flex-1 h-12 px-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold tracking-widest text-center uppercase disabled:opacity-50 text-slate-900 dark:text-white text-sm"
-                  dir="ltr"
-                />
+                <h3 className="font-black text-slate-900 dark:text-white text-lg">هذا الكورس مجاني 100%</h3>
+                <p className="text-sm text-slate-600 dark:text-slate-400 font-bold mb-4">
+                  لا يتطلب أي أكواد تفعيل. يمكنك الانضمام فوراً بحسابك.
+                </p>
                 <button
-                  onClick={handleRedeemCode}
-                  disabled={redeemLoading || !activationCode.trim()}
-                  className="h-12 px-6 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs disabled:opacity-50 transition-all flex items-center justify-center gap-2 shrink-0 shadow-md shadow-emerald-600/20"
+                  onClick={handleFreeEnrollment}
+                  disabled={redeemLoading}
+                  className="w-full h-12 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-sm disabled:opacity-50 transition-all flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20"
                 >
                   {redeemLoading ? (
                     <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span>جاري التحقق...</span>
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>جاري الانضمام...</span>
                     </>
                   ) : (
                     <>
-                      <span>تفعيل الكود</span>
-                      <Check className="w-4 h-4" />
+                      <span>انضم للكورس مجاناً</span>
+                      <Check className="w-5 h-5" />
                     </>
                   )}
                 </button>
+
+                {redeemError && (
+                  <p className="text-xs font-bold text-rose-500 flex items-center gap-1.5 justify-center pt-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" /> {redeemError}
+                  </p>
+                )}
               </div>
+            ) : (
+              <>
+                {/* Code Redemption Box */}
+                <div className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                      <Ticket className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-black text-slate-900 dark:text-white text-sm">تفعيل الكورس بكود التفعيل</h3>
+                      <p className="text-xs text-slate-400">كود مكون من أرقام وحروف مخصص لك</p>
+                    </div>
+                  </div>
 
-              {redeemLoading && redeemStatusText && (
-                <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-2 justify-center animate-pulse pt-1">
-                  <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                  {redeemStatusText}
-                </p>
-              )}
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={activationCode}
+                      onChange={e => setActivationCode(e.target.value)}
+                      disabled={redeemLoading}
+                      placeholder="أدخل كود التفعيل هنا..."
+                      className="flex-1 h-12 px-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-bold tracking-widest text-center uppercase disabled:opacity-50 text-slate-900 dark:text-white text-sm"
+                      dir="ltr"
+                    />
+                    <button
+                      onClick={handleRedeemCode}
+                      disabled={redeemLoading || !activationCode.trim()}
+                      className="h-12 px-6 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-xs disabled:opacity-50 transition-all flex items-center justify-center gap-2 shrink-0 shadow-md shadow-emerald-600/20"
+                    >
+                      {redeemLoading ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>جاري التحقق...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>تفعيل الكود</span>
+                          <Check className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  </div>
 
-              {redeemError && (
-                <p className="text-xs font-bold text-rose-500 flex items-center gap-1.5 justify-center pt-1">
-                  <AlertCircle className="w-4 h-4 shrink-0" /> {redeemError}
-                </p>
-              )}
-            </div>
+                  {redeemLoading && redeemStatusText && (
+                    <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-2 justify-center animate-pulse pt-1">
+                      <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                      {redeemStatusText}
+                    </p>
+                  )}
 
-            {/* Wallet / Fawry Option */}
-            <button 
-              onClick={handleWalletBuy}
-              className="w-full p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 hover:border-emerald-500 transition-all flex items-center justify-between group text-right"
-            >
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                  <CreditCard className="w-5 h-5" />
+                  {redeemError && (
+                    <p className="text-xs font-bold text-rose-500 flex items-center gap-1.5 justify-center pt-1">
+                      <AlertCircle className="w-4 h-4 shrink-0" /> {redeemError}
+                    </p>
+                  )}
                 </div>
-                <div>
-                  <h3 className="font-black text-slate-900 dark:text-white text-sm">الشراء عبر المحفظة / فوري</h3>
-                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400">سعر الاشتراك: {course.price} ج.م</p>
-                </div>
-              </div>
-              <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition-colors rotate-180" />
-            </button>
+
+                {/* Wallet / Fawry Option */}
+                <button 
+                  onClick={handleWalletBuy}
+                  className="w-full p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 hover:border-emerald-500 transition-all flex items-center justify-between group text-right"
+                >
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                      <CreditCard className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-black text-slate-900 dark:text-white text-sm">الشراء عبر المحفظة / فوري</h3>
+                      <p className="text-xs font-medium text-slate-500 dark:text-slate-400">سعر الاشتراك: {course?.price} ج.م</p>
+                    </div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition-colors rotate-180" />
+                </button>
+              </>
+            )}
           </div>
         )}
 

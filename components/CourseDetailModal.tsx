@@ -136,12 +136,28 @@ export default function CourseDetailModal({
 
     setIsSubmitting(true);
     setErrorMessage('');
-    const res = await redeemActivationCodeForStudent(activationCode, currentUser.id, currentUser.fullName);
+    const res = await redeemActivationCodeForStudent(
+      activationCode, 
+      currentUser.id, 
+      currentUser.fullName,
+      course.id,
+      {
+        email: currentUser.email,
+        phone: currentUser.phone,
+        parentPhone: currentUser.parentPhone,
+        fullName: currentUser.fullName,
+      }
+    );
     setIsSubmitting(false);
 
     if (res.success) {
       setEnrollSuccess(true);
       setIsEnrolled(true);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('mr_radwan_enrollments_updated', {
+          detail: { courseId: course.id, studentId: currentUser.id }
+        }));
+      }
     } else {
       setErrorMessage(res.message);
     }

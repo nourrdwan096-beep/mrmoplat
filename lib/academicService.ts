@@ -2071,15 +2071,35 @@ export async function fetchStudentEnrolledCourseIds(studentId: string, studentEm
   if (!studentId) return [];
   const results: string[] = [];
 
+  // 1. Primary Global Source: Server API querying active enrollments from Supabase
   try {
-    const remoteEnrolledIds = await fetchStudentEnrollmentsServer(studentId);
-    if (remoteEnrolledIds && remoteEnrolledIds.length > 0) {
-      remoteEnrolledIds.forEach(id => {
-        if (!results.includes(id)) results.push(id);
-      });
+    const res = await fetch(`/api/student/enrollments?studentId=${encodeURIComponent(studentId)}`, {
+      cache: 'no-store'
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.success && Array.isArray(data?.enrolledCourseIds)) {
+        data.enrolledCourseIds.forEach((id: string) => {
+          if (!results.includes(id)) results.push(id);
+        });
+      }
     }
-  } catch (err) {
-    console.warn("fetchStudentEnrollmentsServer failed, fallback to local:", err);
+  } catch (apiErr) {
+    console.warn("API /api/student/enrollments fetch error:", apiErr);
+  }
+
+  // 2. Server Action fallback
+  if (results.length === 0) {
+    try {
+      const remoteEnrolledIds = await fetchStudentEnrollmentsServer(studentId);
+      if (remoteEnrolledIds && remoteEnrolledIds.length > 0) {
+        remoteEnrolledIds.forEach(id => {
+          if (!results.includes(id)) results.push(id);
+        });
+      }
+    } catch (err) {
+      console.warn("fetchStudentEnrollmentsServer failed, fallback to local:", err);
+    }
   }
 
   const allEnrollments = getLocal<any[]>(STORAGE_KEYS.ENROLLMENTS, []);
@@ -2201,6 +2221,22 @@ export async function enrollStudentInCourse(
   allEnrollments.push(newEnrollment);
   setLocal(STORAGE_KEYS.ENROLLMENTS, allEnrollments);
 
+  // Persist to Server Database API (Global across all devices)
+  try {
+    await fetch('/api/student/enrollments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        studentId,
+        courseId,
+        paymentMethod,
+        amountPaid: amount,
+      }),
+    });
+  } catch (apiErr) {
+    console.warn('/api/student/enrollments POST error:', apiErr);
+  }
+
   try {
     await saveEnrollmentServer(newEnrollment, {
       id: crypto.randomUUID(),
@@ -2212,6 +2248,12 @@ export async function enrollStudentInCourse(
     });
   } catch (err) {
     console.warn('saveEnrollmentServer error:', err);
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('mr_radwan_enrollments_updated', {
+      detail: { courseId, studentId }
+    }));
   }
 
   return true;
@@ -2232,6 +2274,10 @@ export async function redeemActivationCodeForStudent(
 }> {
   if (!codeStr || !codeStr.trim()) {
     return { success: false, message: 'يرجى إدخال كود التفعيل أولاً' };
+  }
+
+  if (!studentId || !studentId.trim()) {
+    return { success: false, message: 'يجب تسجيل الدخول كطالب أولاً لتفعيل الكود' };
   }
 
   // Auto-heal missing student info for activation code redemption
@@ -2265,93 +2311,116 @@ export async function redeemActivationCodeForStudent(
     }
   }
 
-  const cleanCode = codeStr.trim().toUpperCase();
+  const cleanCode = codeStr.trim().toUpperCase().replace(/\s+/g, '');
 
-  // 1. Check in Supabase first
-  let codeObj: any = null;
+  // 1. Primary Global Server-Authoritative API (Bypasses RLS, checks course match, registers in DB)
   try {
-    const { data: dbCode, error } = await supabase
-      .from('course_activation_codes')
-      .select('*, courses(id, title, price)')
-      .ilike('code', cleanCode)
-      .maybeSingle();
+    const res = await fetch('/api/course-codes/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: cleanCode,
+        studentId: studentId.trim(),
+        targetCourseId: targetCourseId?.trim() || undefined,
+        studentInfo: {
+          fullName: resolvedName,
+          phone: resolvedPhone,
+          parentPhone: resolvedParentPhone,
+          email: resolvedEmail,
+        }
+      })
+    });
 
-    if (!error && dbCode) {
-      // Parse assigned student from batch_name if available
-      let assignedStudent = '';
-      if (dbCode.batch_name?.includes('مخصص:')) {
-        assignedStudent = dbCode.batch_name.split('مخصص:')[1]?.replace(']', '')?.trim();
+    const data = await res.json();
+
+    if (data?.success) {
+      const activatedCourseId = data.courseId || targetCourseId;
+
+      // Update local storage cache for immediate offline response
+      if (activatedCourseId) {
+        const allEnrollments = getLocal<any[]>(STORAGE_KEYS.ENROLLMENTS, []);
+        const exists = allEnrollments.some(e => 
+          (e.studentId === studentId || e.student_id === studentId) && 
+          (e.courseId === activatedCourseId || e.course_id === activatedCourseId)
+        );
+        if (!exists) {
+          allEnrollments.push({
+            id: crypto.randomUUID(),
+            studentId,
+            courseId: activatedCourseId,
+            studentName: resolvedName,
+            studentPhone: resolvedPhone,
+            parentPhone: resolvedParentPhone,
+            paymentMethod: 'activation_code',
+            amountPaid: 0,
+            enrolledAt: new Date().toISOString(),
+          });
+          setLocal(STORAGE_KEYS.ENROLLMENTS, allEnrollments);
+        }
       }
 
-      codeObj = {
-        id: dbCode.id,
-        courseId: dbCode.course_id,
-        courseTitle: dbCode.courses?.title,
-        price: dbCode.courses?.price,
-        code: dbCode.code,
-        batchName: dbCode.batch_name,
-        assignedStudentName: assignedStudent,
-        isUsed: dbCode.is_used,
-        usedAt: dbCode.used_at,
-        usedByStudentId: dbCode.used_by_student_id,
+      // Update local codes cache
+      const allCodes = getLocal<ActivationCodeData[]>(STORAGE_KEYS.CODES, []);
+      const updatedCodes = allCodes.map(c => {
+        if (c.code.toUpperCase() === cleanCode) {
+          return {
+            ...c,
+            isUsed: true,
+            usedByStudentName: resolvedName,
+            usedByStudentId: studentId,
+            usedAt: new Date().toISOString(),
+          };
+        }
+        return c;
+      });
+      setLocal(STORAGE_KEYS.CODES, updatedCodes);
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('mr_radwan_enrollments_updated', {
+          detail: { courseId: activatedCourseId, studentId }
+        }));
+      }
+
+      return {
+        success: true,
+        message: data.message || 'تم تفعيل الكورس بنجاح!',
+        courseId: activatedCourseId,
+        courseTitle: data.courseTitle,
+        isFirstDevice: true
+      };
+    } else {
+      // Server explicitly rejected the code (e.g. mismatched course, already used, or invalid)
+      return {
+        success: false,
+        message: data?.message || 'كود التفعيل غير صالح أو تم استخدامه مسبقاً'
       };
     }
-  } catch (err) {
-    console.warn('Supabase query code error:', err);
+  } catch (apiErr) {
+    console.warn('API /api/course-codes/redeem error, trying local fallback:', apiErr);
   }
 
-  // 2. Fallback to local storage if not found in Supabase
+  // 2. Fallback to local storage if network request failed completely
   const allCodes = getLocal<ActivationCodeData[]>(STORAGE_KEYS.CODES, []);
-  if (!codeObj) {
-    const localFound = allCodes.find(c => c.code.toUpperCase() === cleanCode);
-    if (localFound) {
-      codeObj = { ...localFound };
-    }
-  } else {
-    // Merge local metadata if present
-    const localFound = allCodes.find(c => c.code.toUpperCase() === cleanCode || c.id === codeObj.id);
-    if (localFound) {
-      codeObj.assignedStudentName = codeObj.assignedStudentName || localFound.assignedStudentName;
-      codeObj.centerOrGroup = localFound.centerOrGroup;
-      codeObj.price = codeObj.price || localFound.price;
-    }
-  }
+  const localFound = allCodes.find(c => c.code.toUpperCase() === cleanCode);
 
-  if (!codeObj) {
+  if (!localFound) {
     return { success: false, message: 'كود التفعيل غير صحيح أو غير مسجل بالمنصة' };
   }
 
-  if (codeObj.isUsed) {
+  if (localFound.isUsed) {
     return { success: false, message: 'عذراً، هذا الكود تم استخدامه وتفعيله مسبقاً' };
   }
 
-  if (targetCourseId && codeObj.courseId && codeObj.courseId !== targetCourseId) {
-    return { success: false, message: 'هذا الكود مخصص لكورس آخر وليس هذا الكورس المطلوب' };
-  }
-
-  // Check personalized student assignment (تخصيص الكود لاسم طالب معين)
-  if (codeObj.assignedStudentName && codeObj.assignedStudentName.trim()) {
-    const assigned = codeObj.assignedStudentName.trim().toLowerCase();
-    const current = (studentName || '').trim().toLowerCase();
-    
-    // Check if the current student matches or shares key name tokens
-    const assignedTokens = assigned.split(/\s+/).filter((t: string) => t.length > 2);
-    const currentTokens = current.split(/\s+/).filter((t: string) => t.length > 2);
-    const matchesAnyToken = assignedTokens.some((t: string) => currentTokens.some((c: string) => c.includes(t) || t.includes(c)));
-
-    if (!matchesAnyToken && assigned !== current) {
-      return { 
-        success: false, 
-        message: `عذراً، هذا الكود مخصص ومسجل باسم الطالب: (${codeObj.assignedStudentName}). يرجى التأكد من حسابك أو مراجعة المعلم.` 
-      };
-    }
+  if (targetCourseId && localFound.courseId && localFound.courseId !== targetCourseId) {
+    return { 
+      success: false, 
+      message: `عذراً، هذا الكود مخصص لكورس (${localFound.courseTitle || 'آخر'}) ولا يمكن استخدامه لتفعيل هذا الكورس المطلوب!` 
+    };
   }
 
   const nowIso = new Date().toISOString();
-
-  // Mark code as used locally
   const updatedCodes = allCodes.map(c => {
-    if (c.code.toUpperCase() === cleanCode || c.id === codeObj.id) {
+    if (c.code.toUpperCase() === cleanCode || c.id === localFound.id) {
       return {
         ...c,
         isUsed: true,
@@ -2364,34 +2433,18 @@ export async function redeemActivationCodeForStudent(
   });
   setLocal(STORAGE_KEYS.CODES, updatedCodes);
 
-  // Mark code as used in Supabase
-  try {
-    await markCodeUsedServer(codeObj.id, studentId, nowIso);
-  } catch (err) {
-    console.warn('markCodeUsedServer error:', err);
-  }
-
-  // Enroll student in course
-  await enrollStudentInCourse(studentId, codeObj.courseId, 'activation_code', codeObj.price || 0, {
+  await enrollStudentInCourse(studentId, localFound.courseId, 'activation_code', localFound.price || 0, {
     fullName: resolvedName,
     phone: resolvedPhone,
     parentPhone: resolvedParentPhone,
     email: resolvedEmail,
   });
 
-  // Resolve course title
-  let courseTitle = codeObj.courseTitle;
-  if (!courseTitle) {
-    const allCourses = await fetchAllCourses();
-    const matchedCourse = allCourses.find(c => c.id === codeObj.courseId);
-    courseTitle = matchedCourse?.title || 'كورس مستر محمد رضوان';
-  }
-
   return { 
     success: true, 
-    message: 'تم تفعيل واشتراك الكورس بنجاح!', 
-    courseId: codeObj.courseId,
-    courseTitle,
+    message: 'تم تفعيل الكورس بنجاح!', 
+    courseId: localFound.courseId,
+    courseTitle: localFound.courseTitle || 'كورس مستر محمد رضوان',
     isFirstDevice: true
   };
 }

@@ -15,6 +15,7 @@ import {
   recordStudentItemProgress,
   isItemAccessible,
   isStudentEnrolledInCourse,
+  redeemActivationCodeForStudent,
   CourseData,
   UnitData,
   UnitItemData,
@@ -74,6 +75,10 @@ export default function WatchLessonPage() {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
   const [deviceBlockedError, setDeviceBlockedError] = useState<string | null>(null);
   const [isNotEnrolled, setIsNotEnrolled] = useState<boolean>(false);
+  const [quickCode, setQuickCode] = useState('');
+  const [quickRedeeming, setQuickRedeeming] = useState(false);
+  const [quickRedeemError, setQuickRedeemError] = useState('');
+  const [quickRedeemSuccess, setQuickRedeemSuccess] = useState('');
 
   // Load Course, Units, Items and Student Progress
   useEffect(() => {
@@ -176,10 +181,79 @@ export default function WatchLessonPage() {
     }
 
     loadData();
+
+    const handleEnrollmentUpdate = (e: any) => {
+      if (e?.detail?.courseId === courseId || !e?.detail?.courseId) {
+        setIsNotEnrolled(false);
+        loadData();
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('mr_radwan_enrollments_updated', handleEnrollmentUpdate);
+      return () => {
+        isMounted = false;
+        window.removeEventListener('mr_radwan_enrollments_updated', handleEnrollmentUpdate);
+      };
+    }
+
     return () => {
       isMounted = false;
     };
-  }, [courseId, itemId, currentUser?.id, currentRole]);
+  }, [courseId, itemId, currentUser, currentRole]);
+
+  const handleQuickRedeem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickCode.trim()) {
+      setQuickRedeemError('يرجى إدخال كود التفعيل أولاً');
+      return;
+    }
+    if (!currentUser) {
+      setQuickRedeemError('يجب تسجيل الدخول كطالب أولاً لتفعيل الكود');
+      return;
+    }
+
+    setQuickRedeeming(true);
+    setQuickRedeemError('');
+    setQuickRedeemSuccess('');
+
+    try {
+      const res = await redeemActivationCodeForStudent(
+        quickCode.trim(),
+        currentUser.id,
+        currentUser.fullName || 'طالب المنصة',
+        courseId,
+        {
+          email: currentUser.email,
+          phone: currentUser.phone,
+          parentPhone: currentUser.parentPhone,
+          fullName: currentUser.fullName,
+        }
+      );
+
+      if (res.success) {
+        setQuickRedeemSuccess(res.message || 'تم تفعيل الكورس بنجاح!');
+        setIsNotEnrolled(false);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('mr_radwan_enrollments_updated', {
+            detail: { courseId, studentId: currentUser.id }
+          }));
+        }
+        // Small delay then reload
+        setTimeout(() => {
+          if (typeof window !== 'undefined') {
+            window.location.reload();
+          }
+        }, 1000);
+      } else {
+        setQuickRedeemError(res.message || 'الكود غير صحيح أو مخصص لكورس آخر');
+      }
+    } catch {
+      setQuickRedeemError('حدث خطأ أثناء معالجة الكود، يرجى المحاولة مرة أخرى');
+    } finally {
+      setQuickRedeeming(false);
+    }
+  };
 
   // Flattened video & lesson items for Previous / Next navigation
   const allLessons: { item: UnitItemData; unit: UnitData }[] = [];
@@ -264,12 +338,46 @@ export default function WatchLessonPage() {
                 : 'لم تقم بتفعيل كود الاشتراك لهذا الكورس بعد. يرجى إدخال كود التفعيل المستلم من مستر محمد رضوان للاشتراك وفتح المحاضرات.'}
             </p>
           </div>
+
+          {!course.isFree && (
+            <form onSubmit={handleQuickRedeem} className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3 text-right">
+              <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <Ticket className="w-4 h-4 text-emerald-400" />
+                <span>أدخل كود الكورس المطبوع لفتح المحاضرة مباشرة:</span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={quickCode}
+                  onChange={(e) => setQuickCode(e.target.value.toUpperCase())}
+                  placeholder="MR-XXXXXX-XXXX-XXXX"
+                  dir="ltr"
+                  className="flex-1 h-11 px-3 rounded-xl bg-slate-900 border border-slate-700 text-white font-mono font-black text-center text-sm tracking-wider uppercase focus:border-emerald-500 focus:outline-none"
+                  disabled={quickRedeeming}
+                />
+                <button
+                  type="submit"
+                  disabled={quickRedeeming || !quickCode.trim()}
+                  className="px-4 h-11 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black text-xs transition-colors shrink-0 flex items-center justify-center gap-1"
+                >
+                  {quickRedeeming ? 'جاري الفتح...' : 'تفعيل الكود'}
+                </button>
+              </div>
+              {quickRedeemError && (
+                <p className="text-xs font-bold text-rose-400 text-center">{quickRedeemError}</p>
+              )}
+              {quickRedeemSuccess && (
+                <p className="text-xs font-bold text-emerald-400 text-center">{quickRedeemSuccess}</p>
+              )}
+            </form>
+          )}
+
           <div className="flex flex-col gap-3 pt-2">
             <Link
               href={`/courses/${courseId}`}
               className="w-full py-3.5 px-6 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-sm transition-all shadow-lg shadow-indigo-600/30"
             >
-              {course.isFree ? 'الانضمام للكورس الآن' : 'تفعيل كود الكورس الآن'}
+              {course.isFree ? 'الانضمام للكورس الآن' : 'عرض تفاصيل الكورس'}
             </Link>
             <Link
               href="/student/courses"
