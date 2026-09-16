@@ -750,6 +750,25 @@ export default function RegisterPage() {
                     <span>تواصل مع المعلم واتساب</span>
                   </a>
                 </div>
+
+                {/* Reset device lock if student was deleted or wants to re-register */}
+                <div className="pt-2 text-center">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsCheckingDevice(true);
+                      try {
+                        const { clearDeviceLock } = await import('@/lib/deviceSecurity');
+                        await clearDeviceLock();
+                        setDeviceStatus(null);
+                      } catch {}
+                      setIsCheckingDevice(false);
+                    }}
+                    className="text-xs font-bold text-slate-400 hover:text-amber-400 transition-colors underline decoration-slate-600 underline-offset-4"
+                  >
+                    إذا تم مسح حسابك من قبل المعلم أو تريد إنشاء حساب جديد، اضغط هنا لإعادة ضبط الجهاز
+                  </button>
+                </div>
               </div>
             )}
 

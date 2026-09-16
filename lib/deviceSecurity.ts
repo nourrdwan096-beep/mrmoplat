@@ -581,8 +581,26 @@ export async function clearDeviceLock(): Promise<void> {
     localStorage.removeItem('mr_student_phone');
     localStorage.removeItem('mr_hw_device_fp');
     localStorage.removeItem('mr_radwan_device_fp');
+    localStorage.removeItem('mr_radwan_registered_devices');
+    localStorage.removeItem('mr_radwan_current_user');
     
-    // Clear IndexedDB cache using existing wrapper or standard API
+    sessionStorage.removeItem('mr_device_registered');
+    sessionStorage.removeItem('mr_device_student_binding');
+    sessionStorage.removeItem('mr_registered_student_info');
+    sessionStorage.removeItem('mr_student_id');
+    sessionStorage.removeItem('mr_student_email');
+    sessionStorage.removeItem('mr_student_phone');
+
+    // Expire all security and binding cookies
+    document.cookie = 'mr_device_registered=; path=/; max-age=0';
+    document.cookie = 'mr_device_student_binding=; path=/; max-age=0';
+    document.cookie = 'mr_student_id=; path=/; max-age=0';
+    document.cookie = 'mr_student_email=; path=/; max-age=0';
+    document.cookie = 'mr_student_phone=; path=/; max-age=0';
+    document.cookie = 'mr_hw_device_fp=; path=/; max-age=0';
+    document.cookie = 'mr_radwan_user=; path=/; max-age=0';
+    
+    // Clear IndexedDB cache
     try {
       if (window.indexedDB) {
         const req = indexedDB.open(IDB_NAME, 1);
@@ -603,6 +621,8 @@ export async function clearDeviceLock(): Promise<void> {
       try {
         const cache = await caches.open(CACHE_NAME);
         await cache.delete(CACHE_KEY_URL);
+        await caches.delete(CACHE_NAME);
+        await caches.delete('MR_RADWAN_CACHE_V1');
       } catch (e) {}
     }
   } catch (err) {

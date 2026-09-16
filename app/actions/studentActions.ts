@@ -533,6 +533,15 @@ async function verifyAndEnforceStudentDevice(
   cleanFp: string,
   deviceInfo?: { name?: string; browser?: string }
 ): Promise<{ allowed: boolean; isPrimary?: boolean; maxDevicesReached?: boolean; isBanned?: boolean; message?: string }> {
+  // Check if student has special exemption (e.g. mariamezzeiden74@gmail.com) to allow login from any device
+  const { data: studentInfo } = await supabaseAdmin
+    .from('profiles')
+    .select('email, role')
+    .eq('id', studentId)
+    .maybeSingle();
+
+  const isExemptFromDeviceLimit = studentInfo?.email?.toLowerCase().trim() === 'mariamezzeiden74@gmail.com';
+
   // 1. Is device banned?
   const { data: bannedCheck } = await supabaseAdmin
     .from('banned_devices')
@@ -541,10 +550,20 @@ async function verifyAndEnforceStudentDevice(
     .limit(1);
 
   if (bannedCheck && bannedCheck.length > 0) {
+    if (!isExemptFromDeviceLimit) {
+      return {
+        allowed: false,
+        isBanned: true,
+        message: 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة. ' + (bannedCheck[0].reason || ''),
+      };
+    }
+  }
+
+  // If student is exempt, always permit login from any device without restrictions
+  if (isExemptFromDeviceLimit) {
     return {
-      allowed: false,
-      isBanned: true,
-      message: 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة. ' + (bannedCheck[0].reason || ''),
+      allowed: true,
+      isPrimary: true,
     };
   }
 

@@ -60,7 +60,17 @@ export default function LoginPage() {
                 const { lockDevicePermanently } = await import('@/lib/deviceSecurity');
                 await lockDevicePermanently(user);
               } catch {}
-              router.push('/student');
+
+              // Special apology / welcome message for student if affected or mariam
+              const isMariam = (user.email || '').toLowerCase().trim() === 'mariamezzeiden74@gmail.com';
+              const apologyText = isMariam
+                ? 'تم تسجيل دخولك بنجاح! نأسف جداً للمشاكل السابقة، هذا الاعتذار برعاية إدارة منصة مستر محمد رضوان 💚'
+                : 'تم تسجيل دخولك بنجاح!';
+              setSuccessMsg(apologyText);
+
+              setTimeout(() => {
+                router.push('/student');
+              }, isMariam ? 1800 : 500);
               return;
             }
           }

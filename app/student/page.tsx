@@ -11,7 +11,9 @@ import {
   CalendarDays,
   ArrowLeft,
   Video,
-  Award
+  Award,
+  Sparkles,
+  HeartHandshake
 } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -74,6 +76,30 @@ export default function StudentDashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Special Apology & Welcome Notice for Mariam / Affected Students */}
+      {currentUser?.email?.toLowerCase().trim() === 'mariamezzeiden74@gmail.com' && (
+        <div className="p-5 sm:p-6 bg-gradient-to-r from-emerald-500/15 via-teal-500/10 to-emerald-500/15 border-2 border-emerald-500/30 rounded-3xl relative overflow-hidden shadow-lg shadow-emerald-500/5">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-500/20">
+              <HeartHandshake className="w-6 h-6" />
+            </div>
+            <div className="flex-1 space-y-1">
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  تم تسجيل دخولك واعتماد حسابك بنجاح!
+                </h3>
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[11px] font-black">
+                  استثناء خاص معتمد
+                </span>
+              </div>
+              <p className="text-sm font-bold text-slate-700 dark:text-slate-300 leading-relaxed">
+                نأسف جداً للمشاكل والتعطيل السابق، هذا الاعتذار برعاية منصة مستر محمد رضوان 💚 حسابك مفعل ودائم بجميع الكورسات بدون أي تقييد على الأجهزة.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
