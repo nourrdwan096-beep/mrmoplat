@@ -765,7 +765,7 @@ export default function StudentsManagementClient() {
                       setMasterKey(e.target.value);
                       if (masterKeyError) setMasterKeyError('');
                     }}
-                    placeholder="sse-000-#######-****&mr+pp"
+                    placeholder="أدخل المفتاح السري هنا..."
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl px-4 py-3 text-center font-mono font-bold focus:ring-2 focus:ring-rose-500 outline-none transition-all text-sm"
                     dir="ltr"
                     autoFocus

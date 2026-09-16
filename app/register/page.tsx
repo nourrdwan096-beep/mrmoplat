@@ -13,7 +13,8 @@ import {
 import { 
   getStrictDeviceFingerprint, 
   getStrictDeviceIdentity, 
-  lockDevicePermanently 
+  lockDevicePermanently,
+  clearDeviceLock
 } from '@/lib/deviceSecurity';
 import { useAuth } from '@/context/AuthContext';
 import { 
@@ -152,49 +153,12 @@ export default function RegisterPage() {
           if (res.student) {
             await lockDevicePermanently(res.student);
           }
-        } else if (identity.isLocallyLocked || identity.storedStudent) {
-          const s = identity.storedStudent;
-          setDeviceStatus({
-            isRegistered: true,
-            isBanned: false,
-            student: {
-              id: s?.id || '',
-              fullName: s?.fullName || 'طالب مسجل بالمنصة',
-              email: s?.email || '',
-              phone: s?.phone || '',
-              stage: 'high',
-              grade: 1,
-              educationType: 'general',
-              status: (s?.status as any) || 'pending_review',
-            }
-          });
-          if (s) {
-            await lockDevicePermanently(s);
-          }
-        } else if (currentUser && currentUser.role === 'student') {
-          // User already logged in as a student on this device
-          setDeviceStatus({
-            isRegistered: true,
-            isBanned: currentUser.status === 'banned',
-            student: {
-              id: currentUser.id,
-              fullName: currentUser.fullName,
-              email: currentUser.email,
-              phone: currentUser.phone,
-              stage: currentUser.stage || 'high',
-              grade: currentUser.grade || 1,
-              educationType: currentUser.educationType || 'general',
-              status: currentUser.status,
-            }
-          });
-          await lockDevicePermanently({
-            id: currentUser.id,
-            fullName: currentUser.fullName,
-            email: currentUser.email,
-            phone: currentUser.phone,
-            status: currentUser.status,
-          });
         } else {
+          // If the server confirms this device/email is NOT registered, clear any stale local locks
+          // so the student can register again.
+          if (identity.isLocallyLocked || identity.storedStudent) {
+            await clearDeviceLock();
+          }
           setDeviceStatus(null);
         }
       } catch (err) {
@@ -259,24 +223,11 @@ export default function RegisterPage() {
         if (res.student) {
           await lockDevicePermanently(res.student);
         }
-      } else if (identity.isLocallyLocked || identity.storedStudent) {
-        const s = identity.storedStudent;
-        setDeviceStatus({
-          isRegistered: true,
-          isBanned: false,
-          student: {
-            id: s?.id || '',
-            fullName: s?.fullName || 'طالب مسجل بالمنصة',
-            email: s?.email || '',
-            phone: s?.phone || '',
-            stage: 'high',
-            grade: 1,
-            educationType: 'general',
-            status: (s?.status as any) || 'pending_review',
-          }
-        });
       } else {
-        setDeviceStatus(res);
+        if (identity.isLocallyLocked || identity.storedStudent) {
+          await clearDeviceLock();
+        }
+        setDeviceStatus(null);
       }
     } catch (err) {
       console.error('Refresh status error:', err);

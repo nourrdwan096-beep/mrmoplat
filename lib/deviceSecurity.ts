@@ -567,6 +567,50 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
 }
 
 /**
+ * Clear the local device lock to allow re-registration if the server confirms the student is deleted
+ */
+export async function clearDeviceLock(): Promise<void> {
+  if (typeof window === 'undefined') return;
+
+  try {
+    localStorage.removeItem('mr_device_registered');
+    localStorage.removeItem('mr_device_student_binding');
+    localStorage.removeItem('mr_registered_student_info');
+    localStorage.removeItem('mr_student_id');
+    localStorage.removeItem('mr_student_email');
+    localStorage.removeItem('mr_student_phone');
+    localStorage.removeItem('mr_hw_device_fp');
+    localStorage.removeItem('mr_radwan_device_fp');
+    
+    // Clear IndexedDB cache using existing wrapper or standard API
+    try {
+      if (window.indexedDB) {
+        const req = indexedDB.open(IDB_NAME, 1);
+        req.onsuccess = () => {
+          const db = req.result;
+          if (db.objectStoreNames.contains(IDB_STORE)) {
+            const tx = db.transaction(IDB_STORE, 'readwrite');
+            const store = tx.objectStore(IDB_STORE);
+            store.delete('student_info');
+            store.delete('hw_fingerprint');
+          }
+        };
+      }
+    } catch (e) {}
+
+    // Clear Cache API
+    if ('caches' in window) {
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.delete(CACHE_KEY_URL);
+      } catch (e) {}
+    }
+  } catch (err) {
+    console.warn('Error clearing device lock', err);
+  }
+}
+
+/**
  * Permanently lock device locally across all 5 layers upon confirmed server registration
  */
 export async function lockDevicePermanently(studentInfo: {

@@ -692,7 +692,7 @@ export default function TeacherAssistantsPage() {
                     required
                     value={secretInput}
                     onChange={(e) => setSecretInput(e.target.value)}
-                    placeholder="sse-000-#######-****&mr+pp"
+                    placeholder="أدخل المفتاح السري هنا..."
                     className="w-full h-11 px-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-sm font-semibold focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
