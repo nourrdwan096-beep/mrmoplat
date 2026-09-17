@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider } from '@/context/AuthContext';
+import GlobalNotificationPermissionPrompt from '@/components/notifications/GlobalNotificationPermissionPrompt';
 
 export const metadata: Metadata = {
   title: 'منصة مستر محمد رضوان التعليمية | MR. MOHAMED RADWAN',
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeProvider>
           <AuthProvider>
             {children}
+            <GlobalNotificationPermissionPrompt />
           </AuthProvider>
         </ThemeProvider>
       </body>

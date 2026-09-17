@@ -17,6 +17,7 @@ export interface AppNotification {
   type: NotificationType;
   title: string;
   message: string;
+  fullMessage?: string;
   timestamp: string;
   link: string;
   courseId?: string;
@@ -31,7 +32,7 @@ const READ_STORAGE_PREFIX = 'mr_radwan_read_notifs_';
 const DEVICE_NOTIF_PREFIX = 'mr_radwan_device_notifs_enabled_';
 
 /**
- * Get IDs of notifications marked as read by this user
+ * Get IDs of notifications marked as read by this user locally
  */
 export function getStoredReadIds(userId: string): Set<string> {
   if (typeof window === 'undefined' || !userId) return new Set();
@@ -46,35 +47,73 @@ export function getStoredReadIds(userId: string): Set<string> {
 }
 
 /**
- * Mark a single notification as read
+ * Merge and store read IDs in local storage
  */
-export function markNotificationAsRead(userId: string, notifId: string): void {
+export function storeReadIdsLocally(userId: string, ids: string[]): void {
   if (typeof window === 'undefined' || !userId) return;
   try {
-    const readIds = getStoredReadIds(userId);
-    readIds.add(notifId);
-    // Keep max 500 read ids to avoid memory bloat
-    const arr = Array.from(readIds).slice(-500);
+    const current = getStoredReadIds(userId);
+    ids.forEach((id) => current.add(id));
+    const arr = Array.from(current).slice(-800);
     localStorage.setItem(READ_STORAGE_PREFIX + userId, JSON.stringify(arr));
-    window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
-  } catch (e) {
-    console.error('Error saving read notification:', e);
+  } catch (err) {
+    console.error('Error saving local read IDs:', err);
   }
 }
 
 /**
- * Mark all given notifications as read
+ * Mark a single notification as read globally across all devices
  */
-export function markAllNotificationsAsRead(userId: string, notifIds: string[]): void {
-  if (typeof window === 'undefined' || !userId) return;
-  try {
-    const readIds = getStoredReadIds(userId);
-    notifIds.forEach((id) => readIds.add(id));
-    const arr = Array.from(readIds).slice(-500);
-    localStorage.setItem(READ_STORAGE_PREFIX + userId, JSON.stringify(arr));
+export async function markNotificationAsRead(userId: string, notifId: string): Promise<void> {
+  if (!userId || !notifId) return;
+
+  // 1. Immediate optimistic update in local storage for 0ms UI reaction
+  if (typeof window !== 'undefined') {
+    storeReadIdsLocally(userId, [notifId]);
     window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
-  } catch (e) {
-    console.error('Error saving read notifications:', e);
+  }
+
+  // 2. Global server-side persistence in database
+  try {
+    await fetch('/api/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'mark_read',
+        userId,
+        notifId,
+      }),
+    });
+  } catch (err) {
+    console.warn('Failed to sync notification read status with server:', err);
+  }
+}
+
+/**
+ * Mark all given notifications as read globally across all devices
+ */
+export async function markAllNotificationsAsRead(userId: string, notifIds: string[]): Promise<void> {
+  if (!userId || !notifIds || notifIds.length === 0) return;
+
+  // 1. Immediate optimistic update in local storage
+  if (typeof window !== 'undefined') {
+    storeReadIdsLocally(userId, notifIds);
+    window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
+  }
+
+  // 2. Global server-side persistence in database
+  try {
+    await fetch('/api/notifications', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'mark_all_read',
+        userId,
+        notifIds,
+      }),
+    });
+  } catch (err) {
+    console.warn('Failed to sync all notifications read status with server:', err);
   }
 }
 
@@ -100,14 +139,18 @@ export function getDeviceNotificationPermission(): NotificationPermission | 'uns
 export function isDeviceNotificationEnabled(userId: string): boolean {
   if (typeof window === 'undefined' || !userId) return false;
   try {
-    return localStorage.getItem(DEVICE_NOTIF_PREFIX + userId) === 'true';
+    const isExplicitlyTrue = localStorage.getItem(DEVICE_NOTIF_PREFIX + userId) === 'true';
+    if (isExplicitlyTrue && isDeviceNotificationSupported() && Notification.permission === 'granted') {
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }
 }
 
 /**
- * Toggle or enable device notifications and request permission if needed
+ * Toggle or enable device notifications and request browser permission
  */
 export async function requestDeviceNotificationPermission(userId: string): Promise<boolean> {
   if (!isDeviceNotificationSupported()) return false;
@@ -123,9 +166,10 @@ export async function requestDeviceNotificationPermission(userId: string): Promi
       playNotificationChime();
       sendNativeDeviceNotification(
         'منصة مستر محمد رضوان 🌟',
-        'تم تفعيل إشعارات وتنبيهات المنصة بنجاح على هذا الجهاز! ستصلك أحدث المستجدات أولاً بأول.',
+        'تم تفعيل إشعارات وتنبيهات المنصة بنجاح على هذا الجهاز! ستصلك أحدث التنبيهات والدروس فوراً.',
         '/'
       );
+      window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
       return true;
     } else {
       localStorage.setItem(DEVICE_NOTIF_PREFIX + userId, 'false');
@@ -170,7 +214,7 @@ export function sendNativeDeviceNotification(title: string, body: string, url?: 
 }
 
 /**
- * Synthesizes a futuristic, subtle, pleasant chime sound
+ * Synthesizes a futuristic, pleasant chime sound using Web Audio API
  */
 export function playNotificationChime(): void {
   if (typeof window === 'undefined') return;
@@ -209,14 +253,14 @@ export function playNotificationChime(): void {
 }
 
 /**
- * Fetch and aggregate personalized notifications for any user (Student, Teacher, Assistant)
+ * Fetch and aggregate global real-time notifications for any user (Student, Teacher, Assistant)
  */
 export async function fetchUserNotifications(user: UserProfile): Promise<AppNotification[]> {
   if (!user || !user.id) return [];
 
-  const readIds = getStoredReadIds(user.id);
+  const localReadIds = getStoredReadIds(user.id);
 
-  // 1. Primary: Global Live Notifications from API Route (Server Supabase Admin)
+  // 1. Primary Global Source: Server API with Database Read Tracking
   try {
     const params = new URLSearchParams({
       userId: user.id,
@@ -232,26 +276,32 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.notifications)) {
+        // Sync database readIds to local storage cache
+        if (Array.isArray(data.readIds) && data.readIds.length > 0) {
+          storeReadIdsLocally(user.id, data.readIds);
+        }
+
+        const serverReadIdsSet = new Set(data.readIds || []);
+
         return data.notifications.map((n: AppNotification) => ({
           ...n,
-          isRead: readIds.has(n.id),
+          fullMessage: n.fullMessage || n.message,
+          // If marked read either in DB or locally, mark as read
+          isRead: Boolean(n.isRead || serverReadIdsSet.has(n.id) || localReadIds.has(n.id)),
         }));
       }
     }
   } catch (apiErr) {
-    console.warn('API /api/notifications failed, falling back to local aggregator:', apiErr);
+    console.warn('API /api/notifications failed, falling back to client queries:', apiErr);
   }
 
+  // 2. Fallback Direct Supabase Client Aggregator
   const notifs: AppNotification[] = [];
 
   try {
     const role = user.role;
 
-    // ==========================================
-    // 1. STUDENT NOTIFICATIONS
-    // ==========================================
     if (role === 'student') {
-      // 1.1 Find which courses the student is enrolled in
       let enrolledCourseIds: string[] = [];
       try {
         const { data: enrolls } = await supabase
@@ -267,7 +317,6 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
         console.warn('Failed to load enrollments:', err);
       }
 
-      // 1.2 Fetch all published courses (Show new course announcement to everyone!)
       const courseMap: Record<string, string> = {};
       try {
         const { data: courses } = await supabase
@@ -279,59 +328,40 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
         if (courses && courses.length > 0) {
           courses.forEach((c: any) => {
             courseMap[c.id] = c.title;
-
-            // Course creation notification
-            const notifId = `notif_course_${c.id}`;
-            const isEnrolled = enrolledCourseIds.includes(c.id);
-            notifs.push({
-              id: notifId,
-              type: 'new_course',
-              title: 'كورس جديد متاح الآن 🎓',
-              message: isEnrolled
-                ? `كورس "${c.title}" متاح في قائمة مقرراتك الدراسية.`
-                : `تم إطلاق كورس جديد: "${c.title}". تصفح تفاصيل المنهج واشترك الآن!`,
-              timestamp: c.created_at || new Date().toISOString(),
-              link: `/student/courses`,
-              courseId: c.id,
-              isRead: readIds.has(notifId),
-              category: 'course',
-              badgeLabel: isEnrolled ? 'مشترك' : 'جديد',
-            });
           });
         }
       } catch (err) {
-        console.warn('Failed to load courses for student:', err);
+        console.warn('Failed to load courses:', err);
       }
 
-      // 1.3 EXAMS & VIDEOS - STRICT USER RULE:
-      // ONLY show exams and videos for courses the student IS enrolled in!
       if (enrolledCourseIds.length > 0) {
         try {
           const { data: items } = await supabase
             .from('unit_items')
-            .select('id, course_id, unit_id, title, item_type, created_at')
+            .select('id, course_id, unit_id, title, item_type, description, created_at')
             .in('course_id', enrolledCourseIds)
             .order('created_at', { ascending: false })
-            .limit(40);
+            .limit(30);
 
           if (items && items.length > 0) {
             items.forEach((item: any) => {
               const courseTitle = courseMap[item.course_id] || 'المقرر الدراسي';
-
               if (item.item_type === 'exam' || item.item_type === 'homework') {
                 const notifId = `notif_item_exam_${item.id}`;
+                const isExam = item.item_type === 'exam';
                 notifs.push({
                   id: notifId,
                   type: 'new_exam',
-                  title: item.item_type === 'exam' ? 'امتحان جديد متاح للحل 📝' : 'واجب جديد مطلوب حله ✍️',
-                  message: `تمت إضافة ${item.item_type === 'exam' ? 'امتحان جديد' : 'واجب جديد'}: "${item.title}" في (${courseTitle}). ادخل للاختبار وتقييم مستواك.`,
+                  title: isExam ? 'امتحان جديد متاح للحل 📝' : 'واجب جديد مطلوب حله 📚',
+                  message: `تمت إضافة ${isExam ? 'امتحان جديد' : 'واجب جديد'}: "${item.title}" في (${courseTitle}).`,
+                  fullMessage: `تمت إضافة ${isExam ? 'امتحان جديد' : 'واجب جديد'}: "${item.title}" في (${courseTitle}).\n${item.description ? '\nملاحظات: ' + item.description : ''}\n\nادخل الآن للحل في الوقت المحدد.`,
                   timestamp: item.created_at || new Date().toISOString(),
                   link: `/student/study/${item.course_id}?itemId=${item.id}`,
                   courseId: item.course_id,
                   itemId: item.id,
-                  isRead: readIds.has(notifId),
+                  isRead: localReadIds.has(notifId),
                   category: 'academic',
-                  badgeLabel: item.item_type === 'exam' ? 'امتحان' : 'واجب',
+                  badgeLabel: isExam ? 'امتحان' : 'واجب',
                 });
               } else if (item.item_type === 'video') {
                 const notifId = `notif_item_video_${item.id}`;
@@ -339,12 +369,13 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
                   id: notifId,
                   type: 'new_video',
                   title: 'فيديو وشرح جديد متاح 🎬',
-                  message: `تم رفع درس فيديو جديد: "${item.title}" في (${courseTitle}). تابع الشرح الآن.`,
+                  message: `تم رفع درس فيديو جديد: "${item.title}" في (${courseTitle}).`,
+                  fullMessage: `تم رفع درس فيديو جديد: "${item.title}" في (${courseTitle}).\n${item.description ? '\nالتفاصيل: ' + item.description : ''}\n\nتابع الشرح الآن.`,
                   timestamp: item.created_at || new Date().toISOString(),
                   link: `/watch/${item.course_id}/${item.id}`,
                   courseId: item.course_id,
                   itemId: item.id,
-                  isRead: readIds.has(notifId),
+                  isRead: localReadIds.has(notifId),
                   category: 'academic',
                   badgeLabel: 'شرح',
                 });
@@ -352,276 +383,16 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
             });
           }
         } catch (err) {
-          console.warn('Failed to load enrolled course items:', err);
-        }
-      }
-
-      // 1.4 Support Ticket Replies from Staff to Student
-      try {
-        const { data: tickets } = await supabase
-          .from('support_tickets')
-          .select('id, subject, status, created_at, updated_at')
-          .eq('student_id', user.id)
-          .order('updated_at', { ascending: false })
-          .limit(10);
-
-        if (tickets && tickets.length > 0) {
-          const ticketIds = tickets.map((t: any) => t.id);
-          const { data: messages } = await supabase
-            .from('ticket_messages')
-            .select('id, ticket_id, sender_role, message, created_at')
-            .in('ticket_id', ticketIds)
-            .in('sender_role', ['teacher', 'assistant', 'super_admin'])
-            .order('created_at', { ascending: false })
-            .limit(20);
-
-          if (messages && messages.length > 0) {
-            messages.forEach((msg: any) => {
-              const matchedTicket = tickets.find((t: any) => t.id === msg.ticket_id);
-              const notifId = `notif_ticket_reply_${msg.id}`;
-              const responder = msg.sender_role === 'teacher' || msg.sender_role === 'super_admin' ? 'مستر محمد رضوان' : 'فريق المساعدين';
-              notifs.push({
-                id: notifId,
-                type: 'support_reply',
-                title: 'رد جديد من الدعم 💬',
-                message: `قام ${responder} بالرد على تذكرتك "${matchedTicket?.subject || 'طلب الدعم'}": "${msg.message.slice(0, 80)}"`,
-                timestamp: msg.created_at || new Date().toISOString(),
-                link: `/student/support?ticketId=${msg.ticket_id}`,
-                ticketId: msg.ticket_id,
-                isRead: readIds.has(notifId),
-                category: 'support',
-                badgeLabel: 'الدعم',
-              });
-            });
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to load student ticket replies:', err);
-      }
-
-      // 1.5 Messages & Broadcasts from Teacher/Assistant
-      try {
-        const { data: msgs } = await supabase
-          .from('student_messages')
-          .select('id, title, content, is_broadcast, created_at')
-          .or(`is_broadcast.eq.true,recipient_student_id.eq.${user.id}`)
-          .order('created_at', { ascending: false })
-          .limit(15);
-
-        if (msgs && msgs.length > 0) {
-          msgs.forEach((m: any) => {
-            const notifId = `notif_msg_${m.id}`;
-            notifs.push({
-              id: notifId,
-              type: 'student_message',
-              title: m.is_broadcast ? 'تنبيه عام لجميع الطلاب 📢' : 'رسالة خاصة من الإدارة ✉️',
-              message: `${m.title}: ${m.content.slice(0, 90)}...`,
-              timestamp: m.created_at || new Date().toISOString(),
-              link: `/student/messages`,
-              isRead: readIds.has(notifId),
-              category: 'message',
-              badgeLabel: m.is_broadcast ? 'تنبيه عام' : 'رسالة خاصة',
-            });
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to load student messages:', err);
-      }
-    }
-
-    // ==========================================
-    // 2. TEACHER (SUPER ADMIN) NOTIFICATIONS
-    // ==========================================
-    else if (role === 'teacher' || role === 'super_admin') {
-      // 2.1 New Support Tickets from Students
-      try {
-        const { data: tickets, error: tErr } = await supabase
-          .from('support_tickets')
-          .select('id, ticket_number, student_id, subject, description, ticket_type, status, created_at')
-          .order('created_at', { ascending: false })
-          .limit(20);
-
-        if (!tErr && tickets && tickets.length > 0) {
-          tickets.forEach((ticket: any) => {
-            const notifId = `notif_teacher_ticket_${ticket.id}`;
-            const sType = ticket.ticket_type === 'academic' ? 'أكاديمي' : 'فني';
-            notifs.push({
-              id: notifId,
-              type: 'support_ticket_new',
-              title: `تذكرة دعم جديدة (${sType}) 🎫`,
-              message: `استفسار جديد: "${ticket.subject}"`,
-              timestamp: ticket.created_at || new Date().toISOString(),
-              link: `/teacher/support?ticketId=${ticket.id}`,
-              ticketId: ticket.id,
-              isRead: readIds.has(notifId),
-              category: 'support',
-              badgeLabel: sType,
-            });
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to load tickets for teacher:', err);
-      }
-
-
-      // 2.2 Pending Student Review Requests
-      try {
-        const { data: pendings } = await supabase
-          .from('profiles')
-          .select('id, full_name, phone, grade, created_at')
-          .eq('role', 'student')
-          .eq('status', 'pending_review')
-          .order('created_at', { ascending: false })
-          .limit(20);
-
-        if (pendings && pendings.length > 0) {
-          pendings.forEach((p: any) => {
-            const notifId = `notif_teacher_pending_${p.id}`;
-            notifs.push({
-              id: notifId,
-              type: 'new_student_pending',
-              title: 'طلب انضمام طالب جديد 👤',
-              message: `سجل الطالب "${p.full_name}" (${p.phone || 'بدون هاتف'}) - الصف ${p.grade || 'غير محدد'} وبانتظار الاعتماد.`,
-              timestamp: p.created_at || new Date().toISOString(),
-              link: `/teacher/students`,
-              isRead: readIds.has(notifId),
-              category: 'admin',
-              badgeLabel: 'قيد المراجعة',
-            });
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to load pending students for teacher:', err);
-      }
-
-      // 2.3 Course Enrollments
-      try {
-        const { data: enrolls } = await supabase
-          .from('course_enrollments')
-          .select('id, student_id, course_id, enrolled_at')
-          .order('enrolled_at', { ascending: false })
-          .limit(15);
-
-        if (enrolls && enrolls.length > 0) {
-          enrolls.forEach((e: any) => {
-            const notifId = `notif_teacher_enroll_${e.id}`;
-            notifs.push({
-              id: notifId,
-              type: 'course_enrollment',
-              title: 'اشتراك جديد في كورس 🎓',
-              message: `طالب قام بتفعيل والاشتراك في أحد الكورسات الدراسية بنجاح.`,
-              timestamp: e.enrolled_at || new Date().toISOString(),
-              link: `/teacher/courses`,
-              courseId: e.course_id,
-              isRead: readIds.has(notifId),
-              category: 'course',
-              badgeLabel: 'اشتراك',
-            });
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to load enrollments for teacher:', err);
-      }
-    }
-
-    // ==========================================
-    // 3. ASSISTANT NOTIFICATIONS
-    // ==========================================
-    else if (role === 'assistant') {
-      let assistantPermissions: any = null;
-      try {
-        const allAssistants = await fetchAssistants();
-        const found = allAssistants.find((a) => a.id === user.id || a.email === user.email);
-        assistantPermissions = found?.permissions || null;
-      } catch (err) {
-        console.warn('Failed to fetch assistant data:', err);
-      }
-
-      // 3.1 Support Tickets tailored to Assistant
-      const canHandleSupport =
-        !assistantPermissions ||
-        assistantPermissions.canHandleAcademicSupport ||
-        assistantPermissions.canHandleTechnicalSupport;
-
-      if (canHandleSupport) {
-        try {
-          const { data: tickets, error: tErr } = await supabase
-            .from('support_tickets')
-            .select('id, ticket_number, student_id, subject, description, ticket_type, status, created_at')
-            .order('created_at', { ascending: false })
-            .limit(20);
-
-          if (!tErr && tickets && tickets.length > 0) {
-            tickets.forEach((ticket: any) => {
-              // Filter by academic/technical permissions if restricted
-              if (assistantPermissions) {
-                if (ticket.ticket_type === 'academic' && !assistantPermissions.canHandleAcademicSupport) {
-                  return;
-                }
-                if (ticket.ticket_type === 'technical' && !assistantPermissions.canHandleTechnicalSupport) {
-                  return;
-                }
-              }
-
-              const notifId = `notif_asst_ticket_${ticket.id}`;
-              const sType = ticket.ticket_type === 'academic' ? 'أكاديمي' : 'فني';
-              notifs.push({
-                id: notifId,
-                type: 'support_ticket_new',
-                title: `تذكرة دعم موجهة لك (${sType}) 🎫`,
-                message: `استفسار جديد: "${ticket.subject}"`,
-                timestamp: ticket.created_at || new Date().toISOString(),
-                link: `/assistant/support?ticketId=${ticket.id}`,
-                ticketId: ticket.id,
-                isRead: readIds.has(notifId),
-                category: 'support',
-                badgeLabel: sType,
-              });
-            });
-          }
-        } catch (err) {
-          console.warn('Failed to load tickets for assistant:', err);
-        }
-      }
-
-
-      // 3.2 Pending Students (If assistant has student management permission)
-      if (assistantPermissions?.canManageStudents) {
-        try {
-          const { data: pendings } = await supabase
-            .from('profiles')
-            .select('id, full_name, phone, grade, created_at')
-            .eq('role', 'student')
-            .eq('status', 'pending_review')
-            .order('created_at', { ascending: false })
-            .limit(15);
-
-          if (pendings && pendings.length > 0) {
-            pendings.forEach((p: any) => {
-              const notifId = `notif_asst_pending_${p.id}`;
-              notifs.push({
-                id: notifId,
-                type: 'new_student_pending',
-                title: 'طلب انضمام طالب بانتظار المراجعة 👤',
-                message: `سجل الطالب "${p.full_name}" (${p.phone || ''}) وبانتظار الاعتماد.`,
-                timestamp: p.created_at || new Date().toISOString(),
-                link: `/assistant/students`,
-                isRead: readIds.has(notifId),
-                category: 'admin',
-                badgeLabel: 'مراجعة',
-              });
-            });
-          }
-        } catch (err) {
-          console.warn('Failed to load pending students for assistant:', err);
+          console.warn('Failed to load course items:', err);
         }
       }
     }
 
-    // Sort all notifications newest first
-    return notifs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  } catch (globalErr) {
-    console.error('Error in fetchUserNotifications:', globalErr);
-    return [];
+    return notifs.sort(
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+  } catch (err) {
+    console.error('Error aggregating notifications:', err);
+    return notifs;
   }
 }
