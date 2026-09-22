@@ -14,7 +14,7 @@ interface AuthContextType {
   deviceFingerprint: string;
   isDeviceBanned: boolean;
   isDeviceAlreadyRegistered: boolean;
-  loginWithCredentials: (email: string, pass: string) => Promise<{ success: boolean; message: string; requiresOtp?: boolean; studentId?: string }>;
+  loginWithCredentials: (email: string, pass: string) => Promise<{ success: boolean; message: string; requiresOtp?: boolean; studentId?: string; isPending?: boolean; student?: any }>;
   logout: () => void;
   registerStudent: (studentData: Partial<UserProfile> & { password?: string }) => Promise<{ success: boolean; message: string; requiresOtp?: boolean }>;
   verifyOtp: (otp: string) => boolean;
@@ -135,7 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // fallback defaults
   }
 
-  const loginWithCredentials = async (email: string, pass: string): Promise<{ success: boolean; message: string; requiresOtp?: boolean; studentId?: string }> => {
+  const loginWithCredentials = async (email: string, pass: string): Promise<{ success: boolean; message: string; requiresOtp?: boolean; studentId?: string; isPending?: boolean; student?: any }> => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanPass = pass.trim();
 
@@ -227,7 +227,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             await lockDevicePermanently((res as any).student);
           } catch {}
         }
-        return { success: false, message: res.message || 'طلبك قيد المراجعة لدى المعلم.' };
+        return { 
+          success: false, 
+          isPending: true, 
+          student: (res as any)?.student,
+          message: res.message || 'طلبك قيد المراجعة لدى مستر محمد رضوان.' 
+        };
       }
       
       // Fallback check for locally saved assistant credentials if server action couldn't find it

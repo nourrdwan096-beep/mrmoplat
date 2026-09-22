@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Mail, Lock, LogIn, ArrowRight } from 'lucide-react';
+import { Mail, Lock, LogIn, ArrowRight, Clock, CheckCircle2, Phone, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
 export default function LoginPage() {
@@ -15,6 +15,7 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [pendingStudent, setPendingStudent] = useState<any>(null);
   
   const [showOtp, setShowOtp] = useState(false);
   const [otpCode, setOtpCode] = useState('');
@@ -24,12 +25,14 @@ export default function LoginPage() {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
     if (error) setError('');
+    if (pendingStudent) setPendingStudent(null);
   };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccessMsg('');
+    setPendingStudent(null);
     
     if (!formData.email || !formData.password) {
       setError('الرجاء إدخال البريد الإلكتروني وكلمة المرور');
@@ -72,7 +75,11 @@ export default function LoginPage() {
           router.push('/');
         }
       } else {
-        setError(res.message);
+        if (res.isPending) {
+          setPendingStudent(res.student || { email: formData.email });
+        } else {
+          setError(res.message);
+        }
       }
     } catch (err: any) {
       setError(err.message || 'فشل تسجيل الدخول، تحقق من البيانات وحاول مرة أخرى');
@@ -195,6 +202,36 @@ export default function LoginPage() {
             </form>
           ) : (
             <form onSubmit={handleLogin} className="space-y-5">
+              {pendingStudent && (
+                <div className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 text-right space-y-3">
+                  <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-black text-sm">
+                    <Clock className="w-5 h-5 shrink-0 animate-pulse" />
+                    <span>طلب انضمامك لا يزال قيد المراجعة</span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 font-bold leading-relaxed">
+                    تم استلام طلب تسجيلك بنجاح باسم <span className="text-amber-600 dark:text-amber-400 font-black">{pendingStudent.fullName || formData.email}</span> وجاري مراجعته وتفعيله من قبل مستر محمد رضوان.
+                  </p>
+                  <div className="pt-2 flex flex-col sm:flex-row gap-2">
+                    <Link
+                      href="/register"
+                      className="flex-1 py-2.5 px-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>متابعة حالة الطلب في صفحة التسجيل</span>
+                    </Link>
+                    <a
+                      href="https://wa.me/201552191172"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Phone className="w-3.5 h-3.5" />
+                      <span>واتساب</span>
+                    </a>
+                  </div>
+                </div>
+              )}
+
               {error && (
                 <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 text-rose-600 dark:text-rose-400 text-sm font-bold text-center">
                   {error}
