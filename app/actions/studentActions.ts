@@ -356,6 +356,16 @@ export async function updateStudentStatusAction(
       } catch {}
     }
 
+    // If rejected, unbind primary_device_fingerprint and clear student_devices
+    // so the student can submit a corrected application without hardware conflict
+    if (status === 'rejected') {
+      await supabaseAdmin.from('student_devices').delete().eq('student_id', studentId);
+      await supabaseAdmin
+        .from('profiles')
+        .update({ primary_device_fingerprint: null })
+        .eq('id', studentId);
+    }
+
     return true;
   } catch (err) {
     console.error('Exception updating student status:', err);
@@ -441,6 +451,189 @@ export async function deleteStudentAction(studentId: string) {
   } catch (err: any) {
     console.error('Exception deleting student:', err);
     return { success: false, message: err.message || 'حدث خطأ أثناء حذف الطالب' };
+  }
+}
+
+/**
+ * Reset student hardware device lock allowing student to log in from a new device
+ * or re-bind their device without deleting their account or academic progress.
+ */
+export async function resetStudentDeviceLockAction(studentId: string) {
+  try {
+    const cleanId = (studentId || '').trim();
+    if (!cleanId) return { success: false, message: 'معرف الطالب غير صالح' };
+
+    // 1. Fetch student
+    const { data: student } = await supabaseAdmin
+      .from('profiles')
+      .select('id, primary_device_fingerprint, full_name, phone')
+      .eq('id', cleanId)
+      .maybeSingle();
+
+    if (!student) {
+      return { success: false, message: 'الطالب غير موجود' };
+    }
+
+    // 2. Fetch any registered devices to release any bans
+    const { data: registeredDevs } = await supabaseAdmin
+      .from('student_devices')
+      .select('device_fingerprint')
+      .eq('student_id', cleanId);
+
+    const fingerprintsToRelease = new Set<string>();
+    if (student.primary_device_fingerprint) {
+      fingerprintsToRelease.add(student.primary_device_fingerprint);
+    }
+    if (registeredDevs && registeredDevs.length > 0) {
+      registeredDevs.forEach(d => {
+        if (d.device_fingerprint) fingerprintsToRelease.add(d.device_fingerprint);
+      });
+    }
+
+    if (fingerprintsToRelease.size > 0) {
+      await supabaseAdmin
+        .from('banned_devices')
+        .delete()
+        .in('device_fingerprint', Array.from(fingerprintsToRelease));
+    }
+
+    // 3. Clear registered devices in student_devices
+    await supabaseAdmin.from('student_devices').delete().eq('student_id', cleanId);
+
+    // 4. Reset primary_device_fingerprint in profiles so device can be re-bound
+    await supabaseAdmin
+      .from('profiles')
+      .update({ 
+        primary_device_fingerprint: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', cleanId);
+
+    // 5. Audit Log
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_name: 'إدارة المنصة (المعلم)',
+        actor_role: 'teacher',
+        action_type: 'STUDENT_DEVICE_LOCK_RESET',
+        target_entity: 'profiles',
+        target_id: cleanId,
+        details: {
+          name: student.full_name,
+          phone: student.phone,
+          resetDevicesCount: fingerprintsToRelease.size,
+        },
+      }]);
+    } catch {}
+
+    return { success: true, message: 'تم فك قيد أجهزة الطالب بنجاح! يمكن للطالب الآن الدخول أو التسجيل مجدداً.' };
+  } catch (err: any) {
+    console.error('Exception resetting student device lock:', err);
+    return { success: false, message: err.message || 'حدث خطأ أثناء فك قيد الجهاز' };
+  }
+}
+
+/**
+ * Direct registration of a student by Teacher/Admin with custom credentials and instant activation
+ */
+export async function createStudentByTeacherAction(data: {
+  fullName: string;
+  email: string;
+  phone: string;
+  password: string;
+  stage: string;
+  grade: number;
+  educationType: string;
+  parentPhone?: string;
+}) {
+  try {
+    const cleanEmail = (data.email || '').trim().toLowerCase();
+    const cleanPhone = (data.phone || '').trim();
+    const cleanPass = (data.password || '').trim();
+
+    if (!data.fullName || !cleanEmail || !cleanPhone || !cleanPass) {
+      return { success: false, message: 'جميع البيانات الأساسية مطلوبة (الاسم، البريد، الهاتف، كلمة المرور)' };
+    }
+
+    // Check if email already exists
+    const { data: existingEmail } = await supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, email')
+      .eq('email', cleanEmail)
+      .maybeSingle();
+
+    if (existingEmail) {
+      return { success: false, message: `البريد الإلكتروني مسجل بالفعل باسم (${existingEmail.full_name})` };
+    }
+
+    // Check if phone already exists
+    const { data: existingPhone } = await supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, phone')
+      .eq('phone', cleanPhone)
+      .maybeSingle();
+
+    if (existingPhone) {
+      return { success: false, message: `رقم الهاتف مسجل بالفعل باسم (${existingPhone.full_name})` };
+    }
+
+    let carrier = 'Vodafone';
+    if (cleanPhone.startsWith('011')) carrier = 'Etisalat';
+    else if (cleanPhone.startsWith('012')) carrier = 'Orange';
+    else if (cleanPhone.startsWith('015')) carrier = 'WE';
+
+    const insertPayload = {
+      role: 'student',
+      full_name: data.fullName.trim(),
+      email: cleanEmail,
+      phone: cleanPhone,
+      parent_phone: data.parentPhone?.trim() || null,
+      phone_carrier: carrier,
+      password_hash: cleanPass,
+      encrypted_password_vault: cleanPass,
+      avatar_url: 'https://api.dicebear.com/7.x/bottts/svg?seed=' + encodeURIComponent(data.fullName),
+      stage: data.stage === 'middle' ? 'middle' : 'high',
+      education_type: data.educationType === 'azhar' ? 'azhar' : 'general',
+      grade: data.grade || 1,
+      status: 'active',
+      otp_verified: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data: insertedUser, error } = await supabaseAdmin
+      .from('profiles')
+      .insert([insertPayload])
+      .select('id, full_name, email, phone, stage, grade, status, encrypted_password_vault')
+      .single();
+
+    if (error) {
+      return { success: false, message: 'خطأ في قاعدة البيانات: ' + error.message };
+    }
+
+    // Audit Log
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_name: 'إدارة المنصة (المعلم)',
+        actor_role: 'teacher',
+        action_type: 'STUDENT_MANUAL_CREATED_BY_TEACHER',
+        target_entity: 'profiles',
+        target_id: insertedUser?.id,
+        details: {
+          name: data.fullName,
+          email: cleanEmail,
+          phone: cleanPhone,
+        },
+      }]);
+    } catch {}
+
+    return { 
+      success: true, 
+      student: insertedUser,
+      message: 'تم تسجيل وتفعيل حساب الطالب بنجاح' 
+    };
+  } catch (err: any) {
+    console.error('Exception creating student by teacher:', err);
+    return { success: false, message: err.message || 'حدث خطأ غير متوقع' };
   }
 }
 
@@ -557,6 +750,32 @@ async function verifyAndEnforceStudentDevice(
 
   let existingList = studentDevices || [];
 
+  // Check if student has unlimited devices exemption (e.g. Maryam Ezzedine or Lamees)
+  let hasUnlimitedDevicesExemption = false;
+  try {
+    const { data: profileCheck } = await supabaseAdmin
+      .from('profiles')
+      .select('email, full_name')
+      .eq('id', studentId)
+      .maybeSingle();
+
+    if (profileCheck) {
+      const emailLower = (profileCheck.email || '').toLowerCase();
+      const name = profileCheck.full_name || '';
+      if (
+        emailLower.includes('mariam') || 
+        emailLower.includes('maryam') || 
+        emailLower.includes('lamees') ||
+        name.includes('مريم') ||
+        name.includes('لميس')
+      ) {
+        hasUnlimitedDevicesExemption = true;
+      }
+    }
+  } catch (err) {
+    console.warn('Error checking unlimited devices exemption:', err);
+  }
+
   // Parse incoming device physical specs
   const incoming = parseDeviceTypeAndOs(cleanFp, deviceInfo?.name, deviceInfo?.browser);
 
@@ -643,8 +862,8 @@ async function verifyAndEnforceStudentDevice(
     };
   }
 
-  // 5. New Physical Device: Check 2-device limit
-  if (existingList.length >= 2) {
+  // 5. New Physical Device: Check 2-device limit (bypassed if exempted)
+  if (existingList.length >= 2 && !hasUnlimitedDevicesExemption) {
     return {
       allowed: false,
       maxDevicesReached: true,

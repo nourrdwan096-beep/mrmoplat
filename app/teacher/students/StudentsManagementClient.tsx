@@ -11,7 +11,7 @@ import {
   RotateCcw, X, MessageSquare, AlertCircle, RefreshCw, ChevronDown,
   Sparkles, ExternalLink, Plus
 } from 'lucide-react';
-import { fetchStudents, updateStudentStatus, deleteStudent, StudentProfile } from '@/lib/studentService';
+import { fetchStudents, updateStudentStatus, deleteStudent, resetStudentDeviceLock, createStudentByTeacher, StudentProfile } from '@/lib/studentService';
 import { sendMessage } from '@/lib/messagingService';
 import { 
   fetchAllCourses, 
@@ -74,6 +74,27 @@ export default function StudentsManagementClient() {
 
   // Photo Preview Modal State
   const [previewPhotoStudent, setPreviewPhotoStudent] = useState<StudentProfile | null>(null);
+
+  // Reset Device Modal State
+  const [resetDeviceTarget, setResetDeviceTarget] = useState<StudentProfile | null>(null);
+  const [isResettingDevice, setIsResettingDevice] = useState(false);
+  const [resetSuccessMessage, setResetSuccessMessage] = useState('');
+
+  // Add Student Modal State
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [newStudentForm, setNewStudentForm] = useState({
+    fullName: '',
+    email: '',
+    phone: '',
+    password: '',
+    stage: 'high',
+    grade: 1,
+    educationType: 'general',
+    parentPhone: '',
+  });
+  const [isCreatingStudent, setIsCreatingStudent] = useState(false);
+  const [createStudentError, setCreateStudentError] = useState('');
+  const [createdStudentSuccess, setCreatedStudentSuccess] = useState<any>(null);
 
   const refreshCaptcha = () => {
     setCaptchaCode(Math.floor(1000 + Math.random() * 9000).toString());
@@ -189,6 +210,50 @@ export default function StudentsManagementClient() {
       alert('حدث خطأ أثناء حذف الطالب وفك قيد الجهاز');
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const executeResetDevice = async () => {
+    if (!resetDeviceTarget) return;
+    setIsResettingDevice(true);
+    try {
+      const res = await resetStudentDeviceLock(resetDeviceTarget.id);
+      if (res.success) {
+        setResetSuccessMessage(`تم فك قيد أجهزة الطالب (${resetDeviceTarget.fullName}) بنجاح! يمكنه الآن الدخول من جهازه دون عوائق.`);
+        await loadStudents();
+      } else {
+        alert(res.message || 'حدث خطأ أثناء فك قيد الجهاز');
+      }
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ غير متوقع أثناء فك قيد الجهاز');
+    } finally {
+      setIsResettingDevice(false);
+    }
+  };
+
+  const handleCreateNewStudent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreateStudentError('');
+    setCreatedStudentSuccess(null);
+
+    if (!newStudentForm.fullName || !newStudentForm.email || !newStudentForm.phone || !newStudentForm.password) {
+      setCreateStudentError('يرجى تعبئة كافة الحقول الإلزامية');
+      return;
+    }
+
+    setIsCreatingStudent(true);
+    try {
+      const res = await createStudentByTeacher(newStudentForm);
+      if (res.success) {
+        setCreatedStudentSuccess(res.student);
+        await loadStudents();
+      } else {
+        setCreateStudentError(res.message || 'حدث خطأ أثناء تسجيل الطالب');
+      }
+    } catch (err: any) {
+      setCreateStudentError(err.message || 'حدث خطأ غير متوقع');
+    } finally {
+      setIsCreatingStudent(false);
     }
   };
 
@@ -425,6 +490,13 @@ export default function StudentsManagementClient() {
           >
             حظر الجهاز
           </button>
+          <button 
+            onClick={() => { setResetDeviceTarget(student); setResetSuccessMessage(''); }}
+            className="px-3 py-2 bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 hover:bg-amber-100 rounded-xl font-bold text-xs transition-colors flex items-center gap-1"
+            title="فك قيد الجهاز"
+          >
+            <RotateCcw className="w-3.5 h-3.5" /> فك قيد الجهاز
+          </button>
         </div>
 
         <button 
@@ -467,9 +539,16 @@ export default function StudentsManagementClient() {
         </div>
         <div className="flex items-center gap-1">
           <button 
+            onClick={() => { setResetDeviceTarget(student); setResetSuccessMessage(''); }}
+            className="p-2 text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/30 rounded-xl transition-colors"
+            title="فك قيد الجهاز وإتاحة الدخول من جهاز جديد"
+          >
+            <RotateCcw className="w-5 h-5" />
+          </button>
+          <button 
             onClick={() => confirmDeleteSingle(student.id, student.fullName)} 
             className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors"
-            title="حذف وفك قيد الجهاز"
+            title="حذف وفك قيد الجهاز نهائياً"
           >
             <Trash2 className="w-5 h-5" />
           </button>
@@ -606,16 +685,40 @@ export default function StudentsManagementClient() {
           <p className="text-slate-500 dark:text-slate-400 font-bold mt-1">التحكم الكامل في تسجيلات الطلاب والبيانات الحساسة</p>
         </div>
         
-        {/* Search */}
-        <div className="relative w-full md:w-72">
-          <input 
-            type="text" 
-            placeholder="ابحث عن طالب..." 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl pl-4 pr-11 py-3 text-sm font-bold focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition-all"
-          />
-          <Search className="w-5 h-5 text-slate-400 absolute right-4 top-1/2 -translate-y-1/2" />
+        {/* Actions & Search */}
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => {
+              setShowAddStudentModal(true);
+              setCreateStudentError('');
+              setCreatedStudentSuccess(null);
+              setNewStudentForm({
+                fullName: '',
+                email: '',
+                phone: '',
+                password: '',
+                stage: 'high',
+                grade: 1,
+                educationType: 'general',
+                parentPhone: '',
+              });
+            }}
+            className="px-4 py-3 bg-violet-600 hover:bg-violet-700 text-white rounded-2xl font-black text-sm flex items-center gap-2 transition-all shadow-md shadow-violet-600/20"
+          >
+            <Plus className="w-4 h-4" />
+            <span>تسجيل طالب يدوي استثنائي</span>
+          </button>
+
+          <div className="relative w-full md:w-64">
+            <input 
+              type="text" 
+              placeholder="ابحث عن طالب..." 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl pl-4 pr-11 py-3 text-sm font-bold focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition-all"
+            />
+            <Search className="w-5 h-5 text-slate-400 absolute right-4 top-1/2 -translate-y-1/2" />
+          </div>
         </div>
       </div>
 
@@ -1283,6 +1386,280 @@ export default function StudentsManagementClient() {
               >
                 إغلاق المعاينة
               </button>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Reset Device Lock Modal */}
+        {resetDeviceTarget && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl relative"
+            >
+              <button 
+                type="button" 
+                onClick={() => { setResetDeviceTarget(null); setResetSuccessMessage(''); }}
+                className="absolute top-4 left-4 p-2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 flex items-center justify-center mb-4">
+                <RotateCcw className="w-6 h-6" />
+              </div>
+
+              <h3 className="text-lg font-black text-slate-900 dark:text-white mb-2">
+                فك قيد أجهزة الطالب
+              </h3>
+
+              {resetSuccessMessage ? (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold leading-relaxed flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-600" />
+                    <span>{resetSuccessMessage}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setResetDeviceTarget(null); setResetSuccessMessage(''); }}
+                    className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-black transition-colors"
+                  >
+                    تم، إغلاق
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed font-bold">
+                    هل ترغب في فك قيد أجهزة الطالب <span className="text-violet-600 dark:text-violet-400 font-black">{resetDeviceTarget.fullName}</span>؟
+                    <br />
+                    <span className="text-slate-400 font-normal mt-1 block">
+                      هذا الإجراء يسمح للطالب بتسجيل الدخول من جهاز جديد أو إعادة تعيين جهازه دون حذف حسابه أو درجاته وكورساته.
+                    </span>
+                  </p>
+
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl text-xs space-y-1 font-mono">
+                    <div className="flex justify-between text-slate-500 font-sans">
+                      <span>رقم الهاتف:</span>
+                      <span className="font-bold text-slate-900 dark:text-white" dir="ltr">{resetDeviceTarget.phone}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500 font-sans">
+                      <span>البريد:</span>
+                      <span className="font-bold text-slate-900 dark:text-white" dir="ltr">{resetDeviceTarget.email}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={executeResetDevice}
+                      disabled={isResettingDevice}
+                      className="flex-1 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-md shadow-amber-600/20 disabled:opacity-50"
+                    >
+                      {isResettingDevice ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+                      <span>تأكيد فك قيد الجهاز</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResetDeviceTarget(null)}
+                      disabled={isResettingDevice}
+                      className="px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+
+        {/* Add Student Exception Modal */}
+        {showAddStudentModal && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 max-w-lg w-full shadow-2xl relative max-h-[90vh] overflow-y-auto"
+            >
+              <button 
+                type="button" 
+                onClick={() => { setShowAddStudentModal(false); setCreatedStudentSuccess(null); }}
+                className="absolute top-4 left-4 p-2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 rounded-2xl bg-violet-100 dark:bg-violet-900/30 text-violet-600 dark:text-violet-400 flex items-center justify-center">
+                  <Plus className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                    تسجيل وتفعيل طالب استثنائي
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    إنشاء حساب فوري ومفعل مباشرة بدون انتظار موافقة أو قيود أجهزة مسبقة
+                  </p>
+                </div>
+              </div>
+
+              {createdStudentSuccess ? (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold leading-relaxed space-y-2">
+                    <div className="flex items-center gap-2 font-black text-sm">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <span>تم إنشاء الحساب وتفعيله بنجاح!</span>
+                    </div>
+                    <p>يمكن للطالب الآن تسجيل الدخول مباشرة من صفحة الدخول بالبيانات التالية:</p>
+                    <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-emerald-300 dark:border-emerald-800/80 space-y-1.5 font-mono text-xs">
+                      <div><span className="font-sans text-slate-500">الاسم:</span> <span className="font-bold text-slate-900 dark:text-white">{createdStudentSuccess.full_name}</span></div>
+                      <div><span className="font-sans text-slate-500">البريد:</span> <span className="font-bold text-slate-900 dark:text-white" dir="ltr">{createdStudentSuccess.email}</span></div>
+                      <div><span className="font-sans text-slate-500">كلمة المرور:</span> <span className="font-bold text-slate-900 dark:text-white" dir="ltr">{createdStudentSuccess.encrypted_password_vault}</span></div>
+                      <div><span className="font-sans text-slate-500">الهاتف:</span> <span className="font-bold text-slate-900 dark:text-white" dir="ltr">{createdStudentSuccess.phone}</span></div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => { setShowAddStudentModal(false); setCreatedStudentSuccess(null); }}
+                    className="w-full py-3 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-black transition-colors"
+                  >
+                    إغلاق والعودة للقائمة
+                  </button>
+                </div>
+              ) : (
+                <form onSubmit={handleCreateNewStudent} className="space-y-4">
+                  {createStudentError && (
+                    <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-300 text-xs font-bold border border-rose-200 dark:border-rose-900">
+                      {createStudentError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">اسم الطالب الرباعي</label>
+                    <input 
+                      type="text"
+                      required
+                      value={newStudentForm.fullName}
+                      onChange={(e) => setNewStudentForm(prev => ({ ...prev, fullName: e.target.value }))}
+                      placeholder="مثال: لميس أحمد محمود"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">البريد الإلكتروني</label>
+                      <input 
+                        type="email"
+                        required
+                        dir="ltr"
+                        value={newStudentForm.email}
+                        onChange={(e) => setNewStudentForm(prev => ({ ...prev, email: e.target.value }))}
+                        placeholder="student@example.com"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-violet-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">كلمة المرور</label>
+                      <input 
+                        type="text"
+                        required
+                        dir="ltr"
+                        value={newStudentForm.password}
+                        onChange={(e) => setNewStudentForm(prev => ({ ...prev, password: e.target.value }))}
+                        placeholder="كلمة مرور قوية"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-violet-500 font-mono"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">رقم الهاتف</label>
+                      <input 
+                        type="tel"
+                        required
+                        dir="ltr"
+                        value={newStudentForm.phone}
+                        onChange={(e) => setNewStudentForm(prev => ({ ...prev, phone: e.target.value }))}
+                        placeholder="01XXXXXXXXX"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-violet-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">هاتف ولي الأمر (اختياري)</label>
+                      <input 
+                        type="tel"
+                        dir="ltr"
+                        value={newStudentForm.parentPhone}
+                        onChange={(e) => setNewStudentForm(prev => ({ ...prev, parentPhone: e.target.value }))}
+                        placeholder="01XXXXXXXXX"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-violet-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">المرحلة</label>
+                      <select
+                        value={newStudentForm.stage}
+                        onChange={(e) => setNewStudentForm(prev => ({ ...prev, stage: e.target.value }))}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2 py-2 text-xs font-bold text-slate-900 dark:text-white outline-none"
+                      >
+                        <option value="high">الثانوية</option>
+                        <option value="middle">الإعدادية</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">الصف</label>
+                      <select
+                        value={newStudentForm.grade}
+                        onChange={(e) => setNewStudentForm(prev => ({ ...prev, grade: Number(e.target.value) }))}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2 py-2 text-xs font-bold text-slate-900 dark:text-white outline-none"
+                      >
+                        <option value={1}>الأول</option>
+                        <option value={2}>الثاني</option>
+                        <option value={3}>الثالث</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 dark:text-slate-400 mb-1">نوع التعليم</label>
+                      <select
+                        value={newStudentForm.educationType}
+                        onChange={(e) => setNewStudentForm(prev => ({ ...prev, educationType: e.target.value }))}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2 py-2 text-xs font-bold text-slate-900 dark:text-white outline-none"
+                      >
+                        <option value="general">عام</option>
+                        <option value="azhar">أزهر</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-3">
+                    <button
+                      type="submit"
+                      disabled={isCreatingStudent}
+                      className="flex-1 py-3 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-md shadow-violet-600/20 disabled:opacity-50"
+                    >
+                      {isCreatingStudent ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                      <span>إنشاء وتفعيل الحساب فوراً</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddStudentModal(false)}
+                      disabled={isCreatingStudent}
+                      className="px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700"
+                    >
+                      إلغاء
+                    </button>
+                  </div>
+                </form>
+              )}
             </motion.div>
           </div>
         )}

@@ -3,6 +3,8 @@ import {
   fetchStudentsAction, 
   updateStudentStatusAction, 
   deleteStudentAction,
+  resetStudentDeviceLockAction,
+  createStudentByTeacherAction,
   registerStudentAction,
   checkDeviceStatusAction 
 } from '@/app/actions/studentActions';
@@ -41,6 +43,23 @@ export async function updateStudentStatus(
 
 export async function deleteStudent(studentId: string) {
   return await deleteStudentAction(studentId);
+}
+
+export async function resetStudentDeviceLock(studentId: string) {
+  return await resetStudentDeviceLockAction(studentId);
+}
+
+export async function createStudentByTeacher(data: {
+  fullName: string;
+  email: string;
+  phone: string;
+  password: string;
+  stage: string;
+  grade: number;
+  educationType: string;
+  parentPhone?: string;
+}) {
+  return await createStudentByTeacherAction(data);
 }
 
 export async function checkDeviceStatus(

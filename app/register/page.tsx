@@ -42,7 +42,8 @@ import {
   HelpCircle,
   Radio,
   LogOut,
-  GraduationCap
+  GraduationCap,
+  RotateCcw
 } from 'lucide-react';
 
 interface DeviceStatusInfo {
@@ -751,8 +752,11 @@ export default function RegisterPage() {
                   </a>
                 </div>
 
-                {/* Reset device lock if student was deleted or wants to re-register */}
-                <div className="pt-2 text-center">
+                {/* Reset device lock if student was deleted, rejected, or wants to re-register */}
+                <div className="pt-3 border-t border-slate-800 text-center space-y-2">
+                  <p className="text-xs text-slate-400">
+                    هل مسح المعلم حسابك أو ترغب في البدء من جديد بتسجيل جديد؟
+                  </p>
                   <button
                     type="button"
                     onClick={async () => {
@@ -764,9 +768,10 @@ export default function RegisterPage() {
                       } catch {}
                       setIsCheckingDevice(false);
                     }}
-                    className="text-xs font-bold text-slate-400 hover:text-amber-400 transition-colors underline decoration-slate-600 underline-offset-4"
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-800/80 hover:bg-slate-700 text-amber-400 hover:text-amber-300 rounded-xl text-xs font-bold transition-all border border-amber-500/20 hover:border-amber-500/40 shadow-sm"
                   >
-                    إذا تم مسح حسابك من قبل المعلم أو تريد إنشاء حساب جديد، اضغط هنا لإعادة ضبط الجهاز
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>إلغاء قيد هذا الجهاز وبدء تسجيل جديد فوراً</span>
                   </button>
                 </div>
               </div>
