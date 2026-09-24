@@ -43,8 +43,17 @@ import {
   Radio,
   LogOut,
   GraduationCap,
-  RotateCcw
+  RotateCcw,
+  Eye,
+  EyeOff
 } from 'lucide-react';
+import { 
+  normalizeEasternArabicDigits, 
+  cleanEgyptianPhone, 
+  cleanArabicText, 
+  validateEgyptianPhone, 
+  validateArabicName 
+} from '@/lib/utils';
 
 interface DeviceStatusInfo {
   isRegistered: boolean;
@@ -111,6 +120,8 @@ export default function RegisterPage() {
 
   const [generatedCaptcha, setGeneratedCaptcha] = useState(() => Math.floor(1000 + Math.random() * 9000).toString());
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -293,9 +304,20 @@ export default function RegisterPage() {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
+    let cleanVal = value;
+
+    if (name === 'phone' || name === 'parentPhone') {
+      cleanVal = cleanEgyptianPhone(value);
+    } else if (name === 'email') {
+      cleanVal = normalizeEasternArabicDigits(value).trim().toLowerCase();
+    } else if (name === 'captchaCode') {
+      cleanVal = normalizeEasternArabicDigits(value).trim();
+    } else if (name === 'firstName' || name === 'secondName' || name === 'thirdName' || name === 'lastName') {
+      cleanVal = cleanArabicText(value);
+    }
     
     setFormData(prev => {
-      const updated = { ...prev, [name]: value };
+      const updated = { ...prev, [name]: cleanVal };
       if (name === 'stage') {
         updated.educationType = '';
       }
@@ -307,42 +329,12 @@ export default function RegisterPage() {
     }
   };
 
-  const validateArabicName = (name: string) => {
-    const trimmed = name.trim();
-    if (!trimmed) return false;
-    
-    // 1. Only Arabic letters and spaces
-    if (!/^[\u0621-\u064A\s]{2,}$/.test(trimmed)) return false;
-
-    // 2. Prevent 3 or more consecutive identical characters
-    if (/(.)\1{2,}/.test(trimmed)) return false;
-
-    // 3. Prevent names consisting of only one repeated letter
-    const uniqueChars = new Set(trimmed.replace(/\s/g, '').split(''));
-    if (uniqueChars.size < 2) return false;
-
-    // 4. Prevent common keyboard smashes
-    const keyboardSmashes = ['شسيب', 'ضصثق', 'ظزوة', 'يسبش', 'قثصض', 'ةوزظ', 'غفقث', 'ثقفغ', 'صثقف', 'فقثص'];
-    for (const smash of keyboardSmashes) {
-      if (trimmed.includes(smash)) return false;
-    }
-
-    return true;
-  };
-
-  const validateEgyptianPhone = (phone: string) => {
-    // 11 digits starting with 010, 011, 012, or 015
-    if (!/^01[0125][0-9]{8}$/.test(phone)) return false;
-    // Prevent exactly identical 8 digits like 01111111111
-    if (/^01[0125](\d)\1{7}$/.test(phone)) return false;
-    return true;
-  };
-
   const detectCarrier = (phone: string) => {
-    if (phone.startsWith('010')) return 'فودافون (Vodafone)';
-    if (phone.startsWith('011')) return 'اتصالات (Etisalat e&)';
-    if (phone.startsWith('012')) return 'أورنچ (Orange)';
-    if (phone.startsWith('015')) return 'وي (WE)';
+    const cleaned = cleanEgyptianPhone(phone);
+    if (cleaned.startsWith('010')) return 'فودافون (Vodafone)';
+    if (cleaned.startsWith('011')) return 'اتصالات (Etisalat e&)';
+    if (cleaned.startsWith('012')) return 'أورنچ (Orange)';
+    if (cleaned.startsWith('015')) return 'وي (WE)';
     return '';
   };
 
@@ -370,7 +362,8 @@ export default function RegisterPage() {
     }
 
     if (step === 3) {
-      if (formData.captchaCode !== generatedCaptcha) {
+      const cleanCaptchaInput = normalizeEasternArabicDigits(formData.captchaCode).trim();
+      if (cleanCaptchaInput !== generatedCaptcha) {
         newErrors.captchaCode = 'الرمز غير صحيح، يرجى كتابة الأرقام الظاهرة بدقة';
         generateNewCaptcha();
       }
@@ -402,12 +395,10 @@ export default function RegisterPage() {
             return;
           }
           if (contactCheck.student) {
-            await lockDevicePermanently(contactCheck.student);
-            setDeviceStatus({
-              isRegistered: true,
-              isBanned: contactCheck.student.status === 'banned',
-              student: contactCheck.student
-            });
+            setErrors(prev => ({ 
+              ...prev, 
+              phone: `رقم الهاتف مسجل بالفعل بالمنصة باسم (${contactCheck.student.fullName}). إذا كان هذا حسابك، يرجى الانتقال لصفحة تسجيل الدخول.` 
+            }));
             setIsCheckingContact(false);
             return;
           }
@@ -431,12 +422,10 @@ export default function RegisterPage() {
             return;
           }
           if (contactCheck.student) {
-            await lockDevicePermanently(contactCheck.student);
-            setDeviceStatus({
-              isRegistered: true,
-              isBanned: contactCheck.student.status === 'banned',
-              student: contactCheck.student
-            });
+            setErrors(prev => ({ 
+              ...prev, 
+              email: `البريد الإلكتروني مسجل بالفعل باسم (${contactCheck.student.fullName}). يرجى تسجيل الدخول بحسابك.` 
+            }));
             setIsCheckingContact(false);
             return;
           }
@@ -499,7 +488,7 @@ export default function RegisterPage() {
         return;
       }
       try {
-        const compressed = await compressImageToDataUrl(file, 640, 0.85);
+        const compressed = await compressImageToDataUrl(file, 480, 0.75);
         setPhotoPreview(compressed);
         if (errors.photo) setErrors(prev => ({ ...prev, photo: '' }));
       } catch {
@@ -1297,14 +1286,22 @@ export default function RegisterPage() {
                     <div className="relative">
                       <Lock className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                       <input 
-                        type="password"
+                        type={showPassword ? 'text' : 'password'}
                         name="password"
                         dir="ltr"
                         value={formData.password}
                         onChange={handleInputChange}
-                        className={`w-full text-left pl-4 pr-11 py-3.5 bg-slate-900 border ${errors.password ? 'border-rose-500' : 'border-slate-800'} rounded-2xl text-white font-bold focus:ring-2 focus:ring-emerald-500 outline-none text-sm`}
+                        className={`w-full text-left pl-11 pr-11 py-3.5 bg-slate-900 border ${errors.password ? 'border-rose-500' : 'border-slate-800'} rounded-2xl text-white font-bold focus:ring-2 focus:ring-emerald-500 outline-none text-sm`}
                         placeholder="••••••••"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(prev => !prev)}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-emerald-400 transition-colors focus:outline-none"
+                        title={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
                     </div>
                     {errors.password && <p className="text-[11px] text-rose-400 font-bold">{errors.password}</p>}
                   </div>
@@ -1314,14 +1311,22 @@ export default function RegisterPage() {
                     <div className="relative">
                       <ShieldCheck className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                       <input 
-                        type="password"
+                        type={showConfirmPassword ? 'text' : 'password'}
                         name="confirmPassword"
                         dir="ltr"
                         value={formData.confirmPassword}
                         onChange={handleInputChange}
-                        className={`w-full text-left pl-4 pr-11 py-3.5 bg-slate-900 border ${errors.confirmPassword ? 'border-rose-500' : 'border-slate-800'} rounded-2xl text-white font-bold focus:ring-2 focus:ring-emerald-500 outline-none text-sm`}
+                        className={`w-full text-left pl-11 pr-11 py-3.5 bg-slate-900 border ${errors.confirmPassword ? 'border-rose-500' : 'border-slate-800'} rounded-2xl text-white font-bold focus:ring-2 focus:ring-emerald-500 outline-none text-sm`}
                         placeholder="••••••••"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPassword(prev => !prev)}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-emerald-400 transition-colors focus:outline-none"
+                        title={showConfirmPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                      >
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
                     </div>
                     {errors.confirmPassword && <p className="text-[11px] text-rose-400 font-bold">{errors.confirmPassword}</p>}
                   </div>

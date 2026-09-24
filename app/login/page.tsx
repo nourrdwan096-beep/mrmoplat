@@ -4,14 +4,16 @@ import React, { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Mail, Lock, LogIn, ArrowRight, Clock, CheckCircle2, Phone, RefreshCw } from 'lucide-react';
+import { Mail, Lock, LogIn, ArrowRight, Clock, CheckCircle2, Phone, RefreshCw, Eye, EyeOff, ShieldAlert, Smartphone } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { normalizeEasternArabicDigits } from '@/lib/utils';
 
 export default function LoginPage() {
   const router = useRouter();
   const { loginWithCredentials } = useAuth();
 
   const [formData, setFormData] = useState({ email: '', password: '' });
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
@@ -23,7 +25,8 @@ export default function LoginPage() {
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    const cleanVal = name === 'email' ? normalizeEasternArabicDigits(value).trim() : value;
+    setFormData(prev => ({ ...prev, [name]: cleanVal }));
     if (error) setError('');
     if (pendingStudent) setPendingStudent(null);
   };
@@ -34,14 +37,17 @@ export default function LoginPage() {
     setSuccessMsg('');
     setPendingStudent(null);
     
-    if (!formData.email || !formData.password) {
-      setError('الرجاء إدخال البريد الإلكتروني وكلمة المرور');
+    const cleanEmail = normalizeEasternArabicDigits(formData.email).trim();
+    const cleanPass = formData.password.trim();
+
+    if (!cleanEmail || !cleanPass) {
+      setError('الرجاء إدخال البريد الإلكتروني أو رقم الهاتف وكلمة المرور');
       return;
     }
 
     setIsLoading(true);
     try {
-      const res = await loginWithCredentials(formData.email, formData.password);
+      const res = await loginWithCredentials(cleanEmail, cleanPass);
       
       if (res.success) {
         if (res.requiresOtp && res.studentId) {
@@ -240,20 +246,25 @@ export default function LoginPage() {
 
             <div className="space-y-1.5">
               <label className="text-sm font-bold text-slate-700 dark:text-slate-300 ml-1 block">
-                البريد الإلكتروني
+                البريد الإلكتروني أو رقم الهاتف المسجل
               </label>
               <div className="relative">
                 <input
-                  type="email"
+                  type="text"
+                  inputMode="email"
                   name="email"
                   value={formData.email}
                   onChange={handleInputChange}
-                  placeholder="example@domain.com"
+                  placeholder="010xxxxxxxx أو student@example.com"
                   dir="ltr"
                   className="w-full pl-11 pr-4 py-3.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-medium text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 transition-all text-left"
                 />
                 <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                  <Mail className="w-5 h-5" />
+                  {formData.email && !formData.email.includes('@') ? (
+                    <Phone className="w-5 h-5 text-emerald-500" />
+                  ) : (
+                    <Mail className="w-5 h-5" />
+                  )}
                 </div>
               </div>
             </div>
@@ -264,16 +275,24 @@ export default function LoginPage() {
               </label>
               <div className="relative">
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   name="password"
                   value={formData.password}
                   onChange={handleInputChange}
                   placeholder="••••••••"
                   dir="ltr"
-                  className="w-full pl-11 pr-4 py-3.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-medium text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 transition-all text-left"
+                  className="w-full pl-20 pr-4 py-3.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-medium text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 transition-all text-left"
                 />
-                <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                  <Lock className="w-5 h-5" />
+                <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(prev => !prev)}
+                    className="text-slate-400 hover:text-violet-500 transition-colors focus:outline-none"
+                    title={showPassword ? 'إخفاء كلمة المرور' : 'إظهار كلمة المرور'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                  <Lock className="w-4 h-4 text-slate-400" />
                 </div>
               </div>
             </div>

@@ -1,6 +1,7 @@
 'use server';
 
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { normalizeEasternArabicDigits, cleanEgyptianPhone } from '@/lib/utils';
 
 export async function checkDeviceStatusAction(
   deviceFingerprint: string, 
@@ -11,8 +12,8 @@ export async function checkDeviceStatusAction(
 ) {
   try {
     const cleanFp = (deviceFingerprint || '').trim();
-    const cleanEmail = (email || '').trim().toLowerCase();
-    const cleanPhone = (phone || '').trim();
+    const cleanEmail = normalizeEasternArabicDigits(email || '').trim().toLowerCase();
+    const cleanPhone = cleanEgyptianPhone(phone || '');
     const cleanStudentId = (studentId || '').trim();
 
     // Consolidate all fingerprint candidates into a unique array
@@ -726,7 +727,11 @@ async function verifyAndEnforceStudentDevice(
   cleanFp: string,
   deviceInfo?: { name?: string; browser?: string }
 ): Promise<{ allowed: boolean; isPrimary?: boolean; maxDevicesReached?: boolean; isBanned?: boolean; message?: string }> {
-  // 1. Is device banned?
+  if (!cleanFp) {
+    return { allowed: true, isPrimary: true };
+  }
+
+  // 1. Is device banned in banned_devices?
   const { data: bannedCheck } = await supabaseAdmin
     .from('banned_devices')
     .select('id, reason')
@@ -741,16 +746,48 @@ async function verifyAndEnforceStudentDevice(
     };
   }
 
-  // 2. Fetch existing devices for this student
-  const { data: studentDevices } = await supabaseAdmin
+  // 2. Strict Cross-Account Protection: Is this device already tied to a DIFFERENT active/pending student?
+  const { data: collisionDevices } = await supabaseAdmin
     .from('student_devices')
-    .select('*')
-    .eq('student_id', studentId)
-    .order('is_primary', { ascending: false });
+    .select('student_id')
+    .eq('device_fingerprint', cleanFp)
+    .neq('student_id', studentId)
+    .limit(1);
 
-  let existingList = studentDevices || [];
+  if (collisionDevices && collisionDevices.length > 0) {
+    const otherStudentId = collisionDevices[0].student_id;
+    const { data: otherProfile } = await supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, role, status')
+      .eq('id', otherStudentId)
+      .maybeSingle();
 
-  // Check if student has unlimited devices exemption (e.g. Maryam Ezzedine or Lamees)
+    if (otherProfile && otherProfile.role === 'student' && otherProfile.status !== 'rejected') {
+      return {
+        allowed: false,
+        message: `عذراً، هذا الجهاز مسجل بالفعل لحساب طالب آخر (${otherProfile.full_name}). تمنع سياسات المنصة الصارمة فتح أكثر من حساب على نفس الجهاز لمنع التلاعب وسرقة البيانات.`
+      };
+    }
+  }
+
+  // Also check primary_device_fingerprint in profiles for a different student
+  const { data: collisionProfiles } = await supabaseAdmin
+    .from('profiles')
+    .select('id, full_name, role, status')
+    .eq('role', 'student')
+    .eq('primary_device_fingerprint', cleanFp)
+    .neq('id', studentId)
+    .neq('status', 'rejected')
+    .limit(1);
+
+  if (collisionProfiles && collisionProfiles.length > 0) {
+    return {
+      allowed: false,
+      message: `عذراً، هذا الجهاز مسجل كجهاز أساسي لحساب طالب آخر (${collisionProfiles[0].full_name}). لا يمكن استخدامه بحساب آخر.`
+    };
+  }
+
+  // 3. Check student exemption for unlimited devices
   let hasUnlimitedDevicesExemption = false;
   try {
     const { data: profileCheck } = await supabaseAdmin
@@ -776,40 +813,20 @@ async function verifyAndEnforceStudentDevice(
     console.warn('Error checking unlimited devices exemption:', err);
   }
 
-  // Parse incoming device physical specs
-  const incoming = parseDeviceTypeAndOs(cleanFp, deviceInfo?.name, deviceInfo?.browser);
+  // 4. Fetch existing devices for THIS student
+  const { data: studentDevices } = await supabaseAdmin
+    .from('student_devices')
+    .select('*')
+    .eq('student_id', studentId)
+    .order('is_primary', { ascending: false });
 
-  // 3. Find if this exact fingerprint or same physical device already exists
+  let existingList = studentDevices || [];
+
+  // 5. Check if this exact device fingerprint already exists for this student
   let matchedDevice = existingList.find((d: any) => d.device_fingerprint === cleanFp);
 
-  if (!matchedDevice) {
-    // Check if any existing record is the SAME physical device category & OS (e.g. was previously opened in another browser on this phone)
-    matchedDevice = existingList.find((d: any) => {
-      const existing = parseDeviceTypeAndOs(d.device_fingerprint, d.device_name, d.browser_info);
-      return existing.type === incoming.type && existing.os === incoming.os;
-    });
-
-    if (matchedDevice) {
-      // Update its fingerprint to the unified physical fingerprint!
-      await supabaseAdmin
-        .from('student_devices')
-        .update({
-          device_fingerprint: cleanFp,
-          device_name: deviceInfo?.name || matchedDevice.device_name,
-          browser_info: deviceInfo?.browser || matchedDevice.browser_info,
-          last_active: new Date().toISOString(),
-        })
-        .eq('id', matchedDevice.id);
-
-      if (matchedDevice.is_primary) {
-        await supabaseAdmin
-          .from('profiles')
-          .update({ primary_device_fingerprint: cleanFp })
-          .eq('id', studentId);
-      }
-    }
-  } else {
-    // Exact match: update last active
+  if (matchedDevice) {
+    // Update last active
     await supabaseAdmin
       .from('student_devices')
       .update({
@@ -818,60 +835,23 @@ async function verifyAndEnforceStudentDevice(
         last_active: new Date().toISOString(),
       })
       .eq('id', matchedDevice.id);
-  }
 
-  // 4. Consolidate any redundant duplicate records from earlier multi-browser testing on the same physical device!
-  if (existingList.length > 1) {
-    const devicesByPhysical = new Map<string, any>();
-    const redundantIdsToDelete: string[] = [];
-
-    for (const d of existingList) {
-      const parsed = parseDeviceTypeAndOs(d.device_fingerprint, d.device_name, d.browser_info);
-      const key = `${parsed.type}_${parsed.os}`;
-      if (!devicesByPhysical.has(key)) {
-        devicesByPhysical.set(key, d);
-      } else {
-        // Redundant duplicate! If current is not primary, delete it
-        if (!d.is_primary) {
-          redundantIdsToDelete.push(d.id);
-        } else {
-          // Current is primary, delete the previously stored non-primary
-          const prev = devicesByPhysical.get(key);
-          if (prev && !prev.is_primary) {
-            redundantIdsToDelete.push(prev.id);
-            devicesByPhysical.set(key, d);
-          }
-        }
-      }
-    }
-
-    if (redundantIdsToDelete.length > 0) {
-      await supabaseAdmin
-        .from('student_devices')
-        .delete()
-        .in('id', redundantIdsToDelete);
-
-      existingList = existingList.filter((d: any) => !redundantIdsToDelete.includes(d.id));
-    }
-  }
-
-  if (matchedDevice) {
     return {
       allowed: true,
       isPrimary: Boolean(matchedDevice.is_primary),
     };
   }
 
-  // 5. New Physical Device: Check 2-device limit (bypassed if exempted)
+  // 6. New device for this student: Enforce max 2 devices limit
   if (existingList.length >= 2 && !hasUnlimitedDevicesExemption) {
     return {
       allowed: false,
       maxDevicesReached: true,
-      message: 'عذراً، لقد بلغت الحد الأقصى للأجهزة المصرح بها لحسابك (جهازين فقط). لا يمكن فتح الحساب على جهاز ثالث. يرجى الدخول من أحد جهازيك المسجلين، أو إزالة الجهاز الثاني من صفحة "أجهزتي المسجلة" لإتاحة هذا الجهاز.',
+      message: 'عذراً، لقد بلغت الحد الأقصى للأجهزة المصرح بها لحسابك (جهازين فقط). لا يمكن فتح الحساب على جهاز ثالث. يرجى الدخول من أحد جهازيك المسجلين، أو إزالة الجهاز الثاني من صفحة إعدادات الحساب لإتاحة هذا الجهاز.',
     };
   }
 
-  // 6. Register as new physical device
+  // 7. Register as authorized device for this student
   const isPrimary = (existingList.length === 0);
   const finalDeviceName = deviceInfo?.name || (isPrimary ? 'الجهاز الأساسي (مثبت)' : 'الجهاز الثاني');
   const finalBrowser = deviceInfo?.browser || '';
@@ -899,29 +879,70 @@ async function verifyAndEnforceStudentDevice(
 }
 
 export async function loginAction(
-  email: string, 
+  emailOrPhone: string, 
   pass: string, 
   deviceFingerprint?: string,
   deviceInfo?: { name?: string; browser?: string }
 ) {
   try {
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPass = pass.trim();
-    const cleanFp = deviceFingerprint?.trim();
+    const rawIdentifier = (emailOrPhone || '').trim();
+    const normalizedIdentifier = normalizeEasternArabicDigits(rawIdentifier);
+    const cleanEmail = normalizedIdentifier.toLowerCase();
+    const cleanPhone = cleanEgyptianPhone(normalizedIdentifier);
+    const cleanPass = (pass || '').trim();
+    const cleanFp = (deviceFingerprint || '').trim();
     
-    const { data: user, error } = await supabaseAdmin
-      .from('profiles')
-      .select('*')
-      .eq('email', cleanEmail)
-      .maybeSingle();
-
-    if (error || !user) {
-      return { success: false, message: 'البريد الإلكتروني غير مسجل بالمنصة. يرجى مراجعة إدارة المنصة أو إنشاء حساب جديد للطلاب.' };
+    if (!rawIdentifier || !cleanPass) {
+      return { success: false, message: 'الرجاء إدخال البريد الإلكتروني أو رقم الهاتف وكلمة المرور' };
     }
 
-    const isPasswordValid = user.password_hash === cleanPass || user.encrypted_password_vault === cleanPass;
+    // Lookup user: support email (case-insensitive) or Egyptian phone number
+    let user: any = null;
+
+    if (normalizedIdentifier.includes('@')) {
+      const { data, error } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .ilike('email', cleanEmail)
+        .maybeSingle();
+      if (!error && data) user = data;
+    } else {
+      // Check phone or email without @
+      const { data, error } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .or(`phone.eq.${cleanPhone},email.ilike.${cleanEmail}`)
+        .limit(1);
+      if (!error && data && data.length > 0) user = data[0];
+    }
+
+    // Secondary fallback search if user still not matched
+    if (!user) {
+      const { data: fallbackList } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .or(`email.ilike.${rawIdentifier},phone.eq.${rawIdentifier}`)
+        .limit(1);
+      if (fallbackList && fallbackList.length > 0) user = fallbackList[0];
+    }
+
+    if (!user) {
+      return { success: false, message: 'بيانات الدخول غير مسجلة بالمنصة. يرجى التأكد من البريد أو رقم الهاتف أو إنشاء حساب جديد للطلاب.' };
+    }
+
+    // Verify Password (flexible matching against raw, trimmed, and normalized digits)
+    const passVariants = [
+      cleanPass,
+      pass,
+      normalizeEasternArabicDigits(cleanPass),
+      normalizeEasternArabicDigits(pass)
+    ];
+    const isPasswordValid = 
+      passVariants.includes(user.password_hash) || 
+      passVariants.includes(user.encrypted_password_vault);
+
     if (!isPasswordValid) {
-      return { success: false, message: 'كلمة المرور غير صحيحة.' };
+      return { success: false, message: 'كلمة المرور غير صحيحة. يرجى التأكد من كلمة المرور وإعادة المحاولة.' };
     }
 
     // Special Handling for Assistant Role
@@ -980,39 +1001,42 @@ export async function loginAction(
       };
     }
 
+    // Teacher / Super Admin check
+    if (user.role === 'teacher' || user.role === 'super_admin') {
+      return {
+        success: true,
+        user: {
+          id: user.id,
+          fullName: user.full_name,
+          email: user.email,
+          phone: user.phone || '',
+          role: 'teacher',
+          status: 'active',
+        }
+      };
+    }
+
     // Student checks
     if (user.status === 'banned') {
       return { 
         success: false, 
+        isBanned: true,
         message: 'تم إيقاف هذا الحساب أو حظر الجهاز من قبل إدارة المنصة.' + (user.ban_reason ? ` (السبب: ${user.ban_reason})` : '') 
       };
     }
 
     if (user.status === 'rejected') {
-      return { success: false, message: 'تم رفض طلب انضمامك للمنصة. يمكنك التواصل مع المعلم للاستفسار على الرقم: 01552191172' };
-    }
-
-    // Strict 2-Device Policy Enforcement for Students (Physical hardware level)
-    if (user.role === 'student' && cleanFp) {
-      try {
-        const deviceResult = await verifyAndEnforceStudentDevice(user.id, cleanFp, deviceInfo);
-        if (!deviceResult.allowed) {
-          return {
-            success: false,
-            isBanned: deviceResult.isBanned,
-            maxDevicesReached: deviceResult.maxDevicesReached,
-            message: deviceResult.message || 'تم رفض الدخول من هذا الجهاز',
-          };
-        }
-      } catch (e) {
-        console.error('Error enforcing device policy on login:', e);
-      }
+      return { 
+        success: false, 
+        isRejected: true,
+        message: 'تم رفض طلب انضمامك للمنصة. يمكنك التواصل مع المعلم للاستفسار على الرقم: 01552191172' 
+      };
     }
 
     if (user.status === 'pending_review') {
       return { 
         success: false, 
-        isPending: true,
+        isPending: true, 
         student: {
           id: user.id,
           fullName: user.full_name,
@@ -1022,13 +1046,26 @@ export async function loginAction(
           grade: user.grade,
           educationType: user.education_type,
           status: user.status,
+          createdAt: user.created_at,
         },
         message: 'طلبك لا يزال قيد المراجعة لدى مستر محمد رضوان. سيتم مراجعة وقبول حسابك خلال 48 ساعة كحد أقصى أو التواصل على 01552191172.' 
       };
     }
 
-    // Active student status
+    // Active student: Enforce 2-Device Policy and Anti-Account-Sharing
     if (user.status === 'active') {
+      if (cleanFp) {
+        const deviceResult = await verifyAndEnforceStudentDevice(user.id, cleanFp, deviceInfo);
+        if (!deviceResult.allowed) {
+          return {
+            success: false,
+            isBanned: deviceResult.isBanned,
+            maxDevicesReached: deviceResult.maxDevicesReached,
+            message: deviceResult.message || 'تم رفض الدخول من هذا الجهاز',
+          };
+        }
+      }
+
       if (user.whatsapp_otp && !user.otp_verified) {
         // Needs OTP
         return { 
@@ -1110,14 +1147,27 @@ export async function verifyOtpAction(studentId: string, otp: string) {
 
 export async function registerStudentAction(studentData: any) {
   try {
-    const cleanEmail = (studentData.email || '').trim().toLowerCase();
-    const cleanPhone = (studentData.phone || '').trim();
-    const cleanParentPhone = (studentData.parentPhone || '').trim();
+    const cleanEmail = normalizeEasternArabicDigits(studentData.email || '').trim().toLowerCase();
+    const cleanPhone = cleanEgyptianPhone(studentData.phone || '');
+    const cleanParentPhone = cleanEgyptianPhone(studentData.parentPhone || '');
+    const cleanPass = (studentData.password || '').trim();
     const fingerprint = (studentData.deviceFingerprint || '').trim();
     const candidateFps = Array.isArray(studentData.candidateFingerprints) 
       ? studentData.candidateFingerprints.map((f: any) => (f || '').trim()).filter(Boolean)
       : [];
     const allFps = Array.from(new Set([fingerprint, ...candidateFps].filter(Boolean)));
+
+    if (!cleanPhone || cleanPhone.length !== 11) {
+      return { success: false, error: 'يرجى إدخال رقم هاتف مصري صحيح مكون من 11 رقماً.' };
+    }
+
+    if (cleanPhone === cleanParentPhone) {
+      return { success: false, error: 'يجب أن يكون رقم ولي الأمر مختلفاً عن رقم هاتف الطالب.' };
+    }
+
+    if (cleanPass.length < 8) {
+      return { success: false, error: 'كلمة المرور يجب أن تكون 8 خانات على الأقل.' };
+    }
 
     // 1. Strict Check: Is any device fingerprint banned in banned_devices?
     if (allFps.length > 0) {
@@ -1130,15 +1180,16 @@ export async function registerStudentAction(studentData: any) {
       if (bannedList && bannedList.length > 0) {
         return { 
           success: false, 
-          error: 'عذراً، هذا الجهاز محظور نهائياً من التسجيل في المنصة بقرار من إدارة المنصة.' 
+          error: 'عذراً، هذا الجهاز محظور نهائياً من التسجيل في المنصة بقرار من إدارة المنصة. ' + (bannedList[0].reason || '')
         };
       }
 
-      // 2. Strict Check: Is this device already associated with any student profile (pending, active, rejected, or banned)?
+      // 2. Strict Check: Is this device already associated with an active/pending student?
       const { data: existingProfiles } = await supabaseAdmin
         .from('profiles')
         .select('id, status, full_name, email, phone')
         .eq('role', 'student')
+        .neq('status', 'rejected')
         .in('primary_device_fingerprint', allFps)
         .limit(1);
 
@@ -1150,7 +1201,7 @@ export async function registerStudentAction(studentData: any) {
         };
       }
 
-      // 3. Strict Check: Is this device registered in student_devices table?
+      // 3. Strict Check: Is this device registered in student_devices table for an active/pending student?
       const { data: existingDevices } = await supabaseAdmin
         .from('student_devices')
         .select('student_id')
@@ -1158,19 +1209,43 @@ export async function registerStudentAction(studentData: any) {
         .limit(1);
 
       if (existingDevices && existingDevices.length > 0) {
-        return { 
-          success: false, 
-          error: 'عذراً، تم تسجيل هذا الجهاز مسبقاً في قاعدة بيانات المنصة. غير مسموح بإنشاء حساب آخر من هذا الجهاز.' 
-        };
+        const ownerId = existingDevices[0].student_id;
+        const { data: ownerProfile } = await supabaseAdmin
+          .from('profiles')
+          .select('id, full_name, role, status')
+          .eq('id', ownerId)
+          .maybeSingle();
+
+        if (ownerProfile && ownerProfile.role === 'student' && ownerProfile.status !== 'rejected') {
+          return { 
+            success: false, 
+            error: `عذراً، تم تسجيل هذا الجهاز مسبقاً في قاعدة بيانات المنصة باسم (${ownerProfile.full_name}). غير مسموح بإنشاء حساب آخر من هذا الجهاز.` 
+          };
+        }
       }
     }
 
-    // 4. Strict Check: Duplicate Email
+    // 4. Check if phone is in any banned account
+    const { data: bannedPhone } = await supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, status, ban_reason')
+      .eq('phone', cleanPhone)
+      .eq('status', 'banned')
+      .limit(1);
+
+    if (bannedPhone && bannedPhone.length > 0) {
+      return {
+        success: false,
+        error: 'هذا الحساب ورقم الهاتف محظور نهائياً من قبل إدارة المنصة.' + (bannedPhone[0].ban_reason ? ` (السبب: ${bannedPhone[0].ban_reason})` : '')
+      };
+    }
+
+    // 5. Strict Check: Duplicate Email
     if (cleanEmail) {
       const { data: existingEmail } = await supabaseAdmin
         .from('profiles')
         .select('id, full_name, role')
-        .eq('email', cleanEmail)
+        .ilike('email', cleanEmail)
         .maybeSingle();
 
       if (existingEmail) {
@@ -1187,7 +1262,7 @@ export async function registerStudentAction(studentData: any) {
       }
     }
 
-    // 5. Strict Check: Duplicate Phone
+    // 6. Strict Check: Duplicate Phone
     if (cleanPhone) {
       const { data: existingPhone } = await supabaseAdmin
         .from('profiles')
@@ -1198,18 +1273,18 @@ export async function registerStudentAction(studentData: any) {
       if (existingPhone) {
         return { 
           success: false, 
-          error: 'رقم الهاتف مُسجل بالفعل في المنصة لدى حساب آخر. يرجى التأكد من الرقم أو التواصل مع المعلم.' 
+          error: `رقم الهاتف مُسجل بالفعل في المنصة لدى (${existingPhone.full_name}). يرجى التأكد من الرقم أو تسجيل الدخول.` 
         };
       }
     }
 
-    // 6. Detect Mobile Carrier
+    // 7. Detect Mobile Carrier
     let carrier = 'Vodafone';
     if (cleanPhone.startsWith('011')) carrier = 'Etisalat';
     else if (cleanPhone.startsWith('012')) carrier = 'Orange';
     else if (cleanPhone.startsWith('015')) carrier = 'WE';
 
-    // 6.5. Strict Identity Photo Check: Photo is mandatory for teacher approval
+    // 8. Strict Identity Photo Check: Photo is mandatory for teacher approval
     if (!studentData.avatarUrl || typeof studentData.avatarUrl !== 'string' || studentData.avatarUrl.trim().length < 50) {
       return {
         success: false,
@@ -1222,7 +1297,7 @@ export async function registerStudentAction(studentData: any) {
     const parsedGrade = parseInt(studentData.grade, 10);
     const grade = isNaN(parsedGrade) || parsedGrade < 1 || parsedGrade > 3 ? 1 : parsedGrade;
 
-    // 7. Atomic & Guaranteed Insertion to profiles
+    // 9. Atomic & Guaranteed Insertion to profiles
     const insertPayload = {
       role: 'student',
       full_name: studentData.fullName?.trim(),
@@ -1230,8 +1305,8 @@ export async function registerStudentAction(studentData: any) {
       phone: cleanPhone,
       parent_phone: cleanParentPhone || null,
       phone_carrier: carrier,
-      password_hash: studentData.password, 
-      encrypted_password_vault: studentData.password, 
+      password_hash: cleanPass, 
+      encrypted_password_vault: cleanPass, 
       avatar_url: studentData.avatarUrl || null,
       stage: stage,
       education_type: education_type,
@@ -1253,7 +1328,7 @@ export async function registerStudentAction(studentData: any) {
       return { success: false, error: 'حدث خطأ في قاعدة البيانات: ' + error.message };
     }
 
-    // 8. Register ONLY the primary fingerprint in student_devices
+    // 10. Register the primary fingerprint in student_devices
     if (insertedUser && fingerprint) {
       try {
         await supabaseAdmin
@@ -1270,7 +1345,7 @@ export async function registerStudentAction(studentData: any) {
       }
     }
 
-    // 9. Optional Audit Log
+    // 11. Optional Audit Log
     try {
       await supabaseAdmin.from('audit_logs').insert([{
         actor_name: studentData.fullName?.trim() || 'طالب جديد',
@@ -1286,9 +1361,7 @@ export async function registerStudentAction(studentData: any) {
           fingerprint: fingerprint,
         },
       }]);
-    } catch {
-      // Audit log silent pass
-    }
+    } catch {}
 
     return { 
       success: true, 
