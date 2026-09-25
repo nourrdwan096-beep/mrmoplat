@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Bell, Sparkles, X, CheckCircle2, Volume2, ShieldCheck } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -8,6 +8,11 @@ import {
   isDeviceNotificationSupported,
   getDeviceNotificationPermission,
   requestDeviceNotificationPermission,
+  hasAnsweredNotificationPrompt,
+  setNotificationPromptAnswered,
+  setDeviceNotificationEnabled,
+  fetchUserNotifications,
+  dispatchNewNotificationsToDevice,
 } from '@/lib/notificationsService';
 
 export default function GlobalNotificationPermissionPrompt() {
@@ -15,24 +20,56 @@ export default function GlobalNotificationPermissionPrompt() {
   const [showPrompt, setShowPrompt] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [successGranted, setSuccessGranted] = useState(false);
+  const pollerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // 1. One-time prompt check (Enforces asking user exactly ONCE per account)
   useEffect(() => {
     if (!currentUser?.id) return;
     if (!isDeviceNotificationSupported()) return;
 
-    // Check if permission is default (not yet granted, not yet denied)
+    // If user already made their choice previously, do NOT ask again
+    if (hasAnsweredNotificationPrompt(currentUser.id)) return;
+
+    // Check browser notification permission
     const perm = getDeviceNotificationPermission();
-    if (perm === 'default') {
-      const dismissed = sessionStorage.getItem('mr_radwan_notif_prompt_dismissed');
-      if (!dismissed) {
-        // Show after a subtle 2.5 second delay so the page loads smoothly
-        const timer = setTimeout(() => {
-          setShowPrompt(true);
-        }, 2500);
-        return () => clearTimeout(timer);
-      }
+    if (perm !== 'default') {
+      // Browser already has explicit grant or deny, record as answered
+      setNotificationPromptAnswered(currentUser.id);
+      return;
     }
+
+    // Show after a subtle 2.5 second delay so the page loads smoothly
+    const timer = setTimeout(() => {
+      setShowPrompt(true);
+    }, 2500);
+
+    return () => clearTimeout(timer);
   }, [currentUser?.id]);
+
+  // 2. Global background watcher for real-time device notification delivery
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const checkAndDispatch = async () => {
+      try {
+        const notifs = await fetchUserNotifications(currentUser);
+        dispatchNewNotificationsToDevice(currentUser.id, notifs);
+      } catch (err) {
+        // Silent background fallback
+      }
+    };
+
+    // Initial check after 3 seconds
+    const initTimer = setTimeout(checkAndDispatch, 3000);
+
+    // Poll every 35 seconds across the whole app
+    pollerRef.current = setInterval(checkAndDispatch, 35000);
+
+    return () => {
+      clearTimeout(initTimer);
+      if (pollerRef.current) clearInterval(pollerRef.current);
+    };
+  }, [currentUser]);
 
   const handleGrant = async () => {
     if (!currentUser?.id) return;
@@ -43,7 +80,7 @@ export default function GlobalNotificationPermissionPrompt() {
         setSuccessGranted(true);
         setTimeout(() => {
           setShowPrompt(false);
-        }, 2000);
+        }, 2200);
       } else {
         setShowPrompt(false);
       }
@@ -55,7 +92,11 @@ export default function GlobalNotificationPermissionPrompt() {
   };
 
   const handleDismiss = () => {
-    sessionStorage.setItem('mr_radwan_notif_prompt_dismissed', 'true');
+    if (currentUser?.id) {
+      // Mark permanently answered so user is NEVER prompted again
+      setNotificationPromptAnswered(currentUser.id);
+      setDeviceNotificationEnabled(currentUser.id, false);
+    }
     setShowPrompt(false);
   };
 

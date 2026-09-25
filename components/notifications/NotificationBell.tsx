@@ -28,7 +28,8 @@ import {
   Eye,
   EyeOff,
   ShieldCheck,
-  AlertTriangle
+  AlertTriangle,
+  Award
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import {
@@ -42,6 +43,7 @@ import {
   getDeviceNotificationPermission,
   sendNativeDeviceNotification,
   playNotificationChime,
+  dispatchNewNotificationsToDevice,
 } from '@/lib/notificationsService';
 
 function formatRelativeTime(dateString: string): string {
@@ -84,6 +86,18 @@ function getNotificationIcon(type: AppNotification['type']) {
         bg: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400',
         border: 'border-emerald-200 dark:border-emerald-800',
       };
+    case 'new_material':
+      return {
+        icon: Sparkles,
+        bg: 'bg-cyan-50 dark:bg-cyan-950/40 text-cyan-600 dark:text-cyan-400',
+        border: 'border-cyan-200 dark:border-cyan-800',
+      };
+    case 'announcement':
+      return {
+        icon: Sparkles,
+        bg: 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400',
+        border: 'border-amber-200 dark:border-amber-800',
+      };
     case 'support_reply':
     case 'support_ticket_new':
       return {
@@ -96,6 +110,18 @@ function getNotificationIcon(type: AppNotification['type']) {
         icon: UserPlus,
         bg: 'bg-purple-50 dark:bg-purple-950/40 text-purple-600 dark:text-purple-400',
         border: 'border-purple-200 dark:border-purple-800',
+      };
+    case 'exam_submission':
+      return {
+        icon: Award,
+        bg: 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400',
+        border: 'border-emerald-200 dark:border-emerald-800',
+      };
+    case 'security_alert':
+      return {
+        icon: AlertTriangle,
+        bg: 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400',
+        border: 'border-rose-200 dark:border-rose-800',
       };
     case 'student_message':
       return {
@@ -148,6 +174,7 @@ export default function NotificationBell() {
     try {
       const list = await fetchUserNotifications(currentUser);
       setNotifications(list);
+      dispatchNewNotificationsToDevice(currentUser.id, list);
     } catch (err) {
       console.warn('Failed to refresh notifications:', err);
     }

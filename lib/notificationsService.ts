@@ -6,10 +6,14 @@ export type NotificationType =
   | 'new_course'
   | 'new_exam'
   | 'new_video'
+  | 'new_material'
+  | 'announcement'
   | 'support_reply'
   | 'support_ticket_new'
   | 'new_student_pending'
   | 'course_enrollment'
+  | 'exam_submission'
+  | 'security_alert'
   | 'student_message';
 
 export interface AppNotification {
@@ -30,6 +34,55 @@ export interface AppNotification {
 
 const READ_STORAGE_PREFIX = 'mr_radwan_read_notifs_';
 const DEVICE_NOTIF_PREFIX = 'mr_radwan_device_notifs_enabled_';
+const PROMPT_ANSWERED_PREFIX = 'mr_radwan_notif_prompt_answered_';
+const SEEN_NOTIF_PREFIX = 'mr_radwan_seen_notifs_';
+
+// Register Service Worker for cross-device web notifications (Android, iOS Safari, Desktop)
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => {
+        // Service worker active
+      })
+      .catch((err) => {
+        console.warn('SW registration info:', err);
+      });
+  });
+}
+
+/**
+ * Check if user has already answered the one-time notification prompt
+ */
+export function hasAnsweredNotificationPrompt(userId: string): boolean {
+  if (typeof window === 'undefined' || !userId) return true;
+  try {
+    return localStorage.getItem(PROMPT_ANSWERED_PREFIX + userId) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mark notification prompt as answered (asked ONCE per user)
+ */
+export function setNotificationPromptAnswered(userId: string): void {
+  if (typeof window === 'undefined' || !userId) return;
+  try {
+    localStorage.setItem(PROMPT_ANSWERED_PREFIX + userId, 'true');
+  } catch {}
+}
+
+/**
+ * Explicitly set device notifications enabled or disabled
+ */
+export function setDeviceNotificationEnabled(userId: string, enabled: boolean): void {
+  if (typeof window === 'undefined' || !userId) return;
+  try {
+    localStorage.setItem(DEVICE_NOTIF_PREFIX + userId, enabled ? 'true' : 'false');
+    window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
+  } catch {}
+}
 
 /**
  * Get IDs of notifications marked as read by this user locally
@@ -139,8 +192,13 @@ export function getDeviceNotificationPermission(): NotificationPermission | 'uns
 export function isDeviceNotificationEnabled(userId: string): boolean {
   if (typeof window === 'undefined' || !userId) return false;
   try {
-    const isExplicitlyTrue = localStorage.getItem(DEVICE_NOTIF_PREFIX + userId) === 'true';
-    if (isExplicitlyTrue && isDeviceNotificationSupported() && Notification.permission === 'granted') {
+    const rawVal = localStorage.getItem(DEVICE_NOTIF_PREFIX + userId);
+    if (rawVal === 'false') return false;
+    if (rawVal === 'true' && isDeviceNotificationSupported() && Notification.permission === 'granted') {
+      return true;
+    }
+    // If not set yet, but user already granted permission to the domain
+    if (rawVal === null && isDeviceNotificationSupported() && Notification.permission === 'granted') {
       return true;
     }
     return false;
@@ -151,9 +209,13 @@ export function isDeviceNotificationEnabled(userId: string): boolean {
 
 /**
  * Toggle or enable device notifications and request browser permission
+ * Also permanently records that user has answered the prompt
  */
 export async function requestDeviceNotificationPermission(userId: string): Promise<boolean> {
   if (!isDeviceNotificationSupported()) return false;
+
+  // Mark that user has answered the one-time prompt
+  setNotificationPromptAnswered(userId);
 
   try {
     let perm = Notification.permission;
@@ -164,9 +226,9 @@ export async function requestDeviceNotificationPermission(userId: string): Promi
     if (perm === 'granted') {
       localStorage.setItem(DEVICE_NOTIF_PREFIX + userId, 'true');
       playNotificationChime();
-      sendNativeDeviceNotification(
+      await sendNativeDeviceNotification(
         'منصة مستر محمد رضوان 🌟',
-        'تم تفعيل إشعارات وتنبيهات المنصة بنجاح على هذا الجهاز! ستصلك أحدث التنبيهات والدروس فوراً.',
+        'تم تفعيل إشعارات وتنبيهات المنصة بنجاح على هذا الجهاز! ستصلك التنبيهات الفورية بانتظام.',
         '/'
       );
       window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
@@ -182,34 +244,117 @@ export async function requestDeviceNotificationPermission(userId: string): Promi
 }
 
 /**
- * Send native OS / device notification
+ * Send native OS / device notification with full Mobile & Desktop Service Worker support
  */
-export function sendNativeDeviceNotification(title: string, body: string, url?: string): void {
+export async function sendNativeDeviceNotification(
+  title: string, 
+  body: string, 
+  url?: string,
+  tag?: string
+): Promise<void> {
   if (!isDeviceNotificationSupported() || Notification.permission !== 'granted') return;
 
   try {
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-      navigator.vibrate([100, 60, 120]);
+      try {
+        navigator.vibrate([160, 80, 160]);
+      } catch {}
     }
 
-    const n = new Notification(title, {
+    const options: any = {
       body,
       icon: '/logo.png',
       badge: '/logo.png',
       dir: 'rtl',
       lang: 'ar',
-      tag: 'mr_radwan_' + Date.now(),
-    });
+      tag: tag || 'mr_radwan_' + Date.now(),
+      renotify: true,
+      data: {
+        url: url || '/',
+        timestamp: Date.now()
+      }
+    };
 
-    if (url) {
-      n.onclick = () => {
-        window.focus();
-        window.location.href = url;
-        n.close();
-      };
+    // 1. Mobile (Android/Chrome/Edge/Samsung) and Modern Browsers: Try Service Worker registration
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      try {
+        const reg = await Promise.race([
+          navigator.serviceWorker.getRegistration().then(r => r || navigator.serviceWorker.ready),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200))
+        ]);
+        if (reg && typeof reg.showNotification === 'function') {
+          await reg.showNotification(title, options);
+          return;
+        }
+      } catch (swErr) {
+        console.warn('SW notification fallback to Notification API:', swErr);
+      }
+    }
+
+    // 2. Desktop Browser Fallback (Windows, macOS, Linux, Chrome/Safari/Firefox)
+    try {
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        const n = new Notification(title, options);
+        if (url) {
+          n.onclick = () => {
+            window.focus();
+            window.location.href = url;
+            n.close();
+          };
+        }
+      }
+    } catch (nErr) {
+      console.warn('Desktop Notification constructor error:', nErr);
     }
   } catch (e) {
     console.warn('Native notification failed:', e);
+  }
+}
+
+/**
+ * Automatically inspects fetched notifications and sends native device alerts
+ * for any newly arrived unread notifications if enabled.
+ * Accurately seeds existing notifications on first load to prevent noise.
+ */
+export function dispatchNewNotificationsToDevice(userId: string, notifs: AppNotification[]): void {
+  if (typeof window === 'undefined' || !userId || !notifs || notifs.length === 0) return;
+
+  try {
+    const isEnabled = isDeviceNotificationEnabled(userId);
+    const seenRaw = localStorage.getItem(SEEN_NOTIF_PREFIX + userId);
+    
+    // First run on this browser session: seed existing notifications without spamming
+    if (seenRaw === null) {
+      const initialSeen = notifs.map(n => n.id);
+      localStorage.setItem(SEEN_NOTIF_PREFIX + userId, JSON.stringify(initialSeen.slice(-800)));
+      return;
+    }
+
+    let seenSet = new Set<string>();
+    try {
+      seenSet = new Set(JSON.parse(seenRaw));
+    } catch {}
+
+    const unreadNewList = notifs.filter((n) => !n.isRead && !seenSet.has(n.id));
+
+    // Update seen set with all current notifications
+    notifs.forEach((n) => seenSet.add(n.id));
+    const trimmedSeen = Array.from(seenSet).slice(-800);
+    localStorage.setItem(SEEN_NOTIF_PREFIX + userId, JSON.stringify(trimmedSeen));
+
+    // If notifications enabled and brand new unread notifications arrived
+    if (isEnabled && unreadNewList.length > 0) {
+      // Play pleasant futuristic audio chime once for the new batch
+      playNotificationChime();
+
+      // Send native alert for up to 2 newest items to be informative without spamming the OS tray
+      const latestToNotify = unreadNewList.slice(0, 2);
+      latestToNotify.forEach((notif) => {
+        sendNativeDeviceNotification(notif.title, notif.message, notif.link, notif.id);
+      });
+    }
+  } catch (err) {
+    console.warn('Error in dispatchNewNotificationsToDevice:', err);
   }
 }
 
@@ -378,6 +523,22 @@ export async function fetchUserNotifications(user: UserProfile): Promise<AppNoti
                   isRead: localReadIds.has(notifId),
                   category: 'academic',
                   badgeLabel: 'شرح',
+                });
+              } else if (item.item_type === 'concept_sheet' || item.item_type === 'summary_pdf') {
+                const notifId = `notif_item_mat_${item.id}`;
+                notifs.push({
+                  id: notifId,
+                  type: 'new_material',
+                  title: 'ملخص ومذكرة جديدة متاحة 📄',
+                  message: `تمت إضافة مذكرة جديدة: "${item.title}" في (${courseTitle}).`,
+                  fullMessage: `تمت إضافة ملف ومذكرة جديدة بعنوان: "${item.title}" في مقرر (${courseTitle}).\n\nقم بتحميلها لمتابعة المذاكرة.`,
+                  timestamp: item.created_at || new Date().toISOString(),
+                  link: `/student/study/${item.course_id}?itemId=${item.id}`,
+                  courseId: item.course_id,
+                  itemId: item.id,
+                  isRead: localReadIds.has(notifId),
+                  category: 'academic',
+                  badgeLabel: 'مذكرة وملخص',
                 });
               }
             });

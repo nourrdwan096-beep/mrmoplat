@@ -262,12 +262,92 @@ export async function GET(req: NextRequest) {
                   category: 'academic',
                   badgeLabel: 'شرح جديد',
                 });
+              } else if (item.item_type === 'concept_sheet' || item.item_type === 'summary_pdf') {
+                notifs.push({
+                  id: `notif_item_mat_${item.id}`,
+                  type: 'new_material',
+                  title: 'ملخص ومذكرة جديدة للتحميل 📄',
+                  message: `تمت إضافة مذكرة جديدة: "${item.title}" في (${cTitle}).`,
+                  fullMessage: `تمت إضافة ملف ومذكرة جديدة بعنوان: "${item.title}" في كورس (${cTitle}).\n${item.description ? '\nملاحظات: ' + item.description : ''}\n\nقم بتحميلها ودراستها فوراً.`,
+                  timestamp: item.created_at,
+                  link: `/student/study/${item.course_id}?itemId=${item.id}`,
+                  courseId: item.course_id,
+                  itemId: item.id,
+                  isRead: false,
+                  category: 'academic',
+                  badgeLabel: 'مذكرة جديدة',
+                });
               }
             });
           }
         }
       } catch (err) {
         console.warn('Student course items fetch error:', err);
+      }
+
+      // 1.3 Announcements from Announcements Table
+      try {
+        const { data: annList } = await supabaseAdmin
+          .from('announcements')
+          .select('id, title, content, created_at, target_stage, target_grade')
+          .eq('is_published', true)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (annList) {
+          annList.forEach((a: any) => {
+            const matchStage = !a.target_stage || a.target_stage === stage;
+            const matchGrade = !a.target_grade || String(a.target_grade) === String(grade);
+            if (matchStage && matchGrade) {
+              notifs.push({
+                id: `notif_ann_${a.id}`,
+                type: 'announcement',
+                title: 'إعلان وتوجيهات دراسية هامة 📢',
+                message: `${a.title}: ${a.content.length > 80 ? a.content.slice(0, 80) + '...' : a.content}`,
+                fullMessage: `إعلان عام من مستر محمد رضوان:\n\n${a.title}\n\n${a.content}`,
+                timestamp: a.created_at,
+                link: '/student',
+                isRead: false,
+                category: 'academic',
+                badgeLabel: 'إعلان هام',
+              });
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('Student announcements fetch error:', err);
+      }
+
+      // 1.4 Student Course Enrollment Confirmations
+      try {
+        const { data: myEnrolls } = await supabaseAdmin
+          .from('course_enrollments')
+          .select('id, course_id, payment_method, enrolled_at, created_at, courses(title)')
+          .eq('student_id', userId)
+          .order('enrolled_at', { ascending: false })
+          .limit(5);
+
+        if (myEnrolls) {
+          myEnrolls.forEach((e: any) => {
+            const cObj = Array.isArray(e.courses) ? e.courses[0] : e.courses;
+            const cTitle = cObj?.title || 'المقرر';
+            notifs.push({
+              id: `notif_my_enroll_${e.id}`,
+              type: 'course_enrollment',
+              title: 'تم تفعيل اشتراكك في الكورس بنجاح 🎓',
+              message: `تم تفعيل اشتراكك في (${cTitle}). يمكنك متابعة الدروس الآن.`,
+              fullMessage: `تم تأكيد اشتراكك في كورس (${cTitle}) بنجاح!\n\nيمكنك الآن فتح كل الدروس والاختبارات وحل الواجبات. نتمنى لك دوام التفوق والنجاح مع مستر محمد رضوان.`,
+              timestamp: e.enrolled_at || e.created_at || new Date().toISOString(),
+              link: `/student/study/${e.course_id}`,
+              courseId: e.course_id,
+              isRead: false,
+              category: 'course',
+              badgeLabel: 'اشتراك مؤكد',
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('Student myEnrolls fetch error:', err);
       }
 
       // 1.3 Announcements & Broadcast Messages
@@ -460,6 +540,81 @@ export async function GET(req: NextRequest) {
       } catch (err) {
         console.warn('Teacher enrollments fetch error:', err);
       }
+
+      // 2.5 Exam & Quiz Submissions by Students
+      try {
+        const { data: submissions } = await supabaseAdmin
+          .from('student_item_progress')
+          .select(`
+            id,
+            completed_at,
+            updated_at,
+            highest_score,
+            last_score,
+            status,
+            student:profiles!student_item_progress_student_id_fkey(full_name, phone),
+            courses(title),
+            unit_items(title, item_type)
+          `)
+          .not('completed_at', 'is', null)
+          .order('completed_at', { ascending: false })
+          .limit(15);
+
+        if (submissions) {
+          submissions.forEach((sub: any) => {
+            const sObj = Array.isArray(sub.student) ? sub.student[0] : sub.student;
+            const cObj = Array.isArray(sub.courses) ? sub.courses[0] : sub.courses;
+            const itemObj = Array.isArray(sub.unit_items) ? sub.unit_items[0] : sub.unit_items;
+            const sName = sObj?.full_name || 'طالب';
+            const cTitle = cObj?.title || 'كورس';
+            const itemTitle = itemObj?.title || 'امتحان';
+            const scoreStr = sub.last_score !== null && sub.last_score !== undefined ? `${sub.last_score}%` : 'مكتمل';
+
+            notifs.push({
+              id: `notif_teacher_sub_${sub.id}`,
+              type: 'exam_submission',
+              title: 'تسليم وحل امتحان جديد 📝',
+              message: `قام الطالب "${sName}" بتسليم (${itemTitle}) في (${cTitle}) - النتيجة: ${scoreStr}.`,
+              fullMessage: `تفاصيل تسليم الامتحان:\n• الطالب: ${sName} (${sObj?.phone || '-'})\n• الكورس: ${cTitle}\n• اسم الاختبار: ${itemTitle}\n• الدرجة والنتيجة: ${scoreStr}\n• تاريخ الإتمام: ${new Date(sub.completed_at || sub.updated_at).toLocaleString('ar-EG')}`,
+              timestamp: sub.completed_at || sub.updated_at,
+              link: '/teacher/students',
+              isRead: false,
+              category: 'academic',
+              badgeLabel: 'تسليم امتحان',
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('Teacher submissions fetch error:', err);
+      }
+
+      // 2.6 Security & Banned Device Alerts
+      try {
+        const { data: secAlerts } = await supabaseAdmin
+          .from('banned_devices')
+          .select('id, reason, banned_at, banned_phone')
+          .order('banned_at', { ascending: false })
+          .limit(8);
+
+        if (secAlerts) {
+          secAlerts.forEach((b: any) => {
+            notifs.push({
+              id: `notif_sec_${b.id}`,
+              type: 'security_alert',
+              title: 'تنبيه أمني: رصد جهاز مخالف 🛡️',
+              message: `تم رصد وحظر جهاز مخالف (هاتف: ${b.banned_phone || 'غير محدد'}) - السبب: ${b.reason || 'مخالفة السياسة'}.`,
+              fullMessage: `تم حظر جهاز مخالف تلقائياً لحماية المنصة:\n• الهاتف المرتبط: ${b.banned_phone || 'غير مسجل'}\n• السبب: ${b.reason || 'محاولة دخول غير مصرح بها'}\n• التاريخ: ${new Date(b.banned_at).toLocaleString('ar-EG')}`,
+              timestamp: b.banned_at,
+              link: '/teacher/students?tab=banned',
+              isRead: false,
+              category: 'admin',
+              badgeLabel: 'أمن وحماية',
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('Teacher secAlerts fetch error:', err);
+      }
     }
 
     // -----------------------------------------------------------------
@@ -516,7 +671,48 @@ export async function GET(req: NextRequest) {
         console.warn('Assistant tickets fetch error:', err);
       }
 
-      // Pending student reviews
+      // 3.2 Student Replies in Support Chats for Assistant
+      try {
+        const { data: asstReplies } = await supabaseAdmin
+          .from('ticket_messages')
+          .select(`
+            id,
+            ticket_id,
+            message,
+            created_at,
+            support_tickets(id, ticket_number, subject, assigned_to_assistant_id, student:profiles!support_tickets_student_id_fkey(full_name, phone))
+          `)
+          .eq('sender_role', 'student')
+          .order('created_at', { ascending: false })
+          .limit(20);
+
+        if (asstReplies) {
+          asstReplies.forEach((r: any) => {
+            const ticket = Array.isArray(r.support_tickets) ? r.support_tickets[0] : r.support_tickets;
+            if (ticket && (!ticket.assigned_to_assistant_id || ticket.assigned_to_assistant_id === userId)) {
+              const studentObj = Array.isArray(ticket.student) ? ticket.student[0] : ticket.student;
+              const sName = studentObj?.full_name || 'الطالب';
+              notifs.push({
+                id: `notif_asst_reply_${r.id}`,
+                type: 'support_reply',
+                title: `رد جديد من ${sName} في التذكرة #${ticket.ticket_number} 💬`,
+                message: `أرسل رداً: "${r.message.length > 80 ? r.message.slice(0, 80) + '...' : r.message}"`,
+                fullMessage: `أرسل الطالب ${sName} رداً في التذكرة #${ticket.ticket_number} ("${ticket.subject}"):\n\n"${r.message}"`,
+                timestamp: r.created_at,
+                link: `/assistant/support?ticketId=${ticket.id}`,
+                ticketId: ticket.id,
+                isRead: false,
+                category: 'support',
+                badgeLabel: 'رد طالب',
+              });
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('Assistant student replies fetch error:', err);
+      }
+
+      // 3.3 Pending Student Reviews
       try {
         const { data: pendings } = await supabaseAdmin
           .from('profiles')
@@ -533,7 +729,7 @@ export async function GET(req: NextRequest) {
               type: 'new_student_pending',
               title: 'طالب بانتظار المراجعة والاعتماد ⏳',
               message: `سجل الطالب "${p.full_name}" - هاتف: ${p.phone}.`,
-              fullMessage: `طالب جديد ينتظر المراجعة:\n• الاسم: ${p.full_name}\n• الهاتف: ${p.phone}\n• الصف: ${p.grade ? p.grade + ' ثانوي' : '-'}\n• وقت التسجيل: ${new Date(p.created_at).toLocaleString('ar-EG')}`,
+              fullMessage: `طالب جديد ينتظر المراجعة والاعتماد:\n• الاسم: ${p.full_name}\n• الهاتف: ${p.phone}\n• الصف: ${p.grade ? p.grade + ' ثانوي' : '-'}\n• وقت التسجيل: ${new Date(p.created_at).toLocaleString('ar-EG')}`,
               timestamp: p.created_at,
               link: '/assistant/students',
               isRead: false,
