@@ -270,9 +270,19 @@ export default function LoginPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-sm font-bold text-slate-700 dark:text-slate-300 ml-1 block">
-                كلمة المرور
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-bold text-slate-700 dark:text-slate-300 ml-1 block">
+                  كلمة المرور
+                </label>
+                <a
+                  href="https://wa.me/201552191172?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%D9%8B%20%D9%85%D8%B3%D8%AA%D8%B1%20%D9%85%D8%AD%D9%85%D8%AF%D8%8C%20%D9%86%D8%B3%D9%8A%D8%AA%20%D9%83%D9%84%D9%85%D8%A9%20%D8%A7%D9%84%D9%85%D8%B1%D9%88%D8%B1%20%D9%84%D8%AD%D8%B3%D8%A7%D8%A8%D9%8A%20%D8%B9%D9%84%D9%89%20%D8%A7%D9%84%D9%85%D9%86%D8%B5%D8%A9"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-bold text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 transition-colors"
+                >
+                  نسيت كلمة المرور؟
+                </a>
+              </div>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}

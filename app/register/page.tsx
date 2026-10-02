@@ -160,42 +160,14 @@ export default function RegisterPage() {
         );
         if (isCancelled) return;
 
-        if (res.isRegistered || res.isBanned) {
+        if (res.isBanned) {
           setDeviceStatus(res);
-          if (res.student) {
-            await lockDevicePermanently(res.student);
-          }
         } else {
-          // If the server confirms this device/email is NOT registered, clear any stale local locks
-          // so the student can register again.
-          if (identity.isLocallyLocked || identity.storedStudent) {
-            await clearDeviceLock();
-          }
           setDeviceStatus(null);
         }
       } catch (err) {
         console.error('Device verification error:', err);
-        // Resilient fallback: check if local lock was placed
-        try {
-          const identity = await getStrictDeviceIdentity();
-          if (identity.isLocallyLocked || identity.storedStudent) {
-            const s = identity.storedStudent;
-            setDeviceStatus({
-              isRegistered: true,
-              isBanned: false,
-              student: {
-                id: s?.id || '',
-                fullName: s?.fullName || 'طالب مسجل بالمنصة',
-                email: s?.email || '',
-                phone: s?.phone || '',
-                stage: 'high',
-                grade: 1,
-                educationType: 'general',
-                status: (s?.status as any) || 'pending_review',
-              }
-            });
-          }
-        } catch {}
+        setDeviceStatus(null);
       } finally {
         if (!isCancelled) {
           setIsCheckingDevice(false);
@@ -230,39 +202,14 @@ export default function RegisterPage() {
         identity.studentId
       );
       
-      if (res.isRegistered || res.isBanned) {
+      if (res.isBanned) {
         setDeviceStatus(res);
-        if (res.student) {
-          await lockDevicePermanently(res.student);
-        }
       } else {
-        if (identity.isLocallyLocked || identity.storedStudent) {
-          await clearDeviceLock();
-        }
         setDeviceStatus(null);
       }
     } catch (err) {
       console.error('Refresh status error:', err);
-      try {
-        const identity = await getStrictDeviceIdentity();
-        if (identity.isLocallyLocked || identity.storedStudent) {
-          const s = identity.storedStudent;
-          setDeviceStatus({
-            isRegistered: true,
-            isBanned: false,
-            student: {
-              id: s?.id || '',
-              fullName: s?.fullName || 'طالب مسجل بالمنصة',
-              email: s?.email || '',
-              phone: s?.phone || '',
-              stage: 'high',
-              grade: 1,
-              educationType: 'general',
-              status: (s?.status as any) || 'pending_review',
-            }
-          });
-        }
-      } catch {}
+      setDeviceStatus(null);
     } finally {
       setIsCheckingDevice(false);
     }
@@ -586,11 +533,11 @@ export default function RegisterPage() {
   }
 
   // ==========================================
-  // SCREEN: DEVICE IS ALREADY REGISTERED OR BANNED
+  // SCREEN: DEVICE IS BANNED BY ADMIN
   // ==========================================
-  if (deviceStatus && (deviceStatus.isRegistered || deviceStatus.isBanned)) {
+  if (deviceStatus && deviceStatus.isBanned) {
     const student = deviceStatus.student;
-    const isBanned = deviceStatus.isBanned || student?.status === 'banned';
+    const isBanned = true;
     const isActive = student?.status === 'active';
     const isPending = student?.status === 'pending_review' || (!isBanned && !isActive && student?.status !== 'rejected');
     const isRejected = student?.status === 'rejected';

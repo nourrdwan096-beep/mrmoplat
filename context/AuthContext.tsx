@@ -329,9 +329,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = () => {
     localStorage.removeItem('mr_radwan_current_user');
+    localStorage.removeItem('mr_device_student_binding');
+    localStorage.removeItem('mr_registered_student_info');
+    localStorage.removeItem('mr_student_id');
+    localStorage.removeItem('mr_student_email');
+    localStorage.removeItem('mr_student_phone');
+    sessionStorage.removeItem('mr_device_student_binding');
+    sessionStorage.removeItem('mr_registered_student_info');
+    sessionStorage.removeItem('mr_student_id');
+    sessionStorage.removeItem('mr_student_email');
+    sessionStorage.removeItem('mr_student_phone');
     try {
       document.cookie = 'mr_radwan_role=; path=/; max-age=0; SameSite=Lax';
       document.cookie = 'mr_radwan_user=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_device_student_binding=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_student_id=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_student_email=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_student_phone=; path=/; max-age=0; SameSite=Lax';
     } catch {}
     notifyAuth();
   };
@@ -339,10 +353,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const registerStudent = async (studentData: Partial<UserProfile> & { password?: string }) => {
     if (isDeviceBanned) {
       return { success: false, message: 'عذراً، هذا الجهاز محظور نهائياً من التسجيل في المنصة بناءً على قرار الإدارة.' };
-    }
-
-    if (isDeviceAlreadyRegistered) {
-      return { success: false, message: 'عذراً، هذا الجهاز تم التسجيل به مسبقاً في المنصة ولا يمكن تسجيل نفس الجهاز أكثر من مرة.' };
     }
 
     try {
@@ -356,7 +366,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return { success: false, message: res.error || 'حدث خطأ أثناء التسجيل. يرجى المحاولة مرة أخرى.' };
       }
 
-      // Mark device registered locally
+      // Mark device registered locally for current student
       if (res.student) {
         try {
           const { lockDevicePermanently } = await import('@/lib/deviceSecurity');
