@@ -292,12 +292,23 @@ export default function StudentQuizSolver({
       e.preventDefault();
     };
 
+    const handleSelectStart = (e: Event) => {
+      if (annotationTool === 'none') {
+        e.preventDefault();
+      }
+    };
+
+    const handleDragStart = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Prevent F12, DevTools, Ctrl+C, Ctrl+V, Ctrl+U, Alt+Tab hints
+      // Prevent F12, DevTools, Ctrl+C, Ctrl+V, Ctrl+U, PrintScreen, Alt+Tab, Meta keys
       if (
         e.key === 'F12' ||
-        (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
-        (e.ctrlKey && (e.key === 'u' || e.key === 'U' || e.key === 'c' || e.key === 'C' || e.key === 'p' || e.key === 'P' || e.key === 's' || e.key === 'S'))
+        e.key === 'PrintScreen' ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C' || e.key === 'i' || e.key === 'j' || e.key === 'c' || e.key === '3' || e.key === '4' || e.key === '5')) ||
+        ((e.ctrlKey || e.metaKey) && (e.key === 'u' || e.key === 'U' || e.key === 'c' || e.key === 'C' || e.key === 'p' || e.key === 'P' || e.key === 's' || e.key === 'S' || e.key === 'a' || e.key === 'A'))
       ) {
         e.preventDefault();
       }
@@ -317,6 +328,8 @@ export default function StudentQuizSolver({
     document.addEventListener('contextmenu', handleContextMenu);
     document.addEventListener('copy', handleCopyCut);
     document.addEventListener('cut', handleCopyCut);
+    document.addEventListener('selectstart', handleSelectStart);
+    document.addEventListener('dragstart', handleDragStart);
     window.addEventListener('keydown', handleKeyDown);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
 
@@ -326,10 +339,12 @@ export default function StudentQuizSolver({
       document.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('copy', handleCopyCut);
       document.removeEventListener('cut', handleCopyCut);
+      document.removeEventListener('selectstart', handleSelectStart);
+      document.removeEventListener('dragstart', handleDragStart);
       window.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
-  }, [previewMode, isSubmitted, isSecurityTerminated, loading, isLockedOut, hasStarted, item.itemType, triggerSecurityViolation]);
+  }, [previewMode, isSubmitted, isSecurityTerminated, loading, isLockedOut, hasStarted, item.itemType, triggerSecurityViolation, annotationTool]);
 
   const toggleFullscreen = async () => {
     try {
@@ -904,7 +919,7 @@ export default function StudentQuizSolver({
   return (
     <div
       ref={containerRef}
-      className={`relative select-none transition-colors duration-300 w-full ${
+      className={`relative select-none exam-secure-lock transition-colors duration-300 w-full ${
         isFullscreen
           ? 'min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 p-4 sm:p-6 lg:p-8 space-y-6 overflow-y-auto'
           : 'space-y-6'

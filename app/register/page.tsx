@@ -160,7 +160,7 @@ export default function RegisterPage() {
         );
         if (isCancelled) return;
 
-        if (res.isBanned) {
+        if (res.isBanned || res.isRegistered) {
           setDeviceStatus(res);
         } else {
           setDeviceStatus(null);
@@ -202,7 +202,7 @@ export default function RegisterPage() {
         identity.studentId
       );
       
-      if (res.isBanned) {
+      if (res.isBanned || res.isRegistered) {
         setDeviceStatus(res);
       } else {
         setDeviceStatus(null);
@@ -533,14 +533,14 @@ export default function RegisterPage() {
   }
 
   // ==========================================
-  // SCREEN: DEVICE IS BANNED BY ADMIN
+  // SCREEN: DEVICE IS BANNED OR HAS AN ACCOUNT (STRICT ONE ACCOUNT PER DEVICE POLICY)
   // ==========================================
-  if (deviceStatus && deviceStatus.isBanned) {
+  if (deviceStatus && (deviceStatus.isBanned || deviceStatus.isRegistered)) {
     const student = deviceStatus.student;
-    const isBanned = true;
-    const isActive = student?.status === 'active';
-    const isPending = student?.status === 'pending_review' || (!isBanned && !isActive && student?.status !== 'rejected');
-    const isRejected = student?.status === 'rejected';
+    const isBanned = Boolean(deviceStatus.isBanned || student?.status === 'banned');
+    const isActive = !isBanned && student?.status === 'active';
+    const isRejected = !isBanned && student?.status === 'rejected';
+    const isPending = !isBanned && !isActive && !isRejected;
 
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col justify-between p-4 sm:p-8 text-white relative overflow-hidden">
@@ -560,7 +560,7 @@ export default function RegisterPage() {
                   <Smartphone className="w-6 h-6" />
                 </div>
                 <div>
-                  <h1 className="text-xl font-black text-white">بيانات تسجيل هذا الجهاز</h1>
+                  <h1 className="text-xl font-black text-white">حالة تسجيل هذا الجهاز</h1>
                   <p className="text-xs text-slate-400 font-bold mt-0.5">معرف الحماية: {fingerprint.substring(0, 16)}...</p>
                 </div>
               </div>
@@ -688,27 +688,10 @@ export default function RegisterPage() {
                   </a>
                 </div>
 
-                {/* Reset device lock if student was deleted, rejected, or wants to re-register */}
-                <div className="pt-3 border-t border-slate-800 text-center space-y-2">
+                <div className="pt-3 border-t border-slate-800 text-center">
                   <p className="text-xs text-slate-400">
-                    هل مسح المعلم حسابك أو ترغب في البدء من جديد بتسجيل جديد؟
+                    تطبق المنصة سياسة منع تكرار الحسابات من نفس الجهاز للحفاظ على سلامة الامتحانات والبيانات.
                   </p>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setIsCheckingDevice(true);
-                      try {
-                        const { clearDeviceLock } = await import('@/lib/deviceSecurity');
-                        await clearDeviceLock();
-                        setDeviceStatus(null);
-                      } catch {}
-                      setIsCheckingDevice(false);
-                    }}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-800/80 hover:bg-slate-700 text-amber-400 hover:text-amber-300 rounded-xl text-xs font-bold transition-all border border-amber-500/20 hover:border-amber-500/40 shadow-sm"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>إلغاء قيد هذا الجهاز وبدء تسجيل جديد فوراً</span>
-                  </button>
                 </div>
               </div>
             )}
@@ -719,10 +702,13 @@ export default function RegisterPage() {
                 <div className="p-6 bg-gradient-to-br from-emerald-500/20 to-teal-500/10 border border-emerald-500/40 rounded-2xl text-right">
                   <div className="flex items-center gap-3 text-emerald-400 font-black text-lg mb-2">
                     <CheckCircle2 className="w-7 h-7 shrink-0 text-emerald-400" />
-                    <span>تهانينا! تم قبول واعتماد حسابك من قبل المعلم</span>
+                    <span>هذا الجهاز مسجل به حساب طالب معتمد ومفعل</span>
                   </div>
-                  <p className="text-slate-200 text-sm font-bold leading-relaxed">
-                    حسابك الآن مقيد ومعتمد في منصة مستر محمد رضوان. يمكنك المتابعة لتفعيل الحساب أو تسجيل الدخول فوراً.
+                  <p className="text-slate-200 text-sm font-bold leading-relaxed mb-3">
+                    يوجد بالفعل حساب معتمد ومفعل على هذا الجهاز باسم <span className="text-emerald-400 font-black">{student?.fullName || 'طالب المنصة'}</span>. تمنع لوائح المنصة الصارمة إنشاء أي حساب إضافي من نفس الجهاز لضمان أمان البيانات.
+                  </p>
+                  <p className="text-slate-300 text-xs font-semibold">
+                    إذا كنت صاحب هذا الحساب يمكنك تسجيل الدخول فوراً، أو استخدام جهاز آخر إذا كنت ترغب في تسجيل حساب جديد.
                   </p>
                 </div>
 
@@ -777,7 +763,7 @@ export default function RegisterPage() {
                       href="/login"
                       className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-base transition-all flex items-center justify-center gap-2 shadow-xl shadow-emerald-600/25 hover:scale-[1.01]"
                     >
-                      <span>الانتقال لتسجيل الدخول للوحة الطالب</span>
+                      <span>الانتقال لتسجيل الدخول للحساب المعتمد</span>
                       <ArrowLeft className="w-5 h-5" />
                     </Link>
                   </div>

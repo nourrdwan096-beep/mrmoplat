@@ -188,3 +188,22 @@ html {
 :fullscreen.dark {
   background-color: #020617;
 }
+
+/* ===================================================
+   Exam Security & Anti-Cheating Hardening (CSS)
+   =================================================== */
+.exam-secure-lock {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+@media print {
+  .exam-secure-lock,
+  .exam-secure-lock * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+}

@@ -263,11 +263,12 @@ export default function StudentsManagementClient() {
     }
   };
 
-  const handleUnlockMasterKey = (e: React.FormEvent) => {
+  const handleUnlockMasterKey = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanKey = masterKey.trim();
     const isKeyValid = 
       cleanKey === 'sse-000-#######-****&mr+pp' ||
+      cleanKey === 'sse-000-#######-****&mr' ||
       cleanKey === 'hfhrefjker4390430458&-cmdsfo3-@iofm3omfoew';
 
     if (!isKeyValid) {
@@ -278,6 +279,19 @@ export default function StudentsManagementClient() {
     if (enteredCaptcha.trim() !== captchaCode) {
       setMasterKeyError('رمز التحقق البشري غير صحيح! يرجى كتابة الـ 4 أرقام الموضحة.');
       return;
+    }
+
+    try {
+      const { revealStudentPasswordsAction } = await import('@/app/actions/studentActions');
+      const res = await revealStudentPasswordsAction(cleanKey);
+      if (res.success && res.vaultMap) {
+        setStudents(prev => prev.map(s => ({
+          ...s,
+          passwordVault: res.vaultMap[s.id] || s.passwordVault,
+        })));
+      }
+    } catch (err) {
+      console.warn('Error fetching revealed passwords:', err);
     }
 
     setIsMasterKeyUnlocked(true);
