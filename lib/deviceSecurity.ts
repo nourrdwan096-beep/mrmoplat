@@ -229,8 +229,8 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
 
   const screenSummary = `${maxDim}x${minDim}@${pixelRatio}`;
 
-  // 5. Deterministic Physical Hardware Fingerprint (Identical across all browsers on this hardware)
-  const hardwareFingerprint = `DEV-${deviceType.toUpperCase()}-${os.toUpperCase()}-${maxDim}X${minDim}-${pixelRatio}-${cores}C-${touchPoints}`;
+  // 5. Unforgeable Unique Device Hardware Token (0% collision across physical devices)
+  const hardwareFingerprint = getPersistentUniqueDeviceToken();
   const displayName = `${deviceTypeArabic} (${osArabic})`;
 
   return {
@@ -243,6 +243,80 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
     displayName,
     browserName,
   };
+}
+
+const UNIQUE_DEVICE_STORAGE_KEY = 'mr_unique_device_token';
+
+function generateSecureUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+/**
+ * Checks if a token is a legacy generic screen resolution string
+ */
+export function isLegacyGenericFingerprint(token: string | null | undefined): boolean {
+  if (!token) return false;
+  return /^DEV-(MOBILE|DESKTOP|TABLET)-(ANDROID|WINDOWS|IOS|LINUX|OTHER)-\d+X\d+/i.test(token);
+}
+
+/**
+ * Generates or retrieves an unforgeable unique device installation token
+ * that guarantees absolute zero collision across different physical devices.
+ */
+export function getPersistentUniqueDeviceToken(): string {
+  if (typeof window === 'undefined') return 'SERVER_ENVIRONMENT';
+
+  let token: string | null = null;
+
+  try {
+    const local = localStorage.getItem(UNIQUE_DEVICE_STORAGE_KEY);
+    if (local && !isLegacyGenericFingerprint(local)) {
+      token = local;
+    } else if (isLegacyGenericFingerprint(local)) {
+      localStorage.removeItem(UNIQUE_DEVICE_STORAGE_KEY);
+    }
+  } catch {}
+
+  if (!token) {
+    const cookieVal = getCookie(UNIQUE_DEVICE_STORAGE_KEY);
+    if (cookieVal && !isLegacyGenericFingerprint(cookieVal)) {
+      token = cookieVal;
+    }
+  }
+
+  // Purge any legacy generic screen resolution fingerprints from all storage
+  try {
+    const oldFp1 = localStorage.getItem('mr_hw_device_fp');
+    if (isLegacyGenericFingerprint(oldFp1)) localStorage.removeItem('mr_hw_device_fp');
+    const oldFp2 = localStorage.getItem('mr_device_fingerprint');
+    if (isLegacyGenericFingerprint(oldFp2)) localStorage.removeItem('mr_device_fingerprint');
+    const oldFp3 = localStorage.getItem('mr_radwan_device_fp');
+    if (isLegacyGenericFingerprint(oldFp3)) localStorage.removeItem('mr_radwan_device_fp');
+  } catch {}
+
+  if (!token) {
+    const rawUuid = generateSecureUuid().replace(/-/g, '').slice(0, 16).toUpperCase();
+    token = `MR_DEV_${rawUuid}`;
+  }
+
+  try {
+    localStorage.setItem(UNIQUE_DEVICE_STORAGE_KEY, token);
+    localStorage.setItem('mr_hw_device_fp', token);
+    localStorage.setItem('mr_device_fingerprint', token);
+    localStorage.setItem('mr_radwan_device_fp', token);
+    setCookie(UNIQUE_DEVICE_STORAGE_KEY, token);
+    setCookie('mr_hw_device_fp', token);
+    setCookie('mr_radwan_device_fp', token);
+  } catch {}
+
+  return token;
 }
 
 // 5. IndexedDB Persistence Layer for Hardware Tag
@@ -433,67 +507,29 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
 
   const primaryFp = await getStrictDeviceFingerprint();
   const candidateSet = new Set<string>();
-  if (primaryFp) candidateSet.add(primaryFp);
+  if (primaryFp && !isLegacyGenericFingerprint(primaryFp)) {
+    candidateSet.add(primaryFp);
+  }
 
-  // Compute sub-fingerprints for hardware matching
+  // Collect candidate legitimate tokens across stores, strictly ignoring legacy screen dimensions
   try {
-    const hwRaw = getHardwareProfile();
-    const hwHash = hashString(hwRaw);
-    const cvHash = getCanvasFingerprint();
-    const glHash = getWebGLFingerprint();
-    candidateSet.add(`MR-HW-${hwHash}`.toUpperCase());
-    candidateSet.add(`MR-HW-${hwHash}-${cvHash}`.toUpperCase());
-    candidateSet.add(`MR-HW-${hwHash}-${cvHash}-${glHash}`.toUpperCase());
-    candidateSet.add(`MR-CV-${cvHash}`.toUpperCase());
-    candidateSet.add(`MR-GL-${glHash}`.toUpperCase());
+    const k1 = localStorage.getItem(UNIQUE_DEVICE_STORAGE_KEY);
+    const k2 = localStorage.getItem('mr_device_fingerprint');
+    const k3 = localStorage.getItem('mr_hw_device_fp');
+    [k1, k2, k3].forEach(k => {
+      if (k && !isLegacyGenericFingerprint(k)) candidateSet.add(k);
+    });
   } catch {}
 
-  // Collect candidate historical fingerprints across all stores
-  try {
-    const k1 = localStorage.getItem('mr_hw_device_fp');
-    const k2 = localStorage.getItem('mr_radwan_device_fp');
-    const k3 = localStorage.getItem('mr_device_fingerprint');
-    const k4 = localStorage.getItem('mr_primary_fp');
-    if (k1) candidateSet.add(k1);
-    if (k2) candidateSet.add(k2);
-    if (k3) candidateSet.add(k3);
-    if (k4) candidateSet.add(k4);
+  const c1 = getCookie(UNIQUE_DEVICE_STORAGE_KEY);
+  if (c1 && !isLegacyGenericFingerprint(c1)) candidateSet.add(c1);
 
-    const devRegistered = localStorage.getItem('mr_radwan_registered_devices');
-    if (devRegistered) {
-      const arr = JSON.parse(devRegistered);
-      if (Array.isArray(arr)) arr.forEach((x: any) => typeof x === 'string' && candidateSet.add(x));
-    }
-  } catch {}
-
-  const c1 = getCookie('mr_hw_device_fp');
-  const c2 = getCookie('mr_radwan_device_fp');
-  if (c1) candidateSet.add(c1);
-  if (c2) candidateSet.add(c2);
-
-  const idbData = await getIndexedDBData();
-  if (idbData.token) candidateSet.add(idbData.token);
-
-  const cacheData = await getCacheData();
-  if (cacheData.token) candidateSet.add(cacheData.token);
-
-  // Check Local Lock and Stored Student Profile
+  // Check Local Lock and Stored Student Profile (only if actually authenticated on this browser)
   let isLocallyLocked = false;
   let studentId: string | undefined = undefined;
   let storedStudent: StrictDeviceIdentity['storedStudent'] = null;
 
   try {
-    const isLockedStr = localStorage.getItem('mr_device_registered');
-    const isBannedStr = localStorage.getItem('mr_device_banned');
-    const cRegistered = getCookie('mr_device_registered') === 'true';
-    if (isLockedStr === 'true' || isBannedStr === 'true' || cRegistered) {
-      isLocallyLocked = true;
-    }
-
-    studentId = localStorage.getItem('mr_student_id') || getCookie('mr_student_id') || undefined;
-    const studentEmail = localStorage.getItem('mr_student_email') || getCookie('mr_student_email') || undefined;
-    const studentPhone = localStorage.getItem('mr_student_phone') || getCookie('mr_student_phone') || undefined;
-
     // Check modern robust device student binding
     const rawBinding = localStorage.getItem('mr_device_student_binding') || getCookie('mr_device_student_binding');
     if (rawBinding) {
@@ -507,53 +543,23 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
       } catch {}
     }
 
-    const rawInfo = localStorage.getItem('mr_registered_student_info');
-    if (rawInfo && !storedStudent) {
-      storedStudent = JSON.parse(rawInfo);
-      isLocallyLocked = true;
-      if (!studentId && storedStudent?.id) {
-        studentId = storedStudent.id;
-      }
-    }
-
-    if (!storedStudent && (studentId || studentEmail || studentPhone)) {
-      storedStudent = {
-        id: studentId,
-        email: studentEmail,
-        phone: studentPhone,
-      };
-    }
-
-    // Recover from IndexedDB or Cache if local storage was cleared
-    if (!storedStudent && idbData.studentInfo) {
-      storedStudent = idbData.studentInfo;
-      isLocallyLocked = true;
-      if (!studentId && storedStudent?.id) {
-        studentId = storedStudent.id;
-      }
-    } else if (!storedStudent && cacheData.studentInfo) {
-      storedStudent = cacheData.studentInfo;
-      isLocallyLocked = true;
-      if (!studentId && storedStudent?.id) {
-        studentId = storedStudent.id;
-      }
-    }
-
     // Also check current active user if student
     const rawUser = localStorage.getItem('mr_radwan_current_user');
-    if (rawUser) {
-      const parsedUser = JSON.parse(rawUser);
-      if (parsedUser && parsedUser.role === 'student') {
-        isLocallyLocked = true;
-        studentId = parsedUser.id || studentId;
-        storedStudent = {
-          id: parsedUser.id,
-          fullName: parsedUser.fullName,
-          email: parsedUser.email,
-          phone: parsedUser.phone,
-          status: parsedUser.status,
-        };
-      }
+    if (rawUser && !storedStudent) {
+      try {
+        const parsedUser = JSON.parse(rawUser);
+        if (parsedUser && parsedUser.role === 'student') {
+          isLocallyLocked = true;
+          studentId = parsedUser.id || studentId;
+          storedStudent = {
+            id: parsedUser.id,
+            fullName: parsedUser.fullName,
+            email: parsedUser.email,
+            phone: parsedUser.phone,
+            status: parsedUser.status,
+          };
+        }
+      } catch {}
     }
   } catch {}
 

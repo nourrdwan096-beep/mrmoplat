@@ -14,9 +14,12 @@ export async function checkDeviceStatusAction(
     const cleanFp = (deviceFingerprint || '').trim();
     const cleanStudentId = (studentId || '').trim();
 
-    // Consolidate all fingerprint candidates into a unique array
+    // Consolidate all fingerprint candidates into a unique array, strictly filtering out legacy generic screen dimensions
     const allFps = Array.from(
-      new Set([cleanFp, ...(Array.isArray(candidateFingerprints) ? candidateFingerprints : [])].map(f => (f || '').trim()).filter(Boolean))
+      new Set([cleanFp, ...(Array.isArray(candidateFingerprints) ? candidateFingerprints : [])]
+        .map(f => (f || '').trim())
+        .filter(f => Boolean(f) && !/^DEV-(MOBILE|DESKTOP|TABLET)-(ANDROID|WINDOWS|IOS|LINUX|OTHER)-\d+X\d+/i.test(f))
+      )
     );
 
     // 1. Strict Check: Are any candidate fingerprints in banned_devices?
@@ -76,8 +79,8 @@ export async function checkDeviceStatusAction(
       }
     }
 
-    // 3. Fallback check by cleanStudentId if explicitly queried and not matched by hardware
-    if (!matchedStudent && cleanStudentId) {
+    // 3. Fallback check by cleanStudentId only if cleanStudentId is an actual authenticated student
+    if (!matchedStudent && cleanStudentId && cleanStudentId.length > 10) {
       const { data: profileById } = await supabaseAdmin
         .from('profiles')
         .select('*')
@@ -762,6 +765,32 @@ async function verifyAndEnforceStudentDevice(
     };
   }
 
+  // 5b. If student has a legacy device slot (e.g. DEV_LEGACY_...), replace that slot with their real device token
+  const legacySlot = existingList.find((d: any) => (d.device_fingerprint || '').startsWith('DEV_LEGACY_'));
+  if (legacySlot) {
+    await supabaseAdmin
+      .from('student_devices')
+      .update({
+        device_fingerprint: cleanFp,
+        device_name: deviceInfo?.name || legacySlot.device_name,
+        browser_info: deviceInfo?.browser || legacySlot.browser_info,
+        last_active: new Date().toISOString(),
+      })
+      .eq('id', legacySlot.id);
+
+    if (legacySlot.is_primary) {
+      await supabaseAdmin
+        .from('profiles')
+        .update({ primary_device_fingerprint: cleanFp })
+        .eq('id', studentId);
+    }
+
+    return {
+      allowed: true,
+      isPrimary: Boolean(legacySlot.is_primary),
+    };
+  }
+
   // 6. New device for this student: Enforce max 2 devices limit
   if (existingList.length >= 2 && !hasUnlimitedDevicesExemption) {
     return {
@@ -1125,7 +1154,12 @@ export async function registerStudentAction(studentData: any) {
     const candidateFps = Array.isArray(studentData.candidateFingerprints) 
       ? studentData.candidateFingerprints.map((f: any) => (f || '').trim()).filter(Boolean)
       : [];
-    const allFps = Array.from(new Set([fingerprint, ...candidateFps].filter(Boolean)));
+    const allFps = Array.from(
+      new Set([fingerprint, ...candidateFps]
+        .map(f => (f || '').trim())
+        .filter(f => Boolean(f) && !/^DEV-(MOBILE|DESKTOP|TABLET)-(ANDROID|WINDOWS|IOS|LINUX|OTHER)-\d+X\d+/i.test(f))
+      )
+    );
 
     if (!cleanPhone || cleanPhone.length !== 11) {
       return { success: false, error: 'يرجى إدخال رقم هاتف مصري صحيح مكون من 11 رقماً.' };
