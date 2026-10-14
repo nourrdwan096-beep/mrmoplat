@@ -107,6 +107,27 @@ export default function StudentCoursesPage() {
         </div>
       </div>
 
+      {/* Trial Phase Free Codes Announcement */}
+      <div className="p-4 sm:p-5 rounded-3xl bg-amber-500/10 border-2 border-amber-500/30 text-amber-900 dark:text-amber-200 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="space-y-1 text-center md:text-right">
+          <div className="inline-flex items-center gap-1.5 text-xs font-black text-amber-700 dark:text-amber-400">
+            <Sparkles className="w-4 h-4 text-amber-500" />
+            <span>فترة التجريب والتطوير (2027 - 2028) • الاشتراكات المالية مغلقة</span>
+          </div>
+          <p className="text-xs sm:text-sm font-bold">
+            جميع أكواد الكورسات تُمنح تجريبياً مجاناً 100%! لا تقم بتحويل أي أموال لأي محفظة. تواصل مع مستر محمد رضوان لاستلام كود أي كورس ترغب في مذاكرته.
+          </p>
+        </div>
+        <a
+          href="https://wa.me/201552191172?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%D9%8B%20%D9%85%D8%B3%D8%AA%D8%B1%20%D9%85%D8%AD%D9%85%D8%AF%D8%8C%20%D8%A3%D8%AD%D8%AA%D8%A7%D8%AC%20%D9%83%D9%88%D8%AF%20%D8%AA%D9%81%D8%B9%D9%8A%D9%84%20%D9%85%D8%AC%D8%A7%D9%86%D9%8A%20%D9%84%D8%A3%D8%AD%D8%AF%20%D8%A7%D9%84%D9%83%D9%88%D8%B1%D8%B3%D8%A7%D8%AA"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs shrink-0 shadow-md transition-all flex items-center gap-2 text-center"
+        >
+          <span>طلب كود تجريبي عبر واتساب 🎁</span>
+        </a>
+      </div>
+
       {activeTab === 'my_courses' ? (
         <div className="space-y-6">
           {enrolledCourses.length === 0 ? (

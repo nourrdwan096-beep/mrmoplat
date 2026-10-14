@@ -522,22 +522,20 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
                   )}
                 </div>
 
-                {/* Wallet / Fawry Option */}
-                <button 
-                  onClick={handleWalletBuy}
-                  className="w-full p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-800 hover:border-emerald-500 transition-all flex items-center justify-between group text-right"
-                >
-                  <div className="flex items-center gap-3.5">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                      <CreditCard className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="font-black text-slate-900 dark:text-white text-sm">الشراء عبر المحفظة / فوري</h3>
-                      <p className="text-xs font-medium text-slate-500 dark:text-slate-400">سعر الاشتراك: {course?.price} ج.م</p>
-                    </div>
-                  </div>
-                  <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition-colors rotate-180" />
-                </button>
+                {/* Trial Period Info & WhatsApp Code Request */}
+                <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-right space-y-2">
+                  <p className="text-xs font-bold text-amber-800 dark:text-amber-300">
+                    📢 مرحلة التشغيل التجريبي (2027 - 2028): باب الاشتراكات المالية مغلق بالكامل حالياً، ولا يتم قبول أي تحويلات على أي محفظة. الأكواد متاحة للتجربة مجاناً!
+                  </p>
+                  <a
+                    href={`https://wa.me/201552191172?text=${encodeURIComponent(`مرحباً مستر محمد رضوان، أود تجربة المنصة وأحتاج كود تفعيل مجاني لكورس: (${course?.title || ''})`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-md transition-all text-center"
+                  >
+                    <span>طلب كود تفعيل الكورس مجاناً عبر واتساب 🎁</span>
+                  </a>
+                </div>
               </>
             )}
           </div>

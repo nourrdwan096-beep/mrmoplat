@@ -17,9 +17,12 @@ export default function AnnouncementsBanner() {
       .catch((err) => console.error(err));
   }, []);
 
-  const currentAnnouncement = announcements[0];
-
-  if (!currentAnnouncement) return null;
+  const currentAnnouncement = announcements[0] || {
+    id: 'trial_announcement',
+    title: '📢 تنبيه هام ورسمي: المنصة في فترة تشغيل تجريبي لعام (2027 - 2028) • باب الاشتراكات المالية مغلق والتحويلات ممنوعة • تواصل مع المستر لاستلام كود تجريبي مجاني 100%',
+    announcementType: 'general',
+    isPublished: true,
+  };
 
   return (
     <div className="relative overflow-hidden bg-gradient-to-r from-amber-500/15 via-orange-500/10 to-amber-500/15 border-b border-amber-500/20 py-2.5 px-4 text-xs sm:text-sm">

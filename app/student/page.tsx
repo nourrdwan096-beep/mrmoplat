@@ -480,7 +480,7 @@ export default function StudentDashboardPage() {
           </div>
           <div className="min-w-0">
             <h4 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white truncate">تفعيل كود كورس</h4>
-            <p className="text-[11px] text-slate-400 truncate">شحن وشراء فوري</p>
+            <p className="text-[11px] text-slate-400 truncate">تفعيل الأكواد المجانية</p>
           </div>
         </Link>
 
@@ -564,7 +564,7 @@ export default function StudentDashboardPage() {
                   href="/student/courses" 
                   className="inline-flex items-center justify-center px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white text-base font-black rounded-2xl shadow-xl shadow-emerald-500/20 hover:shadow-emerald-500/30 transition-all hover:-translate-y-1"
                 >
-                  تصفح وشراء الكورسات المتاحة
+                  تصفح وتفعيل الكورسات المتاحة
                 </Link>
               </div>
             ) : (

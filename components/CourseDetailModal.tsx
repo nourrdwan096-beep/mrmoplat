@@ -37,7 +37,8 @@ import {
   FileText,
   Presentation,
   Play,
-  Download
+  Download,
+  MessageSquare
 } from 'lucide-react';
 import { getAcademicBatchYear } from '@/components/CourseCard';
 import { useResolvedImageUrl } from '@/hooks/useResolvedImageUrl';
@@ -536,37 +537,29 @@ export default function CourseDetailModal({
                     </div>
                   )}
 
-                  {/* Price Banner */}
-                  <div className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <span className="text-xs text-slate-500 font-bold block mb-1">قيمة الاشتراك بالكورس</span>
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-3xl font-black text-emerald-600 dark:text-emerald-400">
-                          {course.isFree ? 'مجاني 100%' : `${course.price} ج.م`}
-                        </span>
-                        {!course.isFree && course.hasDiscount && course.originalPrice && course.originalPrice > course.price && (
-                          <span className="text-sm font-bold text-slate-400 line-through">
-                            {course.originalPrice} ج.م
-                          </span>
-                        )}
-                      </div>
+                  {/* Trial Period Announcement Banner */}
+                  <div className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 space-y-2 text-right">
+                    <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-black text-sm">
+                      <Sparkles className="w-4 h-4 shrink-0 text-amber-500" />
+                      <span>مرحلة التشغيل التجريبي • العام الدراسي 2027 - 2028</span>
                     </div>
-                    <div className="text-right sm:text-left">
-                      <span className="text-xs text-slate-500 font-bold block mb-1">صلاحية الوصول والأجهزة</span>
-                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200 px-3 py-1 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 inline-block">
-                        متاح طوال عام ٢٠٢٦ (حد أقصى جهازين)
+                    <p className="text-xs text-slate-700 dark:text-slate-300 font-bold leading-relaxed">
+                      المنصة حالياً غير جاهزة للاشتراكات التجارية وسيتم فتح باب الاشتراكات رسمياً العام القادم بإذن الله.
+                      <span className="block text-rose-600 dark:text-rose-400 font-black mt-1">
+                        ⛔ يمنع تحويل أي مبالغ مالية إلى أي محفظة إلكترونية.
                       </span>
-                    </div>
+                      🎁 يسعدنا أن نمنحك كود تفعيل تجريبي لهذا الكورس مجاناً 100% للتجربة والتعلم!
+                    </p>
                   </div>
 
-                  {/* Free Course Instant Enroll */}
+                  {/* Free Course Instant Enroll (if course is explicitly marked free) */}
                   {course.isFree ? (
                     <div className="p-6 rounded-2xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-center space-y-3">
                       <h4 className="text-base font-black text-emerald-900 dark:text-emerald-300">
-                        هذا الكورس مقدم مجاناً لجميع الطلاب
+                        هذا الكورس متاح ومفتوح مجاناً
                       </h4>
                       <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">
-                        اضغط على الزر أدناه لتفعيل الكورس مباشرة على حسابك والبدء في المذاكرة.
+                        اضغط على الزر أدناه لتفعيل الكورس مباشرة على حسابك والبدء في المذاكرة فوراً.
                       </p>
                       <button
                         onClick={handleFreeEnroll}
@@ -578,76 +571,42 @@ export default function CourseDetailModal({
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      <div className="text-xs font-black text-slate-400 uppercase tracking-wider">
-                        اختر طريقة الشراء والتفعيل المناسبة لك:
-                      </div>
+                      {/* WhatsApp Button to Request Free Trial Code */}
+                      <a
+                        href={`https://wa.me/201552191172?text=${encodeURIComponent(`مرحباً مستر محمد رضوان، أود تجربة المنصة وأحتاج كود التفعيل المجاني لكورس: (${course.title})`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 hover:-translate-y-0.5 text-center"
+                      >
+                        <MessageSquare className="w-4 h-4 shrink-0" />
+                        <span>احصل على كود تفعيل الكورس مجاناً عبر واتساب 🎁</span>
+                      </a>
 
-                      {/* [١] Code Activation */}
+                      {/* Code Input Box */}
                       <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-3 shadow-sm">
                         <div className="flex items-center gap-2 text-sm font-black text-slate-900 dark:text-white">
                           <Key className="w-4 h-4 text-amber-500" />
-                          <span>[١] كود تفعيل الكورس المطبوع (من السنتر / المستر)</span>
+                          <span>إدخال كود التفعيل المجاني (المستلم من المستر)</span>
                         </div>
                         <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                          إذا حصلت على كود كارت الكورس المطبوع، أدخله هنا لتفعيل اشتراكك فوراً:
+                          أدخل الكود الذي أرسله لك مستر محمد رضوان لفتح الكورس وتثبيته على جهازك:
                         </p>
                         <div className="flex gap-2">
                           <input
                             type="text"
                             value={activationCode}
                             onChange={(e) => setActivationCode(e.target.value.toUpperCase())}
-                            placeholder="أدخل كود الكورس (مثال: RADWAN-2026-XYZ)"
+                            placeholder="MR-XXXX-XXXX"
                             className="flex-1 h-12 px-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-mono font-bold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-emerald-500"
                           />
                           <button
                             onClick={handleRedeemCode}
-                            disabled={isSubmitting}
-                            className="px-6 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition-all disabled:opacity-50 shadow-md"
+                            disabled={isSubmitting || !activationCode.trim()}
+                            className="px-6 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-950 hover:bg-slate-800 font-black text-xs transition-all disabled:opacity-50 shadow-md"
                           >
                             {isSubmitting ? 'جاري التحقق...' : 'تفعيل الكود'}
                           </button>
                         </div>
-                      </div>
-
-                      {/* [٢] Wallet Purchase */}
-                      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2 text-sm font-black text-slate-900 dark:text-white">
-                            <Wallet className="w-4 h-4 text-emerald-500" />
-                            <span>[٢] الشراء المباشر من رصيد المحفظة</span>
-                          </div>
-                          <span className="text-xs text-slate-500 dark:text-slate-400 font-medium block">
-                            رصيدك الحالي: <strong>{currentUser?.walletBalance || 0} ج.م</strong>
-                          </span>
-                        </div>
-                        <button
-                          onClick={handleWalletEnroll}
-                          disabled={isSubmitting}
-                          className="px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs shadow-md transition-all shrink-0 disabled:opacity-50"
-                        >
-                          {isSubmitting ? 'جاري الخصم...' : `شراء وخصم ${course.price} ج.م`}
-                        </button>
-                      </div>
-
-                      {/* [٣] Fawry Payment */}
-                      <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2 text-sm font-black text-slate-900 dark:text-white">
-                            <CreditCard className="w-4 h-4 text-rose-500" />
-                            <span>[٣] الدفع عبر فوري (Fawry Pay / المحافظ الإلكترونية)</span>
-                          </div>
-                          <span className="text-xs text-slate-500 dark:text-slate-400 font-medium block">
-                            تواصل مع الدعم الفني لاستلام كود شحن فوري وتفعيل الكورس
-                          </span>
-                        </div>
-                        <a
-                          href={`https://wa.me/201552191172?text=أريد%20الاشتراك%20في%20كورس%20${encodeURIComponent(course.title)}%20عبر%20فوري`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-6 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs shadow-md transition-all shrink-0 text-center"
-                        >
-                          طلب كود فوري عبر واتساب
-                        </a>
                       </div>
                     </div>
                   )}

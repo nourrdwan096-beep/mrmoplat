@@ -9,7 +9,11 @@ import {
   CheckCircle2, 
   ArrowLeft,
   Presentation,
-  ShieldCheck
+  ShieldCheck,
+  KeyRound,
+  Eye,
+  Copy,
+  Trash2
 } from 'lucide-react';
 import { Course } from '@/lib/types';
 import { CourseData } from '@/lib/academicService';
@@ -37,8 +41,6 @@ export function getAcademicBatchYear(date: Date = new Date()): string {
     return 'دفعة 2027';
   }
 }
-
-import { Eye, Copy, Trash2 } from 'lucide-react';
 
 interface CourseCardProps {
   course: CourseData | Course;
@@ -223,7 +225,7 @@ export default function CourseCard({
           {/* Price / Enrollment Status Display */}
           <div className="flex items-center justify-between">
             <span className="text-xs text-slate-500 dark:text-slate-400 font-bold">
-              {isEnrolled ? 'حالة الاشتراك :' : 'قيمة الاشتراك :'}
+              {isEnrolled ? 'حالة الاشتراك :' : 'حالة الكورس :'}
             </span>
 
             {isEnrolled ? (
@@ -231,19 +233,13 @@ export default function CourseCard({
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span>أنت مشترك بالفعل</span>
               </span>
-            ) : isFree ? (
-              <span className="text-sm font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-3 py-1 rounded-xl border border-emerald-200 dark:border-emerald-500/20">
-                مجاني 100%
-              </span>
             ) : (
-              <div className="flex items-baseline gap-2">
-                {hasDiscount && (
-                  <span className="text-xs font-bold text-slate-400 line-through">
-                    {originalPrice} ج.م
-                  </span>
-                )}
-                <span className="text-xl font-black text-slate-900 dark:text-white leading-none">
-                  {price} <span className="text-xs font-bold text-slate-500">ج.م</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-xl border border-emerald-200 dark:border-emerald-500/20">
+                  تجربة مجانية 100%
+                </span>
+                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-bold hidden sm:inline">
+                  (2027 - 2028)
                 </span>
               </div>
             )}
@@ -263,7 +259,7 @@ export default function CourseCard({
               href={`/student/courses/${id}`}
               className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white dark:text-slate-900 text-white text-xs sm:text-sm font-black rounded-2xl shadow-lg shadow-slate-900/20 hover:-translate-y-0.5 transition-all flex items-center justify-center gap-2"
             >
-              <span>تفاصيل الكورس والاشتراك</span>
+              <span>تفاصيل وتفعيل الكورس المجاني</span>
               <ArrowLeft className="w-4 h-4" />
             </Link>
           ) : actionType === 'teacher_dashboard' ? (
@@ -300,13 +296,13 @@ export default function CourseCard({
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2.5">
-              {/* Direct Buy / Enroll Button */}
+              {/* Direct Free Code / Enroll Button */}
               <Link
                 href={`/courses/${id}#enroll-section`}
-                className="py-2.5 px-3 text-xs sm:text-sm font-black rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/50 hover:-translate-y-0.5 transition-all flex items-center justify-center gap-1.5 text-center"
+                className="py-2.5 px-3 text-xs sm:text-sm font-black rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/50 hover:-translate-y-0.5 transition-all flex items-center justify-center gap-1.5 text-center"
               >
-                <ShoppingCart className="w-4 h-4 shrink-0" />
-                <span className="truncate">{isFree ? 'التحاق مجاني' : 'شراء الكورس'}</span>
+                <KeyRound className="w-4 h-4 shrink-0" />
+                <span className="truncate">كود مجاني للتجربة</span>
               </Link>
 
               {/* Dedicated Course Details Page Button */}

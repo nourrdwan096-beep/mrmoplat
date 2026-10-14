@@ -45,7 +45,7 @@ export default function StudentWalletPage() {
         <div>
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-black mb-2 animate-pulse">
             <Construction className="w-4 h-4" />
-            <span>بوابات الدفع الإلكتروني المباشر (قيد التجهيز والربط البنكي)</span>
+            <span>مرحلة التشغيل التجريبي • الاشتراكات المالية مغلقة حتى 2027-2028</span>
           </div>
           <h1 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 dark:text-white flex items-center gap-3">
             المحفظة المالية الذكية
@@ -54,7 +54,7 @@ export default function StudentWalletPage() {
             </span>
           </h1>
           <p className="text-slate-600 dark:text-slate-400 font-medium text-sm md:text-base mt-1 max-w-3xl">
-            متابعة الرصيد المالي وسجل المعاملات. يتم شحن وتفعيل الكورسات حالياً عبر <strong className="text-emerald-600 dark:text-emerald-400">أكواد الشحن والتفعيل المعتمدة</strong> حتى اكتمال تفعيل بوابات الدفع الآلي (فوري والفيزا).
+            متابعة الرصيد وسجل التفعيل. باب الاشتراكات المالية مغلق حالياً، ويتم تفعيل الكورسات بالكامل عبر <strong className="text-emerald-600 dark:text-emerald-400">أكواد التفعيل المجانية</strong> الممنوحة للطلاب للتجربة بالتواصل مع المعلم.
           </p>
         </div>
 
@@ -64,7 +64,7 @@ export default function StudentWalletPage() {
           className="inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-sm shadow-lg shadow-emerald-600/20 transition-all hover:scale-[1.02] active:scale-[0.98] shrink-0"
         >
           <KeyRound className="w-4 h-4" />
-          <span>شراء كورس بكود التفعيل</span>
+          <span>تفعيل كورس بكود التفعيل</span>
         </Link>
       </div>
 
@@ -81,24 +81,23 @@ export default function StudentWalletPage() {
               <span>Next-Gen Financial Architecture • 2030</span>
             </div>
             <h2 className="text-xl sm:text-2xl font-black leading-snug">
-              الربط المباشر مع شبكات الدفع (Fawry & Visa & Mobile Wallets)
+              الربط المباشر مع شبكات الدفع (Fawry & Visa) قيد التجهيز لعام 2027 - 2028
             </h2>
             <p className="text-slate-300 text-sm leading-relaxed">
-              تم بناء البنية التحتية البرمجية لجداول المعاملات المالية بالكامل. عند استلام مفاتيح الـ <span className="font-mono text-emerald-300 bg-emerald-950/60 px-2 py-0.5 rounded-lg border border-emerald-800/40">API Keys</span> الرسمية لبوابات الدفع، سيتم تفعيل الشحن اللحظي بضغطة زر دون أي انقطاع في الخدمة.
+              تم بناء البنية التحتية البرمجية لجداول المعاملات المالية بالكامل. عند استلام مفاتيح الـ <span className="font-mono text-emerald-300 bg-emerald-950/60 px-2 py-0.5 rounded-lg border border-emerald-800/40">API Keys</span> الرسمية لبوابات الدفع مع الانطلاق الرسمي العام القادم، سيتم تفعيل الشحن اللحظي بضغطة زر.
             </p>
 
             <div className="flex flex-wrap items-center gap-3 pt-2">
               <div className="px-3 py-1.5 rounded-xl bg-white/10 backdrop-blur-md border border-white/10 text-xs font-bold text-slate-200 flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>شحن الأكواد مفعّل 100%</span>
+                <span>أكواد التجربة المجانية متاحة 100%</span>
               </div>
               <div className="px-3 py-1.5 rounded-xl bg-amber-500/20 backdrop-blur-md border border-amber-500/30 text-xs font-bold text-amber-300 flex items-center gap-1.5">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-300" />
-                <span>Fawry Pay (قيد الربط)</span>
+                <span>الاشتراكات المالية مغلقة حالياً</span>
               </div>
-              <div className="px-3 py-1.5 rounded-xl bg-blue-500/20 backdrop-blur-md border border-blue-500/30 text-xs font-bold text-blue-300 flex items-center gap-1.5">
-                <CreditCard className="w-3.5 h-3.5 text-blue-300" />
-                <span>بطاقات فيزا / ماستركارد (قيد الربط)</span>
+              <div className="px-3 py-1.5 rounded-xl bg-rose-500/20 backdrop-blur-md border border-rose-500/30 text-xs font-bold text-rose-300 flex items-center gap-1.5">
+                <span>⛔ يمنع تحويل أي مبالغ لمحفظة</span>
               </div>
             </div>
           </div>
@@ -119,31 +118,22 @@ export default function StudentWalletPage() {
               <span className="text-lg font-bold text-emerald-400">جنيه مصري (EGP)</span>
             </div>
 
-            <div className="p-3.5 rounded-2xl bg-white/5 border border-white/10 text-xs text-slate-300 flex items-start gap-2.5">
-              <Info className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-200 flex items-start gap-2.5 leading-relaxed">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
               <p>
-                لشحن رصيد إضافي أو شراء كود كورس مخصص، تواصل مباشرة مع مستر محمد رضوان عبر الواتساب.
+                <strong>تنبيه صارم:</strong> لا تقم بتحويل أي أموال إلى أي أرقام محافظ، الاشتراكات مغلقة حالياً وجميع الأكواد مجانية للتجربة.
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="pt-1">
               <a
-                href="https://wa.me/201552191172"
+                href="https://wa.me/201552191172?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%D9%8B%20%D9%85%D8%B3%D8%AA%D8%B1%20%D9%85%D8%AD%D9%85%D8%AF%D8%8C%20%D8%A3%D9%88%D8%AF%20%D8%AA%D8%AC%D8%B1%D8%A8%D8%A9%20%D8%A7%D9%84%D9%85%D9%86%D8%B5%D8%A9%20%D9%88%D8%A7%D9%84%D8%AD%D8%B5%D9%88%D9%84%20%D8%B9%D9%84%D9%89%20%D9%83%D9%88%D8%AF%20%D8%AA%D8%AC%D8%B1%D9%8A%D8%A8%D9%8A%20%D9%85%D8%AC%D8%A7%D9%86%D9%8A"
                 target="_blank"
                 rel="noreferrer"
-                className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-md text-center"
               >
                 <MessageCircle className="w-3.5 h-3.5" />
-                <span>واتساب: 01552191172</span>
-              </a>
-              <a
-                href="https://wa.me/201148553118"
-                target="_blank"
-                rel="noreferrer"
-                className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <PhoneCall className="w-3.5 h-3.5" />
-                <span>واتساب: 01148553118</span>
+                <span>طلب كود تفعيل كورس مجاناً عبر واتساب</span>
               </a>
             </div>
           </div>
@@ -254,14 +244,14 @@ export default function StudentWalletPage() {
                 فيزا، ماستركارد ومحافظ كاش
               </h3>
               <p className="text-slate-600 dark:text-slate-400 text-xs leading-relaxed">
-                الدفع المباشر عبر بطاقات البنوك ومحافظ الهاتف (فودافون كاش، أورنج كاش، إتصالات كاش، وي باي) بأعلى معايير التشفير البنكي 3D Secure.
+                ستتوفر خدمات الدفع الإلكتروني والربط البنكي والمحافظ عند الافتتاح الرسمي للعام القادم (2027 - 2028). حالياً المنصة تجريبية وكافة الأكواد مجانية تماماً.
               </p>
             </div>
 
             <div className="pt-6 border-t border-slate-100 dark:border-slate-800">
               <div className="w-full py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-black text-xs flex items-center justify-center gap-1.5 cursor-not-allowed">
                 <Lock className="w-3.5 h-3.5" />
-                <span>سيُتاح مع تحديث الـ API القادم</span>
+                <span>مغلق حالياً • متاح في 2027-2028</span>
               </div>
             </div>
           </div>

@@ -602,25 +602,16 @@ export default function CourseDetailsPage({ params }: { params: Promise<{ id: st
               {/* Pricing & Checkout Box */}
               <div className="rounded-[2.5rem] backdrop-blur-2xl bg-white/90 dark:bg-slate-900/90 border border-white/60 dark:border-slate-800/80 p-6 shadow-2xl shadow-emerald-500/5 space-y-5">
                 
-                {/* Price Display */}
+                {/* Trial & Free Period Notice and Code Enrollment */}
+                {/* Price Display / Trial Status */}
                 <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800/80">
-                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400">قيمة الاشتراك:</span>
-                  {course.isFree ? (
-                    <span className="text-lg font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-3.5 py-1 rounded-xl border border-emerald-200 dark:border-emerald-500/20">
-                      مجاني 100%
-                    </span>
-                  ) : (
-                    <div className="flex items-baseline gap-2">
-                      {course.hasDiscount && course.originalPrice && course.originalPrice > course.price && (
-                        <span className="text-sm font-bold text-slate-400 line-through">
-                          {course.originalPrice} ج.م
-                        </span>
-                      )}
-                      <span className="text-3xl font-black text-slate-900 dark:text-white">
-                        {course.price} <span className="text-sm font-bold text-slate-500">ج.م</span>
-                      </span>
-                    </div>
-                  )}
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block">حالة الاشتراك بالكورس:</span>
+                    <span className="text-[11px] font-bold text-amber-600 dark:text-amber-400">مرحلة التجريب (2027 - 2028)</span>
+                  </div>
+                  <span className="text-sm font-black text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-3.5 py-1.5 rounded-xl border border-emerald-200 dark:border-emerald-500/20">
+                    كود مجاني 100% للتجربة
+                  </span>
                 </div>
 
                 {/* If Already Enrolled */}
@@ -648,74 +639,23 @@ export default function CourseDetailsPage({ params }: { params: Promise<{ id: st
                       </Link>
                     </div>
                   </div>
-                ) : course.isFree ? (
-                  /* Free Course Checkout */
-                  <div className="space-y-4">
-                    {errorMessage && (
-                      <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-bold">
-                        {errorMessage}
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      disabled={isSubmitting}
-                      onClick={handleFreeEnroll}
-                      className="w-full py-4 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm rounded-2xl shadow-lg shadow-emerald-600/30 hover:shadow-emerald-600/50 transition-all flex items-center justify-center gap-2"
-                    >
-                      {isSubmitting ? (
-                        <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                      ) : (
-                        <>
-                          <Check className="w-5 h-5" />
-                          <span>التحاق فوري بالكورس المجاني</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
                 ) : (
-                  /* Paid Course Checkout Methods */
+                  /* Trial Period Free Enrollment & Code Redemption Flow */
                   <div className="space-y-4">
                     
-                    {/* Method Selector Tabs */}
-                    <div className="grid grid-cols-3 gap-1.5 p-1 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-black">
-                      <button
-                        type="button"
-                        onClick={() => setEnrollMethod('code')}
-                        className={`py-2 px-1.5 rounded-xl transition-all flex flex-col items-center gap-1 ${
-                          enrollMethod === 'code'
-                            ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                        }`}
-                      >
-                        <KeyRound className="w-3.5 h-3.5" />
-                        <span className="text-[11px]">كود سنتر</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setEnrollMethod('fawry')}
-                        className={`py-2 px-1.5 rounded-xl transition-all flex flex-col items-center gap-1 ${
-                          enrollMethod === 'fawry'
-                            ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                        }`}
-                      >
-                        <CreditCard className="w-3.5 h-3.5" />
-                        <span className="text-[11px]">فودافون/فوري</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setEnrollMethod('wallet')}
-                        className={`py-2 px-1.5 rounded-xl transition-all flex flex-col items-center gap-1 ${
-                          enrollMethod === 'wallet'
-                            ? 'bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-xs'
-                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                        }`}
-                      >
-                        <Wallet className="w-3.5 h-3.5" />
-                        <span className="text-[11px]">المحفظة</span>
-                      </button>
+                    {/* Important Official Announcement Card */}
+                    <div className="p-4 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs space-y-2">
+                      <div className="flex items-center gap-2 font-black text-amber-700 dark:text-amber-400">
+                        <Sparkles className="w-4 h-4 shrink-0 text-amber-500" />
+                        <span>فترة تجريبية وتطويرية (الاشتراكات المالية مغلقة)</span>
+                      </div>
+                      <p className="leading-relaxed font-bold">
+                        المنصة حالياً في مرحلة التشغيل التجريبي تمهيداً للانطلاق الرسمي للعام الدراسي القادم (2027 - 2028).
+                        <strong className="block text-rose-600 dark:text-rose-400 font-black mt-1">
+                          ⛔ باب الاشتراكات المالية مغلق بالكامل، ولا يتم استقبال أي مبالغ أو تحويلات عبر أي محفظة نهائياً.
+                        </strong>
+                        يسعدنا انضمامك لتجربة الكورس مجاناً؛ يمكنك استلام كود تفعيل مجاني 100% بالتواصل المباشر مع مستر محمد رضوان!
+                      </p>
                     </div>
 
                     {/* Messages */}
@@ -730,95 +670,44 @@ export default function CourseDetailsPage({ params }: { params: Promise<{ id: st
                       </div>
                     )}
 
-                    {/* Tab 1: Code */}
-                    {enrollMethod === 'code' && (
-                      <form onSubmit={handleRedeemCode} className="space-y-3">
-                        <label className="block text-xs font-bold text-slate-600 dark:text-slate-400">
-                          أدخل كود الكورس المطبوع (المستلم من السنتر أو المعلم):
-                        </label>
-                        <input
-                          type="text"
-                          value={activationCode}
-                          onChange={(e) => setActivationCode(e.target.value.toUpperCase())}
-                          placeholder="MR-XXXX-XXXX"
-                          className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-center text-sm uppercase tracking-wider focus:outline-hidden focus:border-emerald-500"
-                        />
-                        <button
-                          type="submit"
-                          disabled={isSubmitting}
-                          className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs sm:text-sm rounded-xl shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-2"
-                        >
-                          {isSubmitting ? (
-                            <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                          ) : (
-                            <>
-                              <KeyRound className="w-4 h-4" />
-                              <span>تفعيل الكود وفتح الكورس</span>
-                            </>
-                          )}
-                        </button>
-                      </form>
-                    )}
+                    {/* Primary Action: Get Free Code on WhatsApp */}
+                    <a
+                      href={`https://wa.me/201552191172?text=${encodeURIComponent(`مرحباً مستر محمد رضوان، أود تجربة المنصة والحصول على كود تفعيل مجاني لكورس: (${course.title})`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs sm:text-sm rounded-xl shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 hover:-translate-y-0.5"
+                    >
+                      <MessageCircle className="w-4 h-4 shrink-0" />
+                      <span>طلب كود تفعيل الكورس مجاناً عبر واتساب 🎁</span>
+                    </a>
 
-                    {/* Tab 2: Fawry / Vodafone Cash */}
-                    {enrollMethod === 'fawry' && (
-                      <div className="space-y-3 text-xs">
-                        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 space-y-2">
-                          <p className="font-bold text-slate-700 dark:text-slate-300">
-                            طرق الدفع الإلكتروني المباشر:
-                          </p>
-                          <div className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800">
-                            <span className="font-bold">فودافون كاش / انستاباي :</span>
-                            <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">01552191172</span>
-                          </div>
-                          <div className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-800">
-                            <span className="font-bold">رقم الدعم الإضافي :</span>
-                            <span className="font-mono font-black text-emerald-600 dark:text-emerald-400">01148553118</span>
-                          </div>
-                          <p className="text-[11px] text-slate-500">
-                            بعد التحويل، أرسل سكرين شوت التحويل على واتساب لتفعيل الكورس فوراً.
-                          </p>
-                        </div>
-
-                        <a
-                          href="https://wa.me/201552191172"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
-                        >
-                          <MessageCircle className="w-4 h-4" />
-                          <span>إرسال إيصال التحويل عبر واتساب</span>
-                        </a>
-                      </div>
-                    )}
-
-                    {/* Tab 3: Wallet */}
-                    {enrollMethod === 'wallet' && (
-                      <div className="space-y-3 text-xs">
-                        <div className="flex items-center justify-between p-3 rounded-xl bg-slate-100 dark:bg-slate-800">
-                          <span className="font-bold text-slate-600 dark:text-slate-400">رصيدك في المحفظة:</span>
-                          <span className="font-black text-sm text-slate-900 dark:text-white">
-                            {currentUser ? `${currentUser.walletBalance || 0} ج.م` : 'سجل الدخول لمعرفة الرصيد'}
-                          </span>
-                        </div>
-
-                        <button
-                          type="button"
-                          disabled={isSubmitting || !currentUser || (currentUser?.walletBalance || 0) < course.price}
-                          onClick={handleWalletEnroll}
-                          className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-300 dark:disabled:bg-slate-800 disabled:cursor-not-allowed text-white font-black text-xs rounded-xl shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-2"
-                        >
-                          {isSubmitting ? (
-                            <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                          ) : (
-                            <>
-                              <Wallet className="w-4 h-4" />
-                              <span>خصم {course.price} ج.م والشراء من المحفظة</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    )}
+                    {/* Free Trial Code Input Form */}
+                    <form onSubmit={handleRedeemCode} className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                        معك كود التفعيل المجاني؟ أدخله هنا لفتح الكورس فوراً:
+                      </label>
+                      <input
+                        type="text"
+                        value={activationCode}
+                        onChange={(e) => setActivationCode(e.target.value.toUpperCase())}
+                        placeholder="MR-XXXX-XXXX"
+                        className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-center text-sm uppercase tracking-wider focus:outline-hidden focus:border-emerald-500"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSubmitting || !activationCode.trim()}
+                        className="w-full py-3.5 px-4 bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white dark:text-slate-900 text-white font-black text-xs sm:text-sm rounded-xl shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                      >
+                        {isSubmitting ? (
+                          <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                        ) : (
+                          <>
+                            <KeyRound className="w-4 h-4 text-emerald-500" />
+                            <span>تفعيل الكود وفتح الكورس</span>
+                          </>
+                        )}
+                      </button>
+                    </form>
 
                   </div>
                 )}
@@ -848,16 +737,16 @@ export default function CourseDetailsPage({ params }: { params: Promise<{ id: st
                   <span>تواصل مباشر مع مستر محمد رضوان</span>
                 </div>
                 <p className="text-xs text-slate-300 leading-relaxed font-medium">
-                  هل لديك استفسار حول الكورس أو طرق الاشتراك؟ تواصل معنا مباشرة عبر الواتساب.
+                  هل لديك أي استفسار أكاديمي أو ترغب في الحصول على كود تفعيل مجاني للتجربة؟ تواصل مباشرة مع مستر محمد رضوان عبر الواتساب.
                 </p>
                 <div className="flex flex-col gap-2 pt-1 text-xs">
                   <a
-                    href="https://wa.me/201552191172"
+                    href="https://wa.me/201552191172?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%D9%8B%20%D9%85%D8%B3%D8%AA%D8%B1%20%D9%85%D8%AD%D9%85%D8%AF%D8%8C%20%D8%A3%D8%AD%D8%AA%D8%A7%D8%AC%20%D9%83%D9%88%D8%AF%20%D8%AA%D8%AC%D8%B1%D9%8A%D8%A8%D9%8A%20%D9%85%D8%AC%D8%A7%D9%86%D9%8A"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors flex items-center justify-between font-mono"
                   >
-                    <span>واتساب مستر محمد :</span>
+                    <span>واتساب مستر محمد (أكاديمي وتجريبي) :</span>
                     <span className="text-emerald-400 font-bold">01552191172</span>
                   </a>
                 </div>
