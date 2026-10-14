@@ -28,6 +28,8 @@ import {
   fetchQuestionsByItem,
   saveQuestionsForItem,
   copyExamToTargetCourse,
+  copyVideoToTargetCourse,
+  copyItemToTargetCourse,
   fetchCodesByCourse,
   generateActivationCodes,
   deleteActivationCode,
@@ -587,7 +589,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
     router.push(`/teacher/courses/${courseId}/items/${item.id}`);
   };
 
-  // Transfer Exam / Homework Modal
+  // Transfer / Duplicate Item (Exam, Homework, Video, Sheet) Modal
   const handleOpenTransferExam = (item: UnitItemData) => {
     setActiveExamItem(item);
     setTransferExamTitle(`${item.title} (نسخة منقولة)`);
@@ -595,6 +597,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
     fetchUnitsByCourse(courseId).then(u => {
       setTransferTargetUnits(u);
       if (u.length > 0) setTransferTargetUnitId(u[0].id);
+      else setTransferTargetUnitId('');
     });
     setIsTransferModalOpen(true);
   };
@@ -603,7 +606,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
     if (!activeExamItem || !transferTargetCourseId || !transferTargetUnitId) return;
     setIsTransferring(true);
     try {
-      const copiedItem = await copyExamToTargetCourse(
+      const copiedItem = await copyItemToTargetCourse(
         activeExamItem.id,
         transferTargetCourseId,
         transferTargetUnitId,
@@ -613,17 +616,28 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
       setIsTransferModalOpen(false);
       await loadData();
       if (copiedItem) {
-        const wantsToNavigate = window.confirm(
-          `تم نسخ ونقل ${activeExamItem.itemType === 'homework' ? 'الواجب' : 'الامتحان'} بجميع أسئلته ومحتواه بنجاح! 🎯\n\nهل تود الانتقال المباشر لبنك أسئلة النسخة الجديدة؟`
-        );
-        if (wantsToNavigate) {
-          router.push(`/teacher/courses/${transferTargetCourseId}/items/${copiedItem.id}`);
+        if (activeExamItem.itemType === 'exam' || activeExamItem.itemType === 'homework') {
+          const wantsToNavigate = window.confirm(
+            `تم نسخ ونقل ${activeExamItem.itemType === 'homework' ? 'الواجب' : 'الامتحان'} بجميع أسئلته ومحتواه بنجاح! 🎯\n\nالأسئلة الآن منسوخة نسخة طبق الأصل في الكورس الجديد، وتستطيع تعديلها أو حذف وإضافة أسئلة بحرية دون التأثير على الكورس الأصلي.\n\nهل تود الانتقال المباشر لبنك أسئلة النسخة الجديدة؟`
+          );
+          if (wantsToNavigate) {
+            router.push(`/teacher/courses/${transferTargetCourseId}/items/${copiedItem.id}`);
+          }
+        } else if (activeExamItem.itemType === 'video') {
+          const wantsToNavigate = window.confirm(
+            `تم نسخ ونقل الفيديو "${copiedItem.title}" إلى الكورس والوحدة المحددة بنجاح! 🎬\n\nالفيديو الأصلي بقي في مكانه، ويمكنك تعديل النسخة الجديدة بحرية.\n\nهل تود الانتقال المباشر للكورس المستهدف؟`
+          );
+          if (wantsToNavigate) {
+            router.push(`/teacher/courses/${transferTargetCourseId}`);
+          }
+        } else {
+          alert('تم نسخ ونقل المحتوى بنجاح! 🎯');
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
       setIsTransferring(false);
-      alert('حدث خطأ أثناء النسخ والنقل. يرجى المحاولة مرة أخرى.');
+      alert(err.message || 'حدث خطأ أثناء النسخ والنقل. يرجى المحاولة مرة أخرى.');
     }
   };
 
@@ -955,15 +969,25 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
 
                           {/* Quick Actions & Meta */}
                           <div className="flex items-center gap-2 shrink-0">
-                            {/* Video Preview - Dedicated Watch Page */}
+                            {/* Video Preview & Transfer */}
                             {item.itemType === 'video' && (
-                              <Link
-                                href={`/watch/${courseId}/${item.id}`}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-500/10 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-400 font-bold text-xs rounded-xl transition-colors"
-                              >
-                                <Play className="w-3.5 h-3.5" />
-                                فتح صفحة المشغل
-                              </Link>
+                              <div className="flex items-center gap-1.5">
+                                <Link
+                                  href={`/watch/${courseId}/${item.id}`}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-500/10 hover:bg-emerald-100 text-emerald-700 dark:text-emerald-400 font-bold text-xs rounded-xl transition-colors"
+                                >
+                                  <Play className="w-3.5 h-3.5" />
+                                  <span>فتح المشغل</span>
+                                </Link>
+                                <button
+                                  onClick={() => handleOpenTransferExam(item)}
+                                  className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-emerald-50 dark:bg-slate-800 dark:hover:bg-emerald-500/10 text-slate-700 hover:text-emerald-600 dark:text-slate-300 dark:hover:text-emerald-400 font-bold text-xs rounded-xl transition-all"
+                                  title="نسخ ونقل هذا الفيديو لكورس أو وحدة أخرى"
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                  <span className="hidden md:inline">نسخ ونقل</span>
+                                </button>
+                              </div>
                             )}
 
                             {/* Exam / Homework Question Bank & Clone */}
@@ -988,27 +1012,39 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
                               </div>
                             )}
 
-                            {/* PDF View with provider badge */}
-                            {(item.itemType === 'concept_sheet' || item.itemType === 'summary_pdf') && item.pdfAttachmentUrl && (() => {
-                              const provider = detectLinkProvider(item.pdfAttachmentUrl);
-                              return (
-                                <a
-                                  href={item.pdfAttachmentUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className={`flex items-center gap-1.5 px-3 py-1.5 font-bold text-xs rounded-xl transition-colors ${
-                                    provider === 'mediafire'
-                                      ? 'bg-blue-50 dark:bg-blue-500/10 hover:bg-blue-100 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/40'
-                                      : provider === 'drive'
-                                      ? 'bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/40'
-                                      : 'bg-purple-50 dark:bg-purple-500/10 hover:bg-purple-100 text-purple-700 dark:text-purple-400 border border-purple-200 dark:border-purple-800/40'
-                                  }`}
+                            {/* PDF View with provider badge & Transfer */}
+                            {(item.itemType === 'concept_sheet' || item.itemType === 'summary_pdf') && (
+                              <div className="flex items-center gap-1.5">
+                                {item.pdfAttachmentUrl && (() => {
+                                  const provider = detectLinkProvider(item.pdfAttachmentUrl);
+                                  return (
+                                    <a
+                                      href={item.pdfAttachmentUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className={`flex items-center gap-1.5 px-3 py-1.5 font-bold text-xs rounded-xl transition-colors ${
+                                        provider === 'mediafire'
+                                          ? 'bg-blue-50 dark:bg-blue-500/10 hover:bg-blue-100 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800/40'
+                                          : provider === 'drive'
+                                          ? 'bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800/40'
+                                          : 'bg-purple-50 dark:bg-purple-500/10 hover:bg-purple-100 text-purple-700 dark:text-purple-400 border border-purple-200 dark:border-purple-800/40'
+                                      }`}
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                      <span>{provider === 'mediafire' ? 'MediaFire 🔥' : provider === 'drive' ? 'Drive 📁' : 'عرض الملف 📄'}</span>
+                                    </a>
+                                  );
+                                })()}
+                                <button
+                                  onClick={() => handleOpenTransferExam(item)}
+                                  className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-emerald-50 dark:bg-slate-800 dark:hover:bg-emerald-500/10 text-slate-700 hover:text-emerald-600 dark:text-slate-300 dark:hover:text-emerald-400 font-bold text-xs rounded-xl transition-all"
+                                  title="نسخ ونقل هذا الملف لكورس أو وحدة أخرى"
                                 >
-                                  <Download className="w-3.5 h-3.5" />
-                                  <span>{provider === 'mediafire' ? 'MediaFire 🔥' : provider === 'drive' ? 'Drive 📁' : 'عرض الملف 📄'}</span>
-                                </a>
-                              );
-                            })()}
+                                  <Copy className="w-3.5 h-3.5" />
+                                  <span className="hidden md:inline">نسخ ونقل</span>
+                                </button>
+                              </div>
+                            )}
 
                             <button
                               onClick={() => handleOpenEditItem(item)}
@@ -2959,7 +2995,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
               <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                 <h3 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
                   <Copy className="w-5 h-5 text-emerald-600" />
-                  <span>نسخ ونقل {activeExamItem.itemType === 'homework' ? 'الواجب' : 'الامتحان'}</span>
+                  <span>نسخ ونقل {activeExamItem.itemType === 'video' ? 'الفيديو 🎬' : activeExamItem.itemType === 'homework' ? 'الواجب 🎯' : activeExamItem.itemType === 'exam' ? 'الامتحان 🏆' : 'المحتوى 📄'}</span>
                 </h3>
                 <button onClick={() => setIsTransferModalOpen(false)} className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
                   <X className="w-5 h-5" />
@@ -2991,6 +3027,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
                       const u = await fetchUnitsByCourse(cId);
                       setTransferTargetUnits(u);
                       if (u.length > 0) setTransferTargetUnitId(u[0].id);
+                      else setTransferTargetUnitId('');
                     }}
                     className="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-xs text-slate-900 dark:text-white focus:outline-none"
                   >
@@ -3023,9 +3060,17 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
                   )}
                 </div>
 
-                <div className="p-3.5 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200/60 dark:border-emerald-500/20 rounded-2xl text-[11px] text-emerald-800 dark:text-emerald-300 font-bold leading-relaxed">
-                  💡 سيتم نسخ {activeExamItem.itemType === 'homework' ? 'الواجب' : 'الامتحان'} بجميع أسئلته وقطعه وخياراته وشروحاته ودرجاته إلى الكورس والوحدة المحددة دون الحاجة لإعادة كتابته.
-                </div>
+                {activeExamItem.itemType === 'video' ? (
+                  <div className="p-3.5 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200/60 dark:border-emerald-500/20 rounded-2xl text-[11px] text-emerald-800 dark:text-emerald-300 font-bold leading-relaxed space-y-1">
+                    <p>💡 سيتم عمل نسخة طبق الأصل من الفيديو بجميع روابطه وإعدادات التشغيل والتايمر والوصف إلى الكورس والوحدة المحددة.</p>
+                    <p className="text-emerald-600 dark:text-emerald-400 font-normal">يبقى الفيديو الأصلي في مكانه دون أي تغيير، وتستطيع تعديل النسخة الجديدة بحرية تامة.</p>
+                  </div>
+                ) : (
+                  <div className="p-3.5 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200/60 dark:border-emerald-500/20 rounded-2xl text-[11px] text-emerald-800 dark:text-emerald-300 font-bold leading-relaxed space-y-1">
+                    <p>💡 سيتم نسخ جميع الأسئلة والقطع والخيارات والإجابات النموذجية والشروحات والدرجات نسخة طبق الأصل دون الحاجة لإعادة كتابتها.</p>
+                    <p className="text-emerald-600 dark:text-emerald-400 font-normal">يبقى الامتحان الأصلي بأسئلته كاملاً كما هو، ويمكنك التعديل والإضافة والحذف في النسخة الجديدة بحرية تامة.</p>
+                  </div>
+                )}
               </div>
 
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">

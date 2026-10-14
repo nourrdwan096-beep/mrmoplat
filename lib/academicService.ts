@@ -537,12 +537,26 @@ export async function duplicateCourse(
 
       // Duplicate questions if homework or exam
       if (item.itemType === 'homework' || item.itemType === 'exam') {
-        const questions = await fetchQuestionsByItem(item.id);
-        if (questions.length > 0) {
-          const duplicatedQuestions = questions.map(q => ({
+        let questions = await fetchQuestionsByItem(item.id);
+        if (!questions || questions.length === 0) {
+          const allQ = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
+          questions = allQ.filter(q => q.itemId === item.id);
+        }
+        if (questions && questions.length > 0) {
+          const idMap: { [oldId: string]: string } = {};
+          questions.forEach(q => {
+            idMap[q.id] = crypto.randomUUID();
+          });
+          const duplicatedQuestions: QuestionData[] = questions.map((q, idx) => ({
             ...q,
-            id: 'q_' + Math.random().toString(36).substring(2, 9),
+            id: idMap[q.id] || crypto.randomUUID(),
             itemId: newItem.id,
+            parentId: q.parentId && idMap[q.parentId] ? idMap[q.parentId] : undefined,
+            orderIndex: idx + 1,
+            options: q.options ? JSON.parse(JSON.stringify(q.options)) : [],
+            correctAnswerIds: q.correctAnswerIds ? [...q.correctAnswerIds] : (q.correctAnswerId ? [q.correctAnswerId] : []),
+            wordBankBlanks: q.wordBankBlanks ? JSON.parse(JSON.stringify(q.wordBankBlanks)) : [],
+            wordBankWords: q.wordBankWords ? [...q.wordBankWords] : [],
           }));
           await saveQuestionsForItem(newItem.id, duplicatedQuestions);
         }
@@ -559,7 +573,7 @@ export async function duplicateCourse(
 export async function fetchUnitsByCourse(courseId: string): Promise<UnitData[]> {
   try {
     const remoteUnits = await fetchUnitsServer(courseId);
-    if (remoteUnits && Array.isArray(remoteUnits)) {
+    if (remoteUnits && Array.isArray(remoteUnits) && remoteUnits.length > 0) {
       const allUnits = getLocal<UnitData[]>(STORAGE_KEYS.UNITS, []);
       const otherCoursesUnits = allUnits.filter(u => u.courseId !== courseId);
       const combined = [...otherCoursesUnits, ...remoteUnits];
@@ -629,7 +643,7 @@ export async function removeUnit(unitId: string): Promise<boolean> {
 export async function fetchItemsByUnit(unitId: string): Promise<UnitItemData[]> {
   try {
     const remoteItems = await fetchItemsServer(unitId);
-    if (remoteItems && Array.isArray(remoteItems)) {
+    if (remoteItems && Array.isArray(remoteItems) && remoteItems.length > 0) {
       const allItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
       const otherUnitsItems = allItems.filter(i => i.unitId !== unitId);
       const combined = [...otherUnitsItems, ...remoteItems];
@@ -854,10 +868,12 @@ export async function fetchItemById(itemId: string): Promise<UnitItemData | null
 // QUIZ & EXAM QUESTIONS BANK
 // ==========================================
 export async function fetchQuestionsByItem(itemId: string): Promise<QuestionData[]> {
+  const allQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
+  const localQuestions = allQuestions.filter(q => q.itemId === itemId);
+
   try {
     const remoteQuestions = await fetchQuestionsServer(itemId);
-    if (remoteQuestions && Array.isArray(remoteQuestions)) {
-      const allQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
+    if (remoteQuestions && Array.isArray(remoteQuestions) && remoteQuestions.length > 0) {
       const otherQuestions = allQuestions.filter(q => q.itemId !== itemId);
       setLocal(STORAGE_KEYS.QUESTIONS, [...otherQuestions, ...remoteQuestions]);
       return remoteQuestions.sort((a, b) => a.orderIndex - b.orderIndex);
@@ -866,8 +882,12 @@ export async function fetchQuestionsByItem(itemId: string): Promise<QuestionData
     console.warn('fetchQuestionsServer error, fallback to local storage:', err);
   }
 
-  const allQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
-  return allQuestions.filter(q => q.itemId === itemId).sort((a, b) => a.orderIndex - b.orderIndex);
+  // If remote was empty but local has items, trigger a silent re-sync to server
+  if (localQuestions.length > 0) {
+    saveQuestionsServer(itemId, localQuestions).catch(() => {});
+  }
+
+  return localQuestions.sort((a, b) => a.orderIndex - b.orderIndex);
 }
 
 // STRICT SECURITY: Student Question Fetcher
@@ -938,12 +958,12 @@ export async function saveQuestionsForItem(itemId: string, questions: QuestionDa
   return true;
 }
 
-// Transfer / Copy questions and full exam/homework to another Course & Unit item
-export async function copyExamToTargetCourse(
+// Transfer / Copy any content item (Exam, Homework, Video, Sheet) to another Course & Unit
+export async function copyItemToTargetCourse(
   sourceItemId: string,
   targetCourseId: string,
   targetUnitId: string,
-  newExamTitle: string
+  newItemTitle?: string
 ): Promise<UnitItemData | null> {
   const sourceItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
   let sourceItem = sourceItems.find(i => i.id === sourceItemId);
@@ -952,40 +972,100 @@ export async function copyExamToTargetCourse(
   }
   if (!sourceItem) return null;
 
+  const targetTitle = newItemTitle?.trim() || `${sourceItem.title} (نسخة)`;
+
   const newItem = await saveUnitItem({
     unitId: targetUnitId,
     courseId: targetCourseId,
     itemType: sourceItem.itemType,
-    title: newExamTitle,
-    description: sourceItem.description,
+    title: targetTitle,
+    description: sourceItem.description || '',
     orderIndex: Math.floor(Date.now() / 1000),
-    durationMinutes: sourceItem.durationMinutes || 0,
-    totalMarks: sourceItem.totalMarks || 100,
-    passingScorePercentage: sourceItem.passingScorePercentage || 60,
+    durationMinutes: Number(sourceItem.durationMinutes) || 0,
+    totalMarks: Number(sourceItem.totalMarks) || 100,
+    passingScorePercentage: Number(sourceItem.passingScorePercentage) || 60,
     maxExamAttempts: sourceItem.maxExamAttempts !== undefined && sourceItem.maxExamAttempts !== null ? Number(sourceItem.maxExamAttempts) : 3,
+    videoSourceType: sourceItem.videoSourceType || 'internal_secured',
+    obfuscatedVideoId: sourceItem.obfuscatedVideoId,
+    directVideoUrl: sourceItem.directVideoUrl,
+    pdfAttachmentUrl: sourceItem.pdfAttachmentUrl,
     isPrerequisiteRequired: sourceItem.isPrerequisiteRequired ?? true,
   });
 
-  const questions = await fetchQuestionsByItem(sourceItemId);
-  if (questions.length > 0) {
-    // Map old question IDs (especially passages) to newly generated IDs
-    const idMap: { [oldId: string]: string } = {};
-    questions.forEach(q => {
-      idMap[q.id] = 'q_' + Math.random().toString(36).substring(2, 9) + '_' + Math.random().toString(36).substring(2, 6);
-    });
+  // If item is exam or homework, perform deep replica of all questions
+  if (sourceItem.itemType === 'exam' || sourceItem.itemType === 'homework') {
+    let questions = await fetchQuestionsByItem(sourceItemId);
+    // Double check local storage if empty
+    if (!questions || questions.length === 0) {
+      const allQ = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
+      questions = allQ.filter(q => q.itemId === sourceItemId);
+    }
+    // Also check server directly if still empty
+    if (!questions || questions.length === 0) {
+      try {
+        const remote = await fetchQuestionsServer(sourceItemId);
+        if (remote && Array.isArray(remote) && remote.length > 0) {
+          questions = remote;
+        }
+      } catch (err) {
+        console.warn('Direct server fetch fallback in copy error:', err);
+      }
+    }
 
-    const duplicatedQuestions: QuestionData[] = questions.map((q, idx) => ({
-      ...q,
-      id: idMap[q.id] || ('q_' + Math.random().toString(36).substring(2, 9)),
-      itemId: newItem.id,
-      parentId: q.parentId && idMap[q.parentId] ? idMap[q.parentId] : undefined,
-      orderIndex: idx + 1,
-    }));
+    if (questions && questions.length > 0) {
+      // Map every question to a fresh 36-character standard UUID
+      const idMap: { [oldId: string]: string } = {};
+      questions.forEach(q => {
+        idMap[q.id] = crypto.randomUUID();
+      });
 
-    await saveQuestionsForItem(newItem.id, duplicatedQuestions);
+      const duplicatedQuestions: QuestionData[] = questions.map((q, idx) => ({
+        ...q,
+        id: idMap[q.id] || crypto.randomUUID(),
+        itemId: newItem.id,
+        parentId: q.parentId && idMap[q.parentId] ? idMap[q.parentId] : undefined,
+        orderIndex: idx + 1,
+        options: q.options ? JSON.parse(JSON.stringify(q.options)) : [],
+        correctAnswerIds: q.correctAnswerIds ? [...q.correctAnswerIds] : (q.correctAnswerId ? [q.correctAnswerId] : []),
+        wordBankBlanks: q.wordBankBlanks ? JSON.parse(JSON.stringify(q.wordBankBlanks)) : [],
+        wordBankWords: q.wordBankWords ? [...q.wordBankWords] : [],
+      }));
+
+      await saveQuestionsForItem(newItem.id, duplicatedQuestions);
+
+      // Recalculate total marks from duplicated questions
+      const calculatedTotalMarks = duplicatedQuestions.reduce((sum, q) => {
+        if (q.questionType === 'passage') return sum;
+        return sum + (typeof q.points === 'number' ? q.points : (Number(q.points) || 1));
+      }, 0);
+
+      const finalTotalMarks = calculatedTotalMarks > 0 ? calculatedTotalMarks : (sourceItem.totalMarks || 100);
+      await updateItemMetadata(newItem.id, { totalMarks: finalTotalMarks });
+      newItem.totalMarks = finalTotalMarks;
+    }
   }
 
   return newItem;
+}
+
+// Backward-compatible alias for exam / homework transfer
+export async function copyExamToTargetCourse(
+  sourceItemId: string,
+  targetCourseId: string,
+  targetUnitId: string,
+  newExamTitle: string
+): Promise<UnitItemData | null> {
+  return copyItemToTargetCourse(sourceItemId, targetCourseId, targetUnitId, newExamTitle);
+}
+
+// Dedicated helper for video duplication & transfer
+export async function copyVideoToTargetCourse(
+  sourceItemId: string,
+  targetCourseId: string,
+  targetUnitId: string,
+  newVideoTitle: string
+): Promise<UnitItemData | null> {
+  return copyItemToTargetCourse(sourceItemId, targetCourseId, targetUnitId, newVideoTitle);
 }
 
 // ==========================================
