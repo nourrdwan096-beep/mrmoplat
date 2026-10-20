@@ -164,6 +164,9 @@ export default function RegisterPage() {
           setDeviceStatus(res);
         } else {
           setDeviceStatus(null);
+          if (identity.isLocallyLocked) {
+            await clearDeviceLock();
+          }
         }
       } catch (err) {
         console.error('Device verification error:', err);
@@ -206,6 +209,9 @@ export default function RegisterPage() {
         setDeviceStatus(res);
       } else {
         setDeviceStatus(null);
+        if (identity.isLocallyLocked) {
+          await clearDeviceLock();
+        }
       }
     } catch (err) {
       console.error('Refresh status error:', err);
@@ -260,7 +266,7 @@ export default function RegisterPage() {
     } else if (name === 'captchaCode') {
       cleanVal = normalizeEasternArabicDigits(value).trim();
     } else if (name === 'firstName' || name === 'secondName' || name === 'thirdName' || name === 'lastName') {
-      cleanVal = cleanArabicText(value);
+      cleanVal = cleanArabicText(value, true);
     }
     
     setFormData(prev => {
@@ -787,22 +793,36 @@ export default function RegisterPage() {
                   </p>
                 </div>
 
-                <div className="flex gap-3">
-                  <a
-                    href="https://wa.me/201552191172"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex-1 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2"
+                <div className="space-y-3">
+                  <button
+                    onClick={async () => {
+                      await clearDeviceLock();
+                      setDeviceStatus(null);
+                      setStep(0);
+                    }}
+                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-[0.99]"
                   >
-                    <Phone className="w-4 h-4" />
-                    <span>تواصل مع المعلم لمعرفة السبب</span>
-                  </a>
-                  <Link
-                    href="/"
-                    className="px-6 py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center"
-                  >
-                    الرئيسية
-                  </Link>
+                    <RotateCcw className="w-4 h-4" />
+                    <span>إعادة تقديم طلب تسجيل جديد بالبيانات الصحيحة</span>
+                  </button>
+
+                  <div className="flex gap-3">
+                    <a
+                      href="https://wa.me/201552191172"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 border border-slate-700"
+                    >
+                      <Phone className="w-4 h-4 text-emerald-400" />
+                      <span>تواصل مع المعلم لمعرفة السبب</span>
+                    </a>
+                    <Link
+                      href="/"
+                      className="px-6 py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center border border-slate-700"
+                    >
+                      الرئيسية
+                    </Link>
+                  </div>
                 </div>
               </div>
             )}

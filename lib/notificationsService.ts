@@ -51,35 +51,46 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   });
 }
 
+const GLOBAL_PROMPT_ANSWERED_KEY = 'mr_radwan_notif_prompt_answered_global';
+const GLOBAL_DEVICE_NOTIF_KEY = 'mr_radwan_device_notifs_enabled_global';
+
 /**
- * Check if user has already answered the one-time notification prompt
+ * Check if user or visitor has already answered the one-time notification prompt
  */
-export function hasAnsweredNotificationPrompt(userId: string): boolean {
-  if (typeof window === 'undefined' || !userId) return true;
+export function hasAnsweredNotificationPrompt(userId?: string): boolean {
+  if (typeof window === 'undefined') return true;
   try {
-    return localStorage.getItem(PROMPT_ANSWERED_PREFIX + userId) === 'true';
+    if (localStorage.getItem(GLOBAL_PROMPT_ANSWERED_KEY) === 'true') return true;
+    if (userId && localStorage.getItem(PROMPT_ANSWERED_PREFIX + userId) === 'true') return true;
+    return false;
   } catch {
     return false;
   }
 }
 
 /**
- * Mark notification prompt as answered (asked ONCE per user)
+ * Mark notification prompt as answered (asked ONCE per device/user)
  */
-export function setNotificationPromptAnswered(userId: string): void {
-  if (typeof window === 'undefined' || !userId) return;
+export function setNotificationPromptAnswered(userId?: string): void {
+  if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(PROMPT_ANSWERED_PREFIX + userId, 'true');
+    localStorage.setItem(GLOBAL_PROMPT_ANSWERED_KEY, 'true');
+    if (userId) {
+      localStorage.setItem(PROMPT_ANSWERED_PREFIX + userId, 'true');
+    }
   } catch {}
 }
 
 /**
  * Explicitly set device notifications enabled or disabled
  */
-export function setDeviceNotificationEnabled(userId: string, enabled: boolean): void {
-  if (typeof window === 'undefined' || !userId) return;
+export function setDeviceNotificationEnabled(userId?: string, enabled = true): void {
+  if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(DEVICE_NOTIF_PREFIX + userId, enabled ? 'true' : 'false');
+    localStorage.setItem(GLOBAL_DEVICE_NOTIF_KEY, enabled ? 'true' : 'false');
+    if (userId) {
+      localStorage.setItem(DEVICE_NOTIF_PREFIX + userId, enabled ? 'true' : 'false');
+    }
     window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
   } catch {}
 }
@@ -187,18 +198,25 @@ export function getDeviceNotificationPermission(): NotificationPermission | 'uns
 }
 
 /**
- * Check if user has opted into device notifications
+ * Check if user or visitor has opted into device notifications
  */
-export function isDeviceNotificationEnabled(userId: string): boolean {
-  if (typeof window === 'undefined' || !userId) return false;
+export function isDeviceNotificationEnabled(userId?: string): boolean {
+  if (typeof window === 'undefined') return false;
   try {
-    const rawVal = localStorage.getItem(DEVICE_NOTIF_PREFIX + userId);
-    if (rawVal === 'false') return false;
-    if (rawVal === 'true' && isDeviceNotificationSupported() && Notification.permission === 'granted') {
+    if (userId) {
+      const userVal = localStorage.getItem(DEVICE_NOTIF_PREFIX + userId);
+      if (userVal === 'false') return false;
+      if (userVal === 'true' && isDeviceNotificationSupported() && Notification.permission === 'granted') {
+        return true;
+      }
+    }
+    const globalVal = localStorage.getItem(GLOBAL_DEVICE_NOTIF_KEY);
+    if (globalVal === 'false') return false;
+    if (globalVal === 'true' && isDeviceNotificationSupported() && Notification.permission === 'granted') {
       return true;
     }
-    // If not set yet, but user already granted permission to the domain
-    if (rawVal === null && isDeviceNotificationSupported() && Notification.permission === 'granted') {
+    // If not set yet, but user already granted browser permission to domain
+    if (isDeviceNotificationSupported() && Notification.permission === 'granted') {
       return true;
     }
     return false;
@@ -211,7 +229,7 @@ export function isDeviceNotificationEnabled(userId: string): boolean {
  * Toggle or enable device notifications and request browser permission
  * Also permanently records that user has answered the prompt
  */
-export async function requestDeviceNotificationPermission(userId: string): Promise<boolean> {
+export async function requestDeviceNotificationPermission(userId?: string): Promise<boolean> {
   if (!isDeviceNotificationSupported()) return false;
 
   // Mark that user has answered the one-time prompt
@@ -224,7 +242,7 @@ export async function requestDeviceNotificationPermission(userId: string): Promi
     }
 
     if (perm === 'granted') {
-      localStorage.setItem(DEVICE_NOTIF_PREFIX + userId, 'true');
+      setDeviceNotificationEnabled(userId, true);
       playNotificationChime();
       await sendNativeDeviceNotification(
         'منصة مستر محمد رضوان 🌟',
@@ -234,7 +252,7 @@ export async function requestDeviceNotificationPermission(userId: string): Promi
       window.dispatchEvent(new CustomEvent('mr_radwan_notifications_updated'));
       return true;
     } else {
-      localStorage.setItem(DEVICE_NOTIF_PREFIX + userId, 'false');
+      setDeviceNotificationEnabled(userId, false);
       return false;
     }
   } catch (err) {

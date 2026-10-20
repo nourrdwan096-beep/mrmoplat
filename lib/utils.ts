@@ -51,11 +51,10 @@ export function validateEgyptianPhone(phone: string): boolean {
 /**
  * Strip Arabic diacritics / tashkeel and tatweel (kashida) for reliable name validation
  */
-export function cleanArabicText(text: string): string {
+export function cleanArabicText(text: string, preserveTrailingSpace = false): string {
   if (!text) return '';
-  return text
-    .replace(/[\u064B-\u065F\u0670\u0640]/g, '') // strip harakat and tatweel
-    .trim();
+  const cleaned = text.replace(/[\u064B-\u065F\u0670\u0640]/g, '');
+  return preserveTrailingSpace ? cleaned.replace(/^\s+/, '') : cleaned.trim();
 }
 
 /**

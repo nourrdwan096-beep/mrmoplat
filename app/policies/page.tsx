@@ -134,9 +134,6 @@ export default function PoliciesPage() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-300 font-sans selection:bg-violet-500 selection:text-white" dir="rtl">
       
-      {/* Top Announcements Banner */}
-      <AnnouncementsBanner />
-
       {/* Navigation Header */}
       <Navbar />
 

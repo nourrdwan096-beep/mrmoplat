@@ -44,10 +44,7 @@ export default function HomePage() {
   return (
     <div className="min-h-screen flex flex-col bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-300 font-sans selection:bg-violet-500 selection:text-white">
       
-      {/* 1. Announcements Banner */}
-      <AnnouncementsBanner />
-
-      {/* 2. Top Navigation Bar (Theme Switch + Login + Register + Policies Tab) */}
+      {/* Top Navigation Bar (Theme Switch + Login + Register + Policies Tab) */}
       <Navbar
         onOpenLogin={handleStartLoginFlow}
         onOpenRegister={handleStartRegisterFlow}

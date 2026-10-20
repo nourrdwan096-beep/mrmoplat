@@ -280,10 +280,9 @@ export default function NotificationBell() {
   };
 
   const handleEnableDeviceNotifications = async () => {
-    if (!currentUser?.id) return;
     setIsActivatingDevice(true);
     try {
-      const granted = await requestDeviceNotificationPermission(currentUser.id);
+      const granted = await requestDeviceNotificationPermission(currentUser?.id);
       setDevicePermission(getDeviceNotificationPermission());
       if (granted) {
         showToast('تم تفعيل إشعارات جهازك بنجاح! 🔔');

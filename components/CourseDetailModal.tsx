@@ -538,17 +538,16 @@ export default function CourseDetailModal({
                   )}
 
                   {/* Trial Period Announcement Banner */}
-                  <div className="p-5 rounded-2xl bg-amber-500/10 border-2 border-amber-500/30 space-y-2 text-right">
-                    <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-black text-sm">
-                      <Sparkles className="w-4 h-4 shrink-0 text-amber-500" />
-                      <span>مرحلة التشغيل التجريبي • العام الدراسي 2027 - 2028</span>
+                  <div className="p-5 rounded-3xl bg-gradient-to-r from-sky-500/10 via-emerald-500/10 to-teal-500/10 dark:from-sky-950/40 dark:via-emerald-950/30 dark:to-teal-950/40 border border-emerald-500/30 space-y-2.5 text-right">
+                    <div className="flex items-center gap-2 text-sky-700 dark:text-sky-300 font-black text-sm">
+                      <Sparkles className="w-4 h-4 shrink-0 text-emerald-500" />
+                      <span>مرحلة التشغيل والتطوير التجريبي • العام الدراسي 2027 - 2028</span>
                     </div>
                     <p className="text-xs text-slate-700 dark:text-slate-300 font-bold leading-relaxed">
-                      المنصة حالياً غير جاهزة للاشتراكات التجارية وسيتم فتح باب الاشتراكات رسمياً العام القادم بإذن الله.
-                      <span className="block text-rose-600 dark:text-rose-400 font-black mt-1">
-                        ⛔ يمنع تحويل أي مبالغ مالية إلى أي محفظة إلكترونية.
+                      المنصة حالياً في مرحلة الاختبار والتجريب، وباب الاشتراكات المالية مغلق بالكامل ولا يتم استقبال أي تحويلات على أي محفظة.
+                      <span className="block text-sky-800 dark:text-emerald-300 font-black mt-1">
+                        🎁 للحصول على كود يفتح لك هذا الكورس مجاناً 100% للتجربة، تواصل مباشرة مع مستر محمد رضوان على الرقم: <span dir="ltr" className="font-mono underline">01552191172</span>
                       </span>
-                      🎁 يسعدنا أن نمنحك كود تفعيل تجريبي لهذا الكورس مجاناً 100% للتجربة والتعلم!
                     </p>
                   </div>
 
@@ -576,10 +575,10 @@ export default function CourseDetailModal({
                         href={`https://wa.me/201552191172?text=${encodeURIComponent(`مرحباً مستر محمد رضوان، أود تجربة المنصة وأحتاج كود التفعيل المجاني لكورس: (${course.title})`)}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 hover:-translate-y-0.5 text-center"
+                        className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-sky-600 to-emerald-600 hover:from-sky-500 hover:to-emerald-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-emerald-600/25 transition-all flex items-center justify-center gap-2 hover:-translate-y-0.5 text-center"
                       >
                         <MessageSquare className="w-4 h-4 shrink-0" />
-                        <span>احصل على كود تفعيل الكورس مجاناً عبر واتساب 🎁</span>
+                        <span>تواصل واتساب للحصول على كود الكورس مجاناً (01552191172) 🎁</span>
                       </a>
 
                       {/* Code Input Box */}

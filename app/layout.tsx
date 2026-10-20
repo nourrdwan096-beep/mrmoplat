@@ -3,6 +3,7 @@ import './globals.css';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { AuthProvider } from '@/context/AuthContext';
 import GlobalNotificationPermissionPrompt from '@/components/notifications/GlobalNotificationPermissionPrompt';
+import AnnouncementsBanner from '@/components/AnnouncementsBanner';
 
 export const metadata: Metadata = {
   title: 'منصة مستر محمد رضوان التعليمية | MR. MOHAMED RADWAN',
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="antialiased bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen" suppressHydrationWarning>
         <ThemeProvider>
           <AuthProvider>
+            <AnnouncementsBanner />
             {children}
             <GlobalNotificationPermissionPrompt />
           </AuthProvider>
