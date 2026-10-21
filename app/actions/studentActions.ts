@@ -33,95 +33,99 @@ export async function checkDeviceStatusAction(
       if (bannedList && bannedList.length > 0) {
         return {
           isBanned: true,
-          isRegistered: true,
+          isRegistered: false,
           reason: bannedList[0].reason || 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة',
           student: null,
+          siblingAccounts: [],
         };
       }
     }
 
-    // 2. Strict Hardware Check: Is this device already tied to a student in profiles or student_devices?
+    // 2. Query any existing students on this device to check for bans and track device serial chain
     let matchedStudent: any = null;
+    let siblingAccounts: any[] = [];
 
     if (allFps.length > 0) {
-      const { data: profileByFp } = await supabaseAdmin
+      const { data: profilesByFp } = await supabaseAdmin
         .from('profiles')
-        .select('*')
+        .select('id, full_name, email, phone, stage, grade, education_type, status, ban_reason, created_at, primary_device_fingerprint')
         .eq('role', 'student')
         .neq('status', 'rejected')
         .in('primary_device_fingerprint', allFps)
-        .order('created_at', { ascending: false })
-        .limit(1);
+        .order('created_at', { ascending: false });
 
-      if (profileByFp && profileByFp.length > 0) {
-        matchedStudent = profileByFp[0];
+      if (profilesByFp && profilesByFp.length > 0) {
+        // If any account on this device is banned, strictly enforce device ban
+        const bannedProfile = profilesByFp.find(p => p.status === 'banned');
+        if (bannedProfile) {
+          return {
+            isBanned: true,
+            isRegistered: false,
+            reason: bannedProfile.ban_reason || 'تم حظر هذا الجهاز نظراً لوجود حساب محظور مسجل به.',
+            student: null,
+            siblingAccounts: profilesByFp,
+          };
+        }
+
+        matchedStudent = profilesByFp[0];
+        siblingAccounts = profilesByFp;
       }
 
-      // Check student_devices table if not matched via primary_device_fingerprint
+      // Check student_devices table if no profiles matched
       if (!matchedStudent) {
-        const { data: devMatch } = await supabaseAdmin
+        const { data: devMatches } = await supabaseAdmin
           .from('student_devices')
           .select('student_id')
           .in('device_fingerprint', allFps)
-          .limit(1);
+          .limit(10);
 
-        if (devMatch && devMatch.length > 0) {
-          const { data: p } = await supabaseAdmin
+        if (devMatches && devMatches.length > 0) {
+          const sIds = devMatches.map((d: any) => d.student_id);
+          const { data: ps } = await supabaseAdmin
             .from('profiles')
-            .select('*')
-            .eq('id', devMatch[0].student_id)
-            .maybeSingle();
+            .select('id, full_name, email, phone, stage, grade, education_type, status, ban_reason, created_at, primary_device_fingerprint')
+            .in('id', sIds)
+            .eq('role', 'student')
+            .neq('status', 'rejected');
 
-          if (p && p.role === 'student' && p.status !== 'rejected') {
-            matchedStudent = p;
+          if (ps && ps.length > 0) {
+            const bannedP = ps.find(p => p.status === 'banned');
+            if (bannedP) {
+              return {
+                isBanned: true,
+                isRegistered: false,
+                reason: bannedP.ban_reason || 'تم حظر هذا الجهاز نظراً لوجود حساب محظور مسجل به.',
+                student: null,
+                siblingAccounts: ps,
+              };
+            }
+            matchedStudent = ps[0];
+            siblingAccounts = ps;
           }
         }
       }
     }
 
-    // 3. Fallback check by cleanStudentId only if cleanStudentId is an actual authenticated student
-    if (!matchedStudent && cleanStudentId && cleanStudentId.length > 10) {
-      const { data: profileById } = await supabaseAdmin
-        .from('profiles')
-        .select('*')
-        .eq('id', cleanStudentId)
-        .maybeSingle();
-
-      if (profileById && profileById.role === 'student' && profileById.status !== 'rejected') {
-        matchedStudent = profileById;
-      }
-    }
-
-    // If an existing student was matched on this device:
-    if (matchedStudent) {
-      const isBanned = matchedStudent.status === 'banned';
-      return {
-        isBanned: isBanned,
-        isRegistered: true, // Device is registered with an existing student!
-        reason: matchedStudent.ban_reason || (isBanned ? 'تم حظر هذا الحساب أو الجهاز' : undefined),
-        student: {
-          id: matchedStudent.id,
-          fullName: matchedStudent.full_name,
-          email: matchedStudent.email,
-          phone: matchedStudent.phone,
-          parentPhone: matchedStudent.parent_phone,
-          stage: matchedStudent.stage,
-          grade: matchedStudent.grade,
-          educationType: matchedStudent.education_type,
-          status: matchedStudent.status,
-          avatarUrl: matchedStudent.avatar_url,
-          whatsapp_otp: matchedStudent.whatsapp_otp,
-          otp_verified: matchedStudent.otp_verified,
-          createdAt: matchedStudent.created_at,
-          primaryDeviceFingerprint: matchedStudent.primary_device_fingerprint,
-        },
-      };
-    }
-
-    return { isBanned: false, isRegistered: false, student: null };
+    // Unbanned device: Never block registration! Allow new accounts while tracking device chain
+    return { 
+      isBanned: false, 
+      isRegistered: false, 
+      student: matchedStudent ? {
+        id: matchedStudent.id,
+        fullName: matchedStudent.full_name,
+        email: matchedStudent.email,
+        phone: matchedStudent.phone,
+        stage: matchedStudent.stage,
+        grade: matchedStudent.grade,
+        educationType: matchedStudent.education_type || 'general',
+        status: matchedStudent.status,
+      } : null,
+      siblingAccounts,
+      deviceFingerprint: cleanFp,
+    };
   } catch (err) {
     console.error('Exception checking device status:', err);
-    return { isBanned: false, isRegistered: false, student: null };
+    return { isBanned: false, isRegistered: false, student: null, siblingAccounts: [] };
   }
 }
 
@@ -144,24 +148,47 @@ export async function fetchStudentsAction(masterKey?: string) {
       return [];
     }
 
-    return data.map((d: any) => ({
-      id: d.id,
-      fullName: d.full_name,
-      email: d.email,
-      phone: d.phone,
-      parentPhone: d.parent_phone,
-      stage: d.stage,
-      grade: d.grade,
-      educationType: d.education_type,
-      status: d.status,
-      // SECURITY HARDENING: Only send decrypted vault if master key was validated on server
-      passwordVault: isMasterAuthorized ? (d.encrypted_password_vault || '••••••') : '••••••••',
-      deviceFingerprint: d.primary_device_fingerprint,
-      createdAt: d.created_at,
-      avatarUrl: d.avatar_url,
-      whatsapp_otp: d.whatsapp_otp,
-      banReason: d.ban_reason,
-    }));
+    // Build device hardware fingerprint map to cross-reference shared device accounts
+    const fpMap: Record<string, Array<{ id: string; fullName: string; phone: string; status: string; stage: string; grade: number }>> = {};
+    data.forEach((d: any) => {
+      const fp = (d.primary_device_fingerprint || '').trim();
+      if (fp) {
+        if (!fpMap[fp]) fpMap[fp] = [];
+        fpMap[fp].push({
+          id: d.id,
+          fullName: d.full_name,
+          phone: d.phone,
+          status: d.status,
+          stage: d.stage,
+          grade: d.grade,
+        });
+      }
+    });
+
+    return data.map((d: any) => {
+      const fp = (d.primary_device_fingerprint || '').trim();
+      const linkedAccounts = fp ? (fpMap[fp] || []).filter(item => item.id !== d.id) : [];
+
+      return {
+        id: d.id,
+        fullName: d.full_name,
+        email: d.email,
+        phone: d.phone,
+        parentPhone: d.parent_phone,
+        stage: d.stage,
+        grade: d.grade,
+        educationType: d.education_type,
+        status: d.status,
+        // SECURITY HARDENING: Only send decrypted vault if master key was validated on server
+        passwordVault: isMasterAuthorized ? (d.encrypted_password_vault || '••••••') : '••••••••',
+        deviceFingerprint: d.primary_device_fingerprint,
+        createdAt: d.created_at,
+        avatarUrl: d.avatar_url,
+        whatsapp_otp: d.whatsapp_otp,
+        banReason: d.ban_reason,
+        linkedDeviceAccounts: linkedAccounts,
+      };
+    });
   } catch (err) {
     console.error('Exception fetching students:', err);
     return [];
@@ -1173,6 +1200,8 @@ export async function registerStudentAction(studentData: any) {
       return { success: false, error: 'كلمة المرور يجب أن تكون 8 خانات على الأقل.' };
     }
 
+    let siblingProfiles: any[] = [];
+
     // 1. Strict Check: Is any device fingerprint banned in banned_devices?
     if (allFps.length > 0) {
       const { data: bannedList } = await supabaseAdmin
@@ -1188,63 +1217,39 @@ export async function registerStudentAction(studentData: any) {
         };
       }
 
-      // 2. Strict Policy: A single device CANNOT register more than one student account!
-      // If this device already has an active, pending_review, or banned student:
-      const { data: existingProfiles } = await supabaseAdmin
+      // 2. Strict Security: Block if device is tied to any BANNED account or device
+      const { data: bannedProfiles } = await supabaseAdmin
         .from('profiles')
-        .select('id, status, full_name, email, phone')
+        .select('id, full_name, status, ban_reason')
         .eq('role', 'student')
-        .neq('status', 'rejected')
+        .eq('status', 'banned')
         .in('primary_device_fingerprint', allFps)
         .limit(1);
 
-      let deviceOwner: any = existingProfiles && existingProfiles.length > 0 ? existingProfiles[0] : null;
-
-      if (!deviceOwner) {
-        const { data: existingDevices } = await supabaseAdmin
-          .from('student_devices')
-          .select('student_id')
-          .in('device_fingerprint', allFps)
-          .limit(1);
-
-        if (existingDevices && existingDevices.length > 0) {
-          const { data: ownerProfile } = await supabaseAdmin
-            .from('profiles')
-            .select('id, full_name, role, status, email, phone')
-            .eq('id', existingDevices[0].student_id)
-            .maybeSingle();
-
-          if (ownerProfile && ownerProfile.role === 'student' && ownerProfile.status !== 'rejected') {
-            deviceOwner = ownerProfile;
-          }
-        }
+      if (bannedProfiles && bannedProfiles.length > 0) {
+        return {
+          success: false,
+          error: 'عذراً، هذا الجهاز محظور نهائياً من التسجيل في المنصة بقرار من إدارة المنصة.'
+        };
       }
 
-      if (deviceOwner) {
-        if (deviceOwner.status === 'banned') {
-          return {
-            success: false,
-            error: 'عذراً، هذا الجهاز محظور نهائياً من التسجيل في المنصة بقرار من إدارة المنصة.'
-          };
-        }
-        if (deviceOwner.status === 'pending_review') {
-          return {
-            success: false,
-            error: `عذراً، يوجد بالفعل طلب تسجيل قيد المراجعة والتدقيق مرفوع من هذا الجهاز باسم (${deviceOwner.full_name}). تمنع سياسات المنصة تكرار الطلبات أو إنشاء أكثر من حساب من نفس الجهاز. يرجى انتظار قرار المعلم.`
-          };
-        }
-        if (deviceOwner.status === 'active') {
-          return {
-            success: false,
-            error: `عذراً، هذا الجهاز مسجل به بالفعل حساب طالب معتمد ومفعل بالمنصة باسم (${deviceOwner.full_name}). تمنع سياسات مستر محمد رضوان الصارمة إنشاء أي حساب إضافي من نفس الجهاز. يرجى تسجيل الدخول بحسابك المعتمد أو استخدام جهاز آخر للتسجيل.`
-          };
-        }
-        if (deviceOwner.status === 'suspended') {
-          return {
-            success: false,
-            error: `عذراً، هذا الحساب أو الجهاز موقوف حالياً بقرار من إدارة المنصة. تمنع لوائح المنصة إنشاء حساب جديد من نفس الجهاز.`
-          };
-        }
+      // Check existing sibling accounts on this hardware fingerprint to link device chain
+      const { data: foundSiblings } = await supabaseAdmin
+        .from('profiles')
+        .select('id, full_name, phone, status')
+        .eq('role', 'student')
+        .neq('status', 'rejected')
+        .in('primary_device_fingerprint', allFps);
+
+      if (foundSiblings) {
+        siblingProfiles = foundSiblings;
+      }
+
+      if (siblingProfiles.some(s => s.status === 'banned')) {
+        return {
+          success: false,
+          error: 'عذراً، هذا الجهاز محظور نهائياً من التسجيل في المنصة بقرار من إدارة المنصة.'
+        };
       }
     }
 
@@ -1371,21 +1376,30 @@ export async function registerStudentAction(studentData: any) {
       }
     }
 
-    // 11. Optional Audit Log
+    // 11. Security Audit Log & Device Tracking Chain
     try {
+      const detailsPayload: any = {
+        phone: cleanPhone,
+        stage: stage,
+        grade: grade,
+        education_type: education_type,
+        fingerprint: fingerprint,
+      };
+
+      if (siblingProfiles && siblingProfiles.length > 0) {
+        detailsPayload.isSharedDevice = true;
+        detailsPayload.siblingCount = siblingProfiles.length;
+        detailsPayload.siblingNames = siblingProfiles.map(s => s.full_name);
+        detailsPayload.siblingPhones = siblingProfiles.map(s => s.phone);
+      }
+
       await supabaseAdmin.from('audit_logs').insert([{
         actor_name: studentData.fullName?.trim() || 'طالب جديد',
         actor_role: 'student',
-        action_type: 'STUDENT_REGISTRATION_SUBMITTED',
+        action_type: siblingProfiles && siblingProfiles.length > 0 ? 'STUDENT_SHARED_DEVICE_REGISTERED' : 'STUDENT_REGISTRATION_SUBMITTED',
         target_entity: 'profiles',
         target_id: insertedUser?.id,
-        details: {
-          phone: cleanPhone,
-          stage: stage,
-          grade: grade,
-          education_type: education_type,
-          fingerprint: fingerprint,
-        },
+        details: detailsPayload,
       }]);
     } catch {}
 

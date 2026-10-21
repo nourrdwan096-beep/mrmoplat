@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  Search, Users, UserCheck, UserX, ShieldBan, Shield, 
+  Search, Users, UserCheck, UserX, ShieldBan, Shield, ShieldCheck,
   Key, MoreVertical, Check, MessageCircle, Phone, 
   Mail, MonitorSmartphone, Eye, EyeOff, Lock, Loader2,
   Trash2, AlertTriangle, Send, BookOpen, Award, CheckCircle2,
@@ -23,8 +23,21 @@ import {
   StudentItemProgressData 
 } from '@/lib/academicService';
 
+export interface LinkedDeviceAccount {
+  id: string;
+  fullName: string;
+  phone: string;
+  status: string;
+  stage?: string;
+  grade?: number;
+}
+
+export type ManagedStudentProfile = StudentProfile & {
+  linkedDeviceAccounts?: LinkedDeviceAccount[];
+};
+
 export default function StudentsManagementClient() {
-  const [students, setStudents] = useState<StudentProfile[]>([]);
+  const [students, setStudents] = useState<ManagedStudentProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'banned'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
@@ -52,14 +65,14 @@ export default function StudentsManagementClient() {
   const [enteredCaptcha, setEnteredCaptcha] = useState('');
 
   // Quick Messaging State
-  const [messageTargetStudent, setMessageTargetStudent] = useState<StudentProfile | null>(null);
+  const [messageTargetStudent, setMessageTargetStudent] = useState<ManagedStudentProfile | null>(null);
   const [messageTitle, setMessageTitle] = useState('');
   const [messageContent, setMessageContent] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [messageSentSuccess, setMessageSentSuccess] = useState(false);
 
   // Academic Details & Advice State
-  const [detailsTargetStudent, setDetailsTargetStudent] = useState<StudentProfile | null>(null);
+  const [detailsTargetStudent, setDetailsTargetStudent] = useState<ManagedStudentProfile | null>(null);
   const [studentCourses, setStudentCourses] = useState<CourseData[]>([]);
   const [loadingAcademic, setLoadingAcademic] = useState(false);
   const [studentProgressMap, setStudentProgressMap] = useState<Record<string, Record<string, StudentItemProgressData>>>({});
@@ -68,20 +81,20 @@ export default function StudentsManagementClient() {
   const [adviceSuccess, setAdviceSuccess] = useState(false);
 
   // Ban Modal State
-  const [banTargetStudent, setBanTargetStudent] = useState<StudentProfile | null>(null);
+  const [banTargetStudent, setBanTargetStudent] = useState<ManagedStudentProfile | null>(null);
   const [banReason, setBanReason] = useState('');
   const [isSubmittingBan, setIsSubmittingBan] = useState(false);
 
   // Photo Preview Modal State
-  const [previewPhotoStudent, setPreviewPhotoStudent] = useState<StudentProfile | null>(null);
+  const [previewPhotoStudent, setPreviewPhotoStudent] = useState<ManagedStudentProfile | null>(null);
 
   // Reset Device Modal State
-  const [resetDeviceTarget, setResetDeviceTarget] = useState<StudentProfile | null>(null);
+  const [resetDeviceTarget, setResetDeviceTarget] = useState<ManagedStudentProfile | null>(null);
   const [isResettingDevice, setIsResettingDevice] = useState(false);
   const [resetSuccessMessage, setResetSuccessMessage] = useState('');
 
   // Edit Student Password Modal State
-  const [editPasswordStudent, setEditPasswordStudent] = useState<StudentProfile | null>(null);
+  const [editPasswordStudent, setEditPasswordStudent] = useState<ManagedStudentProfile | null>(null);
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
   const [passwordUpdateMsg, setPasswordUpdateMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -165,7 +178,7 @@ export default function StudentsManagementClient() {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
-  const selectAll = (list: StudentProfile[]) => {
+  const selectAll = (list: ManagedStudentProfile[]) => {
     if (selectedIds.length === list.length) {
       setSelectedIds([]);
     } else {
@@ -433,7 +446,9 @@ export default function StudentsManagementClient() {
   };
 
   // --- RENDER HELPERS ---
-  const renderPendingCard = (student: StudentProfile) => (
+  const renderPendingCard = (student: ManagedStudentProfile) => {
+    const linkedAccounts = student.linkedDeviceAccounts || [];
+    return (
     <motion.div 
       layout
       initial={{ opacity: 0, y: 20 }}
@@ -471,7 +486,10 @@ export default function StudentsManagementClient() {
             <div className="flex flex-wrap gap-4 mt-3 text-sm font-semibold text-slate-600 dark:text-slate-400">
               <span className="flex items-center gap-1.5"><Phone className="w-4 h-4" /> {student.phone}</span>
               <span className="flex items-center gap-1.5"><Shield className="w-4 h-4" /> ولي الأمر: {student.parentPhone || 'غير متوفر'}</span>
-              <span className="flex items-center gap-1.5"><MonitorSmartphone className="w-4 h-4" /> البصمة: {student.deviceFingerprint ? `${student.deviceFingerprint.slice(0, 10)}...` : 'غير متوفر'}</span>
+              <span className="flex items-center gap-1.5 font-mono text-xs bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 font-bold" title={student.deviceFingerprint || ''}>
+                <MonitorSmartphone className="w-3.5 h-3.5 text-violet-500" />
+                <span>سيريال الجهاز: {student.deviceFingerprint ? `${student.deviceFingerprint.slice(0, 14)}...` : 'غير متوفر'}</span>
+              </span>
             </div>
             
             <div className="flex flex-wrap gap-4 mt-2 text-xs font-bold text-slate-400">
@@ -480,10 +498,36 @@ export default function StudentsManagementClient() {
               <span>• النظام: {student.educationType === 'general' ? 'عام' : 'أزهر'}</span>
             </div>
 
+            {/* Linked Device Accounts Chain Alert */}
+            {linkedAccounts.length > 0 && (
+              <div className="mt-3 p-3 bg-amber-500/10 border border-amber-500/25 rounded-2xl text-right">
+                <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 text-xs font-black">
+                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+                  <span>تنبيه سلسلة الأجهزة: مسجل على نفس هذا السيريال ({linkedAccounts.length}) حسابات أخرى:</span>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {linkedAccounts.map((linked: LinkedDeviceAccount) => (
+                    <div key={linked.id} className="inline-flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-800/60 rounded-xl text-xs font-bold text-slate-800 dark:text-slate-200 shadow-sm">
+                      <Users className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                      <span>{linked.fullName}</span>
+                      <span className="text-[11px] text-slate-400 font-mono" dir="ltr">({linked.phone})</span>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-black ${
+                        linked.status === 'active' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400' :
+                        linked.status === 'pending_review' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400' :
+                        'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400'
+                      }`}>
+                        {linked.status === 'active' ? 'مفعل' : linked.status === 'pending_review' ? 'قيد المراجعة' : 'محظور'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {student.whatsapp_otp && (
               <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/40 rounded-xl text-xs font-black text-amber-700 dark:text-amber-400">
                 <Key className="w-3.5 h-3.5" />
-                <span>رمز التفعيل عبر الواتساب: <strong className="font-mono text-sm tracking-wider text-slate-900 dark:text-white">{student.whatsapp_otp}</strong></span>
+                <span>رمز التفعيل عبر SMS: <strong className="font-mono text-sm tracking-wider text-slate-900 dark:text-white">{student.whatsapp_otp}</strong></span>
               </div>
             )}
           </div>
@@ -585,9 +629,12 @@ export default function StudentsManagementClient() {
         </button>
       </div>
     </motion.div>
-  );
+    );
+  };
 
-  const renderActiveCard = (student: StudentProfile) => (
+  const renderActiveCard = (student: ManagedStudentProfile) => {
+    const linkedAccounts = student.linkedDeviceAccounts || [];
+    return (
     <motion.div 
       layout
       key={student.id}
@@ -673,6 +720,28 @@ export default function StudentsManagementClient() {
             <span className="text-slate-400">••••••••••</span>
           )}
         </div>
+
+        <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
+          <span className="font-bold text-slate-500">سيريال الجهاز:</span>
+          <span className="font-mono text-[11px] font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded truncate max-w-[180px]" title={student.deviceFingerprint || ''}>
+            {student.deviceFingerprint ? `${student.deviceFingerprint.slice(0, 16)}...` : 'غير متوفر'}
+          </span>
+        </div>
+
+        {linkedAccounts.length > 0 && (
+          <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs">
+            <span className="text-amber-600 dark:text-amber-400 font-bold block mb-1">
+              ⚠️ مشترك مع ({linkedAccounts.length}) حسابات على نفس الجهاز:
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {linkedAccounts.map((linked: LinkedDeviceAccount) => (
+                <span key={linked.id} className="text-[10px] px-1.5 py-0.5 bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800 rounded font-bold text-slate-700 dark:text-slate-300">
+                  {linked.fullName} ({linked.status === 'active' ? 'مفعل' : 'قيد المراجعة'})
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
       
       {!isMasterKeyUnlocked ? (
@@ -714,9 +783,10 @@ export default function StudentsManagementClient() {
         </button>
       </div>
     </motion.div>
-  );
+    );
+  };
 
-  const renderBannedCard = (student: StudentProfile) => (
+  const renderBannedCard = (student: ManagedStudentProfile) => (
     <motion.div 
       layout
       key={student.id}
@@ -1172,6 +1242,53 @@ export default function StudentsManagementClient() {
                 >
                   <X className="w-5 h-5" />
                 </button>
+              </div>
+
+              {/* Hardware Device Serial & Multi-Account Chain */}
+              <div className="mb-6 p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 text-right space-y-3">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2 text-xs font-black text-slate-800 dark:text-slate-200">
+                    <MonitorSmartphone className="w-4 h-4 text-violet-500" />
+                    <span>سيريال الجهاز الأساسي (Hardware Fingerprint):</span>
+                  </div>
+                  <span className="font-mono text-xs font-black bg-white dark:bg-slate-900 px-3 py-1 rounded-lg border border-slate-200 dark:border-slate-700 select-all" dir="ltr">
+                    {detailsTargetStudent.deviceFingerprint || 'غير متوفر'}
+                  </span>
+                </div>
+
+                {Boolean(detailsTargetStudent.linkedDeviceAccounts && detailsTargetStudent.linkedDeviceAccounts.length > 0) ? (
+                  <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60">
+                    <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 text-xs font-black mb-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-amber-500" />
+                      <span>سلسلة الحسابات المرتبطة: هذا الجهاز مسجل به ({detailsTargetStudent.linkedDeviceAccounts?.length || 0}) حسابات أخرى:</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {(detailsTargetStudent.linkedDeviceAccounts || []).map((linked: LinkedDeviceAccount) => (
+                        <div key={linked.id} className="p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-amber-200 dark:border-amber-800/40 text-xs flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Users className="w-3.5 h-3.5 text-amber-500" />
+                            <span className="font-bold text-slate-800 dark:text-slate-200">{linked.fullName}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[11px]">
+                            <span className="font-mono text-slate-400" dir="ltr">{linked.phone}</span>
+                            <span className={`px-1.5 py-0.5 rounded font-black ${
+                              linked.status === 'active' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400' :
+                              linked.status === 'pending_review' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400' :
+                              'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-400'
+                            }`}>
+                              {linked.status === 'active' ? 'مفعل' : linked.status === 'pending_review' ? 'مراجعة' : 'محظور'}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-[11px] font-bold text-slate-400 pt-1 border-t border-slate-200/40 dark:border-slate-700/40 flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>هذا الجهاز لم يُسجل منه أي حساب آخر (حساب فريد على هذا السيريال).</span>
+                  </div>
+                )}
               </div>
 
               {/* Advice Input Section */}

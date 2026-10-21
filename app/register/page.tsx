@@ -64,9 +64,9 @@ interface DeviceStatusInfo {
     email: string;
     phone: string;
     parentPhone?: string | null;
-    stage: string;
-    grade: number;
-    educationType: string;
+    stage?: string;
+    grade?: number;
+    educationType?: string;
     status: 'pending_review' | 'active' | 'rejected' | 'banned';
     whatsapp_otp?: string | null;
     otp_verified?: boolean;
@@ -90,6 +90,7 @@ export default function RegisterPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCheckingDevice, setIsCheckingDevice] = useState(true);
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatusInfo | null>(null);
+  const [existingDeviceStudent, setExistingDeviceStudent] = useState<any>(null);
   const [fingerprint, setFingerprint] = useState<string>('');
   const [candidateFingerprints, setCandidateFingerprints] = useState<string[]>([]);
 
@@ -160,10 +161,13 @@ export default function RegisterPage() {
         );
         if (isCancelled) return;
 
-        if (res.isBanned || res.isRegistered) {
+        if (res.isBanned) {
           setDeviceStatus(res);
         } else {
           setDeviceStatus(null);
+          if (res.student) {
+            setExistingDeviceStudent(res.student);
+          }
           if (identity.isLocallyLocked) {
             await clearDeviceLock();
           }
@@ -205,10 +209,13 @@ export default function RegisterPage() {
         identity.studentId
       );
       
-      if (res.isBanned || res.isRegistered) {
+      if (res.isBanned) {
         setDeviceStatus(res);
       } else {
         setDeviceStatus(null);
+        if (res.student) {
+          setExistingDeviceStudent(res.student);
+        }
         if (identity.isLocallyLocked) {
           await clearDeviceLock();
         }
@@ -496,27 +503,24 @@ export default function RegisterPage() {
           createdAt: new Date().toISOString()
         };
 
-        // 1. Lock the device permanently across all 5 layers (IndexedDB, LocalStorage, Cookies, CacheAPI, etc.)
-        await lockDevicePermanently(studentRecord);
+        // Save student record in session for confirmation display
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('radwan_registered_student', JSON.stringify(studentRecord));
+        }
 
-        // 2. Set device status for permanent lock
-        setDeviceStatus({
-          isRegistered: true,
-          isBanned: false,
-          student: studentRecord
-        });
+        // Allow subsequent student registrations on the device (device serial tracked on server)
+        setDeviceStatus(null);
 
-        // 3. Move to final success step
+        // Move to final success step
         setStep(6);
       } else {
         setSubmitError(result.error || 'حدث خطأ أثناء إرسال طلبك، يرجى المحاولة لاحقاً');
-        // If device was already registered according to server
-        if (result.error && (result.error.includes('جهاز') || result.error.includes('مُسجل بالفعل') || result.error.includes('محظور'))) {
+        if (result.error && (result.error.includes('محظور') || result.error.includes('حظر'))) {
           await refreshDeviceStatus();
         }
       }
     } catch (err: any) {
-      // In case of server disconnect or failure, DO NOT lock the device, allow the student to retry
+      // In case of server disconnect or failure, allow the student to retry
       setSubmitError(err.message || 'تعذر الاتصال بالخادم، لم يتم حفظ الطلب. يرجى التأكد من اتصال الإنترنت وإعادة المحاولة.');
     } finally {
       setIsSubmitting(false);
@@ -539,11 +543,11 @@ export default function RegisterPage() {
   }
 
   // ==========================================
-  // SCREEN: DEVICE IS BANNED OR HAS AN ACCOUNT (STRICT ONE ACCOUNT PER DEVICE POLICY)
+  // SCREEN: DEVICE IS BANNED BY PLATFORM ADMINISTRATION
   // ==========================================
-  if (deviceStatus && (deviceStatus.isBanned || deviceStatus.isRegistered)) {
+  if (deviceStatus && deviceStatus.isBanned) {
     const student = deviceStatus.student;
-    const isBanned = Boolean(deviceStatus.isBanned || student?.status === 'banned');
+    const isBanned = true;
     const isActive = !isBanned && student?.status === 'active';
     const isRejected = !isBanned && student?.status === 'rejected';
     const isPending = !isBanned && !isActive && !isRejected;
@@ -871,10 +875,10 @@ export default function RegisterPage() {
               طلب انضمامك الآن مسجل في قاعدة البيانات ومرفوع في لوحة تحكم <span className="text-emerald-400 font-black">مستر محمد رضوان</span> للمراجعة والتدقيق خلال <span className="text-amber-400 font-black">48 ساعة</span> كحد أقصى.
             </p>
 
-            <div className="p-4 bg-amber-500/10 rounded-2xl text-xs text-amber-300 font-bold mb-6 text-right border border-amber-500/30 flex items-start gap-3">
-              <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-amber-400" />
+            <div className="p-4 bg-sky-500/10 rounded-2xl text-xs text-sky-300 font-bold mb-6 text-right border border-sky-500/30 flex items-start gap-3">
+              <ShieldCheck className="w-5 h-5 shrink-0 mt-0.5 text-sky-400" />
               <p className="leading-relaxed">
-                <span className="font-black text-white">تأمين الجهاز:</span> تم تسجيل وربط هذا الجهاز بهذا الطلب بنجاح. لن تتمكن من إنشاء حساب آخر من هذا الجهاز، ويمكنك متابعة حالة الطلب في أي وقت من خلال هذه الصفحة أو عبر تسجيل الدخول.
+                <span className="font-black text-white">توثيق الجهاز:</span> تم تسجيل وتوثيق سيريال هذا الجهاز وربطه بملفك الأكاديمي لدى إدارة المنصة بنجاح. يمكنك متابعة حالة الطلب في أي وقت أو عبر تسجيل الدخول.
               </p>
             </div>
 
@@ -970,6 +974,31 @@ export default function RegisterPage() {
             </div>
           )}
 
+          {/* Informational banner if an account is already registered on this device */}
+          {existingDeviceStudent && step < 5 && (
+            <div className="mb-6 p-4 rounded-2xl bg-sky-950/40 border border-sky-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-right">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                  <Smartphone className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-white">
+                    تم رصد حساب مسجل من هذا الجهاز: <span className="text-sky-300 font-bold">{existingDeviceStudent.fullName}</span>
+                  </h4>
+                  <p className="text-[11px] text-slate-300 font-bold mt-0.5">
+                    إذا كان هذا حسابك يمكنك تسجيل الدخول به مباشرة، أو متابعة تسجيل حساب طالب جديد بالأسفل.
+                  </p>
+                </div>
+              </div>
+              <Link
+                href="/login"
+                className="w-full sm:w-auto px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-black transition-colors text-center shrink-0"
+              >
+                تسجيل الدخول بالحساب السابق
+              </Link>
+            </div>
+          )}
+
           {/* Form Content */}
           <div className="flex-1 flex flex-col justify-center">
             
@@ -994,9 +1023,9 @@ export default function RegisterPage() {
                   </p>
                   <ul className="space-y-4">
                     <li className="flex items-start gap-3">
-                      <div className="w-6 h-6 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center justify-center shrink-0 mt-0.5 text-xs font-black">1</div>
+                      <div className="w-6 h-6 rounded-full bg-sky-500/20 text-sky-400 border border-sky-500/40 flex items-center justify-center shrink-0 mt-0.5 text-xs font-black">1</div>
                       <p className="text-xs sm:text-sm font-bold text-slate-200 leading-relaxed">
-                        <span className="text-rose-400 font-black">تأمين الجهاز:</span> لا يمكنك التسجيل على نفس الجهاز مرتين نهائياً. يتم ربط حسابك بجهازك الحالي، ولن تتمكن من إنشاء حساب آخر من هذا الجهاز.
+                        <span className="text-sky-400 font-black">توثيق سيريال الجهاز:</span> يتم توثيق البصمة والسيريال الرقمي لهذا الجهاز وربطه بملف الطالب وسجلاته لدى إدارة المنصة لضمان الشفافية ومكافحة الحسابات الوهمية.
                       </p>
                     </li>
                     <li className="flex items-start gap-3">
