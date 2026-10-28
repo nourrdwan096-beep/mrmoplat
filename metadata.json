@@ -1,6 +1,6 @@
 {
-  "name": "MR. MOHAMED RADWAN EDUCATION PLATFORM",
-  "description": "منصة مستر محمد رضوان التعليمية المتطورة للغة الإنجليزية للمرحلتين الإعدادية والثانوية - عام وأزهر",
+  "name": "Easy English مع مستر محمد رضوان",
+  "description": "منصة Easy English التعليمية لتدريس وشرح مادة اللغة الإنجليزية للمرحلة الثانوية العامة والأزهرية - إعداد وتقديم مستر محمد رضوان",
   "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

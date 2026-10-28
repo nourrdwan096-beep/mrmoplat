@@ -39,15 +39,15 @@ export default function Footer() {
               </div>
               <div>
                 <h3 className="text-white font-black text-base">
-                  MR. MOHAMED RADWAN
+                  Easy English مع مستر محمد رضوان
                 </h3>
-                <span className="text-[10px] text-violet-400 font-bold tracking-wider uppercase">
-                  Easy English Platform
+                <span className="text-[10px] text-violet-400 font-bold tracking-wider">
+                  منصة تعليم اللغة الإنجليزية للثانوية العامة والأزهرية
                 </span>
               </div>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
-              المنصة التعليمية المتطورة لتدريس وتأسيس اللغة الإنجليزية لطلاب المرحلة الإعدادية والثانوية للتعليم العام والأزهر الشريف.
+              المنصة التعليمية المتطورة لتدريس وتأسيس مادة اللغة الإنجليزية لطلاب المرحلة الثانوية للتعليم العام والأزهر الشريف.
             </p>
 
             <div className="pt-1">
@@ -152,7 +152,7 @@ export default function Footer() {
         <div className="pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-right">
           
           <div className="text-xs text-slate-500 font-medium">
-            جميع الحقوق محفوظة © {new Date().getFullYear()} - منصة مستر محمد رضوان التعليمية
+            جميع الحقوق محفوظة © {new Date().getFullYear()} - Easy English مع مستر محمد رضوان
           </div>
 
           <a 

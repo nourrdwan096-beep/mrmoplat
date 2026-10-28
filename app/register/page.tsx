@@ -643,7 +643,7 @@ export default function RegisterPage() {
                   </p>
                   <div className="p-3 bg-slate-900/80 rounded-xl border border-amber-500/20 text-xs font-bold text-amber-300 flex items-center gap-2">
                     <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
-                    <span>النظام يمنع إنشاء حساب آخر من نفس الجهاز لضمان سلامة بياناتك وعدم تكرار السجلات.</span>
+                    <span>يقوم النظام بتوثيق بصمة وسيريال هذا الجهاز مع حسابك لضمان الشفافية ومتابعة الطلب.</span>
                   </div>
                 </div>
 
@@ -700,7 +700,7 @@ export default function RegisterPage() {
 
                 <div className="pt-3 border-t border-slate-800 text-center">
                   <p className="text-xs text-slate-400">
-                    تطبق المنصة سياسة منع تكرار الحسابات من نفس الجهاز للحفاظ على سلامة الامتحانات والبيانات.
+                    تطبق المنصة بروتوكولات التوثيق الرقمي لربط الجهاز بالحساب لضمان أمان الامتحانات والبيانات.
                   </p>
                 </div>
               </div>
@@ -715,10 +715,10 @@ export default function RegisterPage() {
                     <span>هذا الجهاز مسجل به حساب طالب معتمد ومفعل</span>
                   </div>
                   <p className="text-slate-200 text-sm font-bold leading-relaxed mb-3">
-                    يوجد بالفعل حساب معتمد ومفعل على هذا الجهاز باسم <span className="text-emerald-400 font-black">{student?.fullName || 'طالب المنصة'}</span>. تمنع لوائح المنصة الصارمة إنشاء أي حساب إضافي من نفس الجهاز لضمان أمان البيانات.
+                    يوجد حساب معتمد ومفعل مرتبط بهذا الجهاز باسم <span className="text-emerald-400 font-black">{student?.fullName || 'طالب المنصة'}</span>.
                   </p>
                   <p className="text-slate-300 text-xs font-semibold">
-                    إذا كنت صاحب هذا الحساب يمكنك تسجيل الدخول فوراً، أو استخدام جهاز آخر إذا كنت ترغب في تسجيل حساب جديد.
+                    إذا كنت صاحب هذا الحساب يمكنك تسجيل الدخول فوراً، أو إكمال تسجيل حساب جديد حيث يتم ربط سجل الجهاز بملفك تلقائياً لدى المعلم.
                   </p>
                 </div>
 
@@ -1019,7 +1019,7 @@ export default function RegisterPage() {
                 
                 <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 mb-6 shadow-xl space-y-4 max-h-[50vh] overflow-y-auto custom-scrollbar text-right">
                   <p className="text-xs font-bold text-slate-400 leading-relaxed">
-                    مرحباً بك في منصة مستر محمد رضوان التعليمية. لضمان أقصى معايير الأمان والجدية، يرجى قراءة الشروط التالية والموافقة عليها:
+                    مرحباً بك في منصة Easy English مع مستر محمد رضوان. لضمان أقصى معايير الأمان والجدية، يرجى قراءة الشروط التالية والموافقة عليها:
                   </p>
                   <ul className="space-y-4">
                     <li className="flex items-start gap-3">

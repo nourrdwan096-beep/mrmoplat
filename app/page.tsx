@@ -55,56 +55,45 @@ export default function HomePage() {
       {/* Main Content Sections */}
       <main className="flex-1 relative">
         
-        {/* Trial Phase Official Announcement (2027-2028 Preparation) */}
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
-          <div className="relative overflow-hidden rounded-3xl border-2 border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-slate-900 to-slate-950 p-6 sm:p-8 shadow-2xl">
-            {/* Background Glow Accents */}
-            <div className="absolute -top-12 -right-12 w-48 h-48 bg-amber-500/20 rounded-full blur-3xl pointer-events-none" />
-            <div className="absolute -bottom-12 -left-12 w-48 h-48 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
-
-            <div className="relative z-10 flex flex-col lg:flex-row items-center justify-between gap-6">
-              <div className="flex-1 space-y-3 text-center lg:text-right">
-                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-black">
-                  <Sparkles className="w-4 h-4 text-amber-400" />
-                  <span>إعلان رسمي • مرحلة التشغيل التجريبي والتطويري (2027 - 2028)</span>
+        {/* Official Non-Profit Notice (Compact & Refined) */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+          <div className="rounded-2xl border border-amber-500/30 bg-slate-900/90 dark:bg-slate-900/80 p-3.5 sm:p-4 shadow-lg backdrop-blur-md">
+            <div className="flex flex-col lg:flex-row items-center justify-between gap-3 sm:gap-4">
+              <div className="flex items-start sm:items-center gap-3 text-right flex-1 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                  <Sparkles className="w-4 h-4" />
                 </div>
-
-                <h2 className="text-xl sm:text-2xl lg:text-3xl font-black text-white leading-snug">
-                  أهلاً بكم في النسخة التجريبية لمنصة مستر محمد رضوان التعليمية 🎓
-                </h2>
-
-                <p className="text-sm sm:text-base text-slate-300 font-medium leading-relaxed max-w-4xl">
-                  نود إحاطة جميع الطلاب وأولياء الأمور بأن المنصة حالياً في <strong className="text-amber-400">فترة التشغيل والتطوير التجريبي</strong>، وسيتم الافتتاح الرسمي وبدء الاشتراكات بمشيئة الله مع انطلاق العام الدراسي القادم <strong className="text-white">(2027 - 2028)</strong>، والمنصة غير جاهزة للاشتراكات التجارية حالياً.
-                </p>
-
-                <div className="p-3.5 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-200 text-xs sm:text-sm font-bold flex items-center gap-2.5">
-                  <AlertTriangle className="w-5 h-5 shrink-0 text-rose-400" />
-                  <span>
-                    <strong>تنبيه هام جداً:</strong> باب الاشتراكات المالية مغلق تماماً، ولا يتم استقبال أي مدفوعات أو تحويلات نقدية عبر المحافظ الإلكترونية نهائياً (يرجى عدم إرسال أي أموال).
-                  </span>
+                <div className="space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-black text-white">
+                      تنويه هام: منصة Easy English مبادرة تعليمية غير ربحية
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/30">
+                      باب الاشتراكات مغلق حالياً
+                    </span>
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-slate-300 font-medium leading-relaxed">
+                    المنصة لا تستقبل أي اشتراكات أو مدفوعات مالية نهائياً. للراغبين في متابعة الكورسات أو الاستفسارات، يمكنكم التواصل المباشر مع مستر محمد رضوان.
+                  </p>
                 </div>
-
-                <p className="text-xs sm:text-sm text-emerald-300 font-bold">
-                  🎁 <strong className="text-white">هدية التجربة لجميع الطلاب:</strong> يسعدنا انضمامكم لتجربة المنصة! يمكنك الحصول على كود تفعيل الكورس <strong className="text-emerald-400">بشكل مجاني تماماً 100%</strong> عبر التواصل المباشر مع مستر محمد رضوان، ونمنحكم الأكواد مجاناً لتسجيل الدخول وخوض تجربة التعلم المتطورة.
-                </p>
               </div>
 
-              <div className="flex flex-col sm:flex-row lg:flex-col gap-3 w-full lg:w-auto shrink-0">
+              <div className="flex items-center gap-2 w-full lg:w-auto shrink-0 justify-end">
                 <a
-                  href="https://wa.me/201552191172?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%D9%8B%20%D9%85%D8%B3%D8%AA%D8%B1%20%D9%85%D8%AD%D9%85%D8%AF%D8%8C%20%D8%A3%D9%88%D8%AF%20%D8%AA%D8%AC%D8%B1%D8%A8%D8%A9%20%D8%A7%D9%84%D9%85%D9%86%D8%B5%D8%A9%20%D9%88%D8%A7%D9%84%D8%AD%D8%B5%D9%88%D9%84%20%D8%B9%D9%84%D9%89%20%D9%83%D9%88%D8%AF%20%D8%AA%D8%AC%D8%B1%D9%8A%D8%A8%D9%8A%20%D9%85%D8%AC%D8%A7%D9%86%D9%8A"
+                  href="https://wa.me/201552191172?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%D9%8B%20%D9%85%D8%B3%D8%AA%D8%B1%20%D9%85%D8%AD%D9%85%D8%AF%D8%8C%20%D8%A3%D9%88%D8%AF%20%D8%A7%D9%84%D8%AA%D9%88%D8%A7%D8%B5%D9%84%20%D9%85%D8%B9%D9%83%D9%85%20%D8%A8%D8%AE%D8%B5%D9%88%D8%B5%20%D9%83%D9%88%D8%B1%D8%B3%D8%A7%D8%AA%20Easy%20English"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs sm:text-sm shadow-xl shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 hover:-translate-y-0.5 text-center"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 text-center"
                 >
-                  <MessageCircle className="w-4 h-4 shrink-0" />
-                  <span>طلب كود تجريبي مجاني عبر واتساب 🎁</span>
+                  <MessageCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>تواصل مع المعلم واتساب</span>
                 </a>
 
                 <Link
                   href="#courses"
-                  className="px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/15 text-slate-200 hover:text-white font-bold text-xs sm:text-sm border border-white/15 transition-all flex items-center justify-center gap-2 text-center"
+                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs border border-slate-700 transition-colors text-center shrink-0"
                 >
-                  <span>استعراض الكورسات المتاحة 📚</span>
+                  <span>الكورسات</span>
                 </Link>
               </div>
             </div>

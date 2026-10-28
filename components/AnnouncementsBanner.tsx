@@ -25,8 +25,8 @@ export default function AnnouncementsBanner() {
   if (isStaffRoute) return null;
 
   const currentAnnouncement = announcements[0] || {
-    id: 'trial_announcement',
-    title: 'تنبيه رسمي: المنصة في فترة تشغيل وتطوير تجريبي تمهيداً لعام (2027 - 2028) • باب الاشتراكات المالية مغلق تماماً • تواصل مع المستر لاستلام كود تجريبي مجاني 100%',
+    id: 'non_profit_announcement',
+    title: 'تنويه رسمي: منصة Easy English مبادرة تعليمية غير ربحية • باب الاشتراكات المالية مغلق حالياً ولا يتم استقبال أي مدفوعات • للتواصل المباشر مع مستر محمد رضوان',
     announcementType: 'general',
     isPublished: true,
   };
@@ -42,7 +42,7 @@ export default function AnnouncementsBanner() {
         <div className="flex items-center gap-2.5 min-w-0 flex-1">
           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-black bg-gradient-to-r from-sky-600 to-emerald-600 text-white shadow-sm shrink-0">
             <Sparkles className="w-3 h-3 text-sky-200 animate-pulse" />
-            <span>فترة تجريبية 2027-2028</span>
+            <span>منصة غير ربحية</span>
           </span>
 
           <p className="font-bold text-slate-800 dark:text-emerald-100 text-[11px] sm:text-xs truncate">
@@ -50,17 +50,17 @@ export default function AnnouncementsBanner() {
           </p>
         </div>
 
-        {/* Quick Free Code WhatsApp CTA */}
+        {/* Quick WhatsApp Teacher Contact */}
         <div className="flex items-center gap-2 shrink-0">
           <a
-            href="https://wa.me/201552191172?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%D9%8B%20%D9%85%D8%B3%D8%AA%D8%B1%20%D9%85%D8%AD%D9%85%D8%AF%20%D8%B1%D8%B6%D9%88%D8%A7%D9%86%D8%8C%20%D8%A3%D8%B1%D8%BA%D8%A8%20%D9%81%D9%8A%20%D8%A7%D9%84%D8%AD%D8%B5%D9%88%D9%84%20%D8%B9%D9%84%D9%89%20%D9%83%D9%88%D8%AF%20%D8%AA%D9%81%D8%B9%D9%8A%D9%84%20%D9%85%D8%AC%D8%A7%D9%86%D9%8A%20%D9%84%D9%84%D9%83%D9%88%D8%B1%D8%B3"
+            href="https://wa.me/201552191172?text=%D9%85%D8%B1%D8%AD%D8%A8%D8%A7%D9%8B%20%D9%85%D8%B3%D8%AA%D8%B1%20%D9%85%D8%AD%D9%85%D8%AF%D8%8C%20%D8%A3%D9%88%D8%AF%20%D8%A7%D9%84%D8%AA%D9%88%D8%A7%D8%B5%D9%84%20%D9%85%D8%B9%D9%83%D9%85%20%D8%A8%D8%AE%D8%B5%D9%88%D8%B5%20%D9%83%D9%88%D8%B1%D8%B3%D8%A7%D8%AA%20Easy%20English"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[11px] shadow-sm transition-all hover:scale-105 active:scale-95"
-            title="تواصل مع مستر محمد رضوان لاستلام كود مجاني"
+            title="تواصل مع مستر محمد رضوان"
           >
             <MessageCircle className="w-3.5 h-3.5" />
-            <span>طلب كود مجاني (01552191172)</span>
+            <span>تواصل مع المعلم واتساب</span>
           </a>
 
           <Link

@@ -135,7 +135,7 @@ export default function LoginPage() {
               <Image src="/logo.png" alt="Logo" fill className="object-cover" unoptimized />
             </div>
             <div className="flex flex-col">
-              <span className="text-sm font-black text-slate-900 dark:text-white tracking-tight">MR. MOHAMED RADWAN</span>
+              <span className="text-sm font-black text-slate-900 dark:text-white tracking-tight">Easy English مع مستر محمد رضوان</span>
               <span className="text-[10px] font-bold text-violet-600 dark:text-violet-400">العودة للرئيسية</span>
             </div>
           </Link>

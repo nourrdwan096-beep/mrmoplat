@@ -10,7 +10,8 @@ import {
   PhoneCall,
   Star,
   BookOpenCheck,
-  GraduationCap
+  GraduationCap,
+  Sparkles
 } from 'lucide-react';
 
 interface HeroTeacherSectionProps {
@@ -35,8 +36,8 @@ export default function HeroTeacherSection({ onOpenRegister }: HeroTeacherSectio
             {/* Top Badges */}
             <div className="flex flex-wrap items-center gap-2 mb-4">
               <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-black bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/30">
-                <Paperclip className="w-3.5 h-3.5 text-violet-500" />
-                المنصة الرسمية المعتمدة لعام 2026
+                <Sparkles className="w-3.5 h-3.5 text-violet-500" />
+                منصة Easy English الرسمية المعتمدة
               </span>
               <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
                 <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
@@ -46,7 +47,7 @@ export default function HeroTeacherSection({ onOpenRegister }: HeroTeacherSectio
 
             {/* Main Headline */}
             <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black text-slate-900 dark:text-white leading-[1.3] mb-4">
-              تعلم اللغة الإنجليزية بأعلى درجات التميز الأكاديمي مع{' '}
+              تعلم اللغة الإنجليزية للثانوية العامة والأزهرية بأعلى درجات التميز مع{' '}
               <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-600 via-fuchsia-500 to-rose-400">
                 {TEACHER_INFO.name}
               </span>

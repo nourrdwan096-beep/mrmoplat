@@ -112,7 +112,7 @@ export function TeacherLayout({ children }: { children: React.ReactNode }) {
             <LayoutDashboard className="w-7 h-7 text-white" />
           </div>
           <h3 className="text-base font-black text-slate-900 dark:text-white mb-1">جاري استعادة جلسة لوحة الإدارة...</h3>
-          <p className="text-xs text-slate-500 font-bold">منصة الأستاذ محمد رضوان</p>
+          <p className="text-xs text-slate-500 font-bold">Easy English مع مستر محمد رضوان</p>
         </div>
       );
     }

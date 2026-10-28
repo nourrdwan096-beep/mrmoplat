@@ -107,11 +107,11 @@ export default function Navbar({ onOpenLogin, onOpenRegister }: NavbarProps) {
               <div className="flex flex-col min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-sm sm:text-base lg:text-lg font-black tracking-tight text-slate-900 dark:text-white truncate">
-                    مستر / محمد رضوان
+                    Easy English مع مستر محمد رضوان
                   </span>
                 </div>
                 <span className="hidden sm:block text-[9px] sm:text-[10px] lg:text-xs text-slate-500 dark:text-slate-400 font-bold truncate">
-                  منصة تعليم اللغة الإنجليزية للمرحلة الإعدادية والثانوية
+                  منصة تعليم اللغة الإنجليزية للثانوية العامة والأزهرية
                 </span>
               </div>
             </Link>
