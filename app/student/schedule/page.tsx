@@ -20,6 +20,8 @@ import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
 import UndoDeleteToast from '@/components/UndoDeleteToast';
 import RichContentViewer from '@/components/RichContentViewer';
 import RichTextEditor from '@/components/RichTextEditor';
+import MindMapCreator from '@/components/student/MindMapCreator';
+import { BrainCircuit } from 'lucide-react';
 
 interface Task {
   id: string;
@@ -35,6 +37,7 @@ const DAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربع�
 const LOCAL_STORAGE_KEY = 'mr_radwan_student_schedule';
 
 export default function StudentSchedulePage() {
+  const [scheduleTab, setScheduleTab] = useState<'mindmap' | 'timetable'>('mindmap');
   // ZERO-STATE ENFORCED: starts with zero tasks, strictly no fake mock data!
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeDay, setActiveDay] = useState<number>(new Date().getDay());
@@ -199,38 +202,72 @@ export default function StudentSchedulePage() {
   };
 
   return (
-    <div className="p-4 md:p-8 max-w-5xl mx-auto space-y-8">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white mb-2 flex items-center gap-2">
-            جدول المذاكرة الذكي <CalendarDays className="w-6 h-6 text-violet-500" />
-          </h1>
-          <p className="text-slate-500 dark:text-slate-400 font-medium text-sm md:text-base">
-            صمم جدولك اليومي ونظم أوقاتك لزيادة إنتاجيتك وتحقيق التفوق باللغة الإنجليزية.
-          </p>
-        </div>
+    <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-6">
+      {/* Top Main Navigation Tabs */}
+      <div className="no-print bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-2 shadow-xs flex items-center gap-2">
+        <button
+          onClick={() => setScheduleTab('mindmap')}
+          className={`flex-1 py-3 px-4 rounded-2xl font-black text-xs sm:text-sm transition-all flex items-center justify-center gap-2 ${
+            scheduleTab === 'mindmap'
+              ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-md shadow-violet-500/20'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <BrainCircuit className="w-4 h-4 text-amber-300" />
+          <span>إنشاء الخريطة الذهنية الذكية</span>
+          <span className="hidden sm:inline-block px-2 py-0.5 rounded-full text-[10px] bg-amber-400/20 text-amber-300 border border-amber-400/30">
+            موصى به 2030
+          </span>
+        </button>
 
         <button
-          onClick={openAddModal}
-          className="py-3 px-5 bg-violet-600 hover:bg-violet-700 text-white font-black rounded-2xl flex items-center justify-center gap-2 transition-transform active:scale-95 shadow-lg shadow-violet-600/20 text-sm"
+          onClick={() => setScheduleTab('timetable')}
+          className={`flex-1 py-3 px-4 rounded-2xl font-black text-xs sm:text-sm transition-all flex items-center justify-center gap-2 ${
+            scheduleTab === 'timetable'
+              ? 'bg-violet-600 text-white shadow-md shadow-violet-500/20'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
         >
-          <Plus className="w-4 h-4" />
-          <span>إضافة مهمة جديدة</span>
+          <CalendarDays className="w-4 h-4" />
+          <span>جدول المذاكرة الأسبوعي (المواعيد)</span>
         </button>
       </div>
 
-      {/* Notification Toast */}
-      {notificationMsg && (
-        <motion.div
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-sm font-black flex items-center gap-2"
-        >
-          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-          <span>{notificationMsg}</span>
-        </motion.div>
-      )}
+      {scheduleTab === 'mindmap' ? (
+        <MindMapCreator />
+      ) : (
+        <div className="space-y-8">
+          {/* Header */}
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+            <div>
+              <h1 className="text-2xl md:text-3xl font-black text-slate-900 dark:text-white mb-2 flex items-center gap-2">
+                جدول المذاكرة الأسبوعي <CalendarDays className="w-6 h-6 text-violet-500" />
+              </h1>
+              <p className="text-slate-500 dark:text-slate-400 font-medium text-sm md:text-base">
+                صمم جدولك اليومي ونظم أوقاتك لزيادة إنتاجيتك وتحقيق التفوق باللغة الإنجليزية.
+              </p>
+            </div>
+
+            <button
+              onClick={openAddModal}
+              className="py-3 px-5 bg-violet-600 hover:bg-violet-700 text-white font-black rounded-2xl flex items-center justify-center gap-2 transition-transform active:scale-95 shadow-lg shadow-violet-600/20 text-sm"
+            >
+              <Plus className="w-4 h-4" />
+              <span>إضافة مهمة جديدة</span>
+            </button>
+          </div>
+
+          {/* Notification Toast */}
+          {notificationMsg && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-sm font-black flex items-center gap-2"
+            >
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              <span>{notificationMsg}</span>
+            </motion.div>
+          )}
 
       {/* Days Selector */}
       <div className="flex overflow-x-auto gap-2 pb-2 scrollbar-hide snap-x">
@@ -557,6 +594,8 @@ export default function StudentSchedulePage() {
         onExpire={handlePermanentDeleteExpire}
         onDismiss={handlePermanentDeleteExpire}
       />
+        </div>
+      )}
     </div>
   );
 }

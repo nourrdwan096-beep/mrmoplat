@@ -87,6 +87,28 @@ html {
   .recharge-voucher-card .text-amber-400 {
     color: #b45309 !important;
   }
+
+  /* Mind Map High-Fidelity Print Styling */
+  .print-only {
+    display: block !important;
+  }
+
+  #student-mind-map-printable {
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+}
+
+.print-only {
+  display: none;
 }
 
 /* Custom Scrollbar for small lists */
