@@ -25,17 +25,7 @@ export default function StudentWalletPage() {
   const [activeTab, setActiveTab] = useState<'overview' | 'methods' | 'history'>('overview');
   const [selectedDemoGateway, setSelectedDemoGateway] = useState<'fawry' | 'card' | 'vodafone'>('fawry');
 
-  const transactions: Transaction[] = [
-    {
-      id: 'tx_demo_1',
-      type: 'purchase',
-      amount: 150,
-      date: 'معاملة تجريبية (مفعلة تلقائياً عبر الأكواد التعليمية)',
-      title: 'تفعيل كورس عبر كود الشحن التعليمي المعتمد',
-      status: 'completed',
-      method: 'كود تفعيل'
-    }
-  ];
+  const transactions: Transaction[] = [];
 
   return (
     <div className="p-4 sm:p-6 md:p-8 max-w-6xl mx-auto space-y-8">
@@ -273,29 +263,41 @@ export default function StudentWalletPage() {
           </div>
 
           <div className="divide-y divide-slate-100 dark:divide-slate-800">
-            {transactions.map((tx) => (
-              <div key={tx.id} className="p-6 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${
-                    tx.type === 'deposit' 
-                      ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400'
-                  }`}>
-                    {tx.type === 'deposit' ? <ArrowDownRight className="w-6 h-6" /> : <KeyRound className="w-6 h-6" />}
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base mb-1">{tx.title}</h4>
-                    <p className="text-xs font-bold text-slate-500">{tx.date}</p>
-                  </div>
-                </div>
-
-                <div className="text-left">
-                  <span className="inline-block px-3 py-1 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 font-black text-xs">
-                    مكتمل بنجاح ✓
-                  </span>
-                </div>
+            {transactions.length === 0 ? (
+              <div className="p-10 text-center space-y-2">
+                <History className="w-10 h-10 text-slate-300 dark:text-slate-700 mx-auto" />
+                <p className="text-sm font-black text-slate-700 dark:text-slate-300">
+                  لا توجد معاملات مالية مسجلة حتى الآن
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  يتم تفعيل الكورسات مجاناً خلال الفترة التجريبية عبر أكواد المعلم بدون أي معاملات مالية.
+                </p>
               </div>
-            ))}
+            ) : (
+              transactions.map((tx) => (
+                <div key={tx.id} className="p-6 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${
+                      tx.type === 'deposit' 
+                        ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                        : 'bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400'
+                    }`}>
+                      {tx.type === 'deposit' ? <ArrowDownRight className="w-6 h-6" /> : <KeyRound className="w-6 h-6" />}
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-900 dark:text-white text-sm sm:text-base mb-1">{tx.title}</h4>
+                      <p className="text-xs font-bold text-slate-500">{tx.date}</p>
+                    </div>
+                  </div>
+
+                  <div className="text-left">
+                    <span className="inline-block px-3 py-1 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 font-black text-xs">
+                      مكتمل بنجاح ✓
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}

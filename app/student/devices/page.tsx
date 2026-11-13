@@ -31,6 +31,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
 
 export default function StudentDevicesPage() {
   const { currentUser } = useAuth();
@@ -40,6 +41,8 @@ export default function StudentDevicesPage() {
   const [currentFp, setCurrentFp] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [deviceToRemove, setDeviceToRemove] = useState<RegisteredDeviceEntry | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
 
   useEffect(() => {
     async function loadData() {
@@ -80,9 +83,9 @@ export default function StudentDevicesPage() {
     }
   };
 
-  const handleDeleteDevice = async (id: string, isPrimary: boolean) => {
+  const handleDeleteDevice = (device: RegisteredDeviceEntry) => {
     if (!currentUser?.id) return;
-    if (isPrimary) {
+    if (device.isPrimary) {
       setActionMessage({
         text: 'عذراً، الجهاز الأساسي مثبت دائماً لضمان أمان حسابك وحماية الكورس. يمكنك استبدال الجهاز الثاني فقط.',
         type: 'error'
@@ -90,18 +93,19 @@ export default function StudentDevicesPage() {
       setTimeout(() => setActionMessage(null), 5000);
       return;
     }
+    setDeviceToRemove(device);
+  };
 
-    if (!confirm('هل أنت متأكد من رغبتك في إزالة هذا الجهاز الثانوي؟\n\nتنبيه: الجهاز لن يتم حظره، بل سيتم إخلاء مكانه (الجهاز الثاني) لتتمكن من الدخول من أي هاتف أو كمبيوتر آخر تريده، ويمكنك إعادة استخدامه لاحقاً.')) {
-      return;
-    }
-
+  const confirmRemoveDevice = async () => {
+    if (!currentUser?.id || !deviceToRemove) return;
+    setIsRemoving(true);
     try {
       // 1. Local removal
-      const successLocal = await deleteSecondaryStudentDevice(currentUser.id, id);
-      
+      const successLocal = await deleteSecondaryStudentDevice(currentUser.id, deviceToRemove.id);
+
       // 2. Server action removal
       try {
-        await deleteStudentSecondaryDeviceAction(currentUser.id, id);
+        await deleteStudentSecondaryDeviceAction(currentUser.id, deviceToRemove.id);
       } catch (e) {
         console.warn('Server delete optional error:', e);
       }
@@ -118,6 +122,9 @@ export default function StudentDevicesPage() {
     } catch {
       setActionMessage({ text: 'حدث خطأ أثناء محاولة إزالة الجهاز.', type: 'error' });
       setTimeout(() => setActionMessage(null), 4000);
+    } finally {
+      setIsRemoving(false);
+      setDeviceToRemove(null);
     }
   };
 
@@ -335,7 +342,7 @@ export default function StudentDevicesPage() {
                     </div>
                   ) : (
                     <button
-                      onClick={() => handleDeleteDevice(device.id, false)}
+                      onClick={() => handleDeleteDevice(device)}
                       className="px-3.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-black hover:bg-rose-100 dark:hover:bg-rose-500/20 transition-all flex items-center gap-1.5 border border-rose-200 dark:border-rose-900/30 active:scale-95"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -356,6 +363,17 @@ export default function StudentDevicesPage() {
           <span>لديك مكان شاغر لجهاز ثانٍ. يمكنك فتح المنصة من أي هاتف أو لابتوب آخر وسيتم اعتماده تلقائياً كجهازك الثاني.</span>
         </div>
       )}
+
+      <DeleteConfirmationModal
+        isOpen={Boolean(deviceToRemove)}
+        onClose={() => setDeviceToRemove(null)}
+        onConfirm={confirmRemoveDevice}
+        isLoading={isRemoving}
+        title="تأكيد إزالة الجهاز الثانوي"
+        itemType="الجهاز"
+        itemName={deviceToRemove ? `${deviceToRemove.name} (${deviceToRemove.browser})` : ''}
+        warningNote="لن يتم حظر الجهاز، بل سيتم إخلاء خانة الجهاز الثاني لتتمكن من تسجيل الدخول من جهاز آخر."
+      />
 
     </div>
   );

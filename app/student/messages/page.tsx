@@ -23,6 +23,7 @@ export default function StudentMessagesPage() {
   const [replyText, setReplyText] = useState('');
   const [isSendingReply, setIsSendingReply] = useState(false);
   const [replySuccess, setReplySuccess] = useState(false);
+  const [replyError, setReplyError] = useState('');
 
   const loadMessages = async () => {
     if (!currentUser) return;
@@ -57,6 +58,7 @@ export default function StudentMessagesPage() {
   const handleSendReply = async () => {
     if (!replyText.trim() || !selectedMessage) return;
     setIsSendingReply(true);
+    setReplyError('');
     try {
       await replyToMessage(selectedMessage.id, replyText.trim());
       setSelectedMessage(prev => prev ? { ...prev, replyContent: replyText.trim(), repliedAt: new Date().toISOString() } : null);
@@ -65,7 +67,7 @@ export default function StudentMessagesPage() {
       setTimeout(() => setReplySuccess(false), 4000);
     } catch (err) {
       console.error(err);
-      alert('حدث خطأ أثناء إرسال الرد');
+      setReplyError('تعذر إرسال الرد حالياً، يرجى المحاولة مرة أخرى.');
     } finally {
       setIsSendingReply(false);
     }
@@ -228,6 +230,12 @@ export default function StudentMessagesPage() {
                 {replySuccess && (
                   <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-bold text-xs flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4" /> تم إرسال ردك وحفظه بنجاح للمعلم!
+                  </div>
+                )}
+
+                {replyError && (
+                  <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" /> {replyError}
                   </div>
                 )}
               </div>

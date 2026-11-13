@@ -16,14 +16,15 @@ import {
   BookOpen,
   Smile,
   X,
-  CheckCircle2
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import RichTextEditor from '@/components/RichTextEditor';
 import RichContentViewer from '@/components/RichContentViewer';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
 import UndoDeleteToast from '@/components/UndoDeleteToast';
-import { supabase } from '@/lib/supabaseClient';
+import { useAuth } from '@/context/AuthContext';
 
 interface NotePage {
   id: string;
@@ -45,9 +46,10 @@ const COLORS = [
 
 const NOTE_ICONS = ['📝', '💡', '🇬🇧', '⭐', '🎯', '📚', '🧠', '✨', '🔥', '📌'];
 
-const LOCAL_STORAGE_KEY = 'mr_radwan_student_notes';
-
 export default function StudentNotesPage() {
+  const { currentUser } = useAuth();
+  const storageKey = `mr_radwan_student_notes_${currentUser?.id || 'guest'}`;
+
   // ZERO-STATE ENFORCED: starts completely empty, no fake mock notes!
   const [pages, setPages] = useState<NotePage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,6 +62,7 @@ export default function StudentNotesPage() {
   const [editContent, setEditContent] = useState('');
   const [editColor, setEditColor] = useState(COLORS[0]);
   const [editIcon, setEditIcon] = useState('📝');
+  const [validationError, setValidationError] = useState('');
 
   // Deletion & 5-Second Undo State
   const [itemToDelete, setItemToDelete] = useState<NotePage | null>(null);
@@ -68,28 +71,31 @@ export default function StudentNotesPage() {
   const [isUndoToastOpen, setIsUndoToastOpen] = useState(false);
   const [notificationMsg, setNotificationMsg] = useState('');
 
-  // Load notes from local storage or Supabase
+  // Load notes from user-scoped localStorage
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+      const stored = localStorage.getItem(storageKey);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
           setPages(parsed);
+          setCurrentPageIndex(0);
+          return;
         }
       }
+      setPages([]);
     } catch (e) {
       console.warn('Could not read stored notes:', e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [storageKey]);
 
-  // Save notes to localStorage
+  // Save notes to user-scoped localStorage
   const persistPages = (newPages: NotePage[]) => {
     setPages(newPages);
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newPages));
+      localStorage.setItem(storageKey, JSON.stringify(newPages));
     } catch (e) {
       console.warn('Could not persist notes:', e);
     }
@@ -126,9 +132,10 @@ export default function StudentNotesPage() {
 
   const savePage = () => {
     if (!editTitle.trim()) {
-      alert('يرجى كتابة عنوان للملاحظة أولاً');
+      setValidationError('يرجى كتابة عنوان للملاحظة أولاً قبل الحفظ');
       return;
     }
+    setValidationError('');
 
     if (!isCreatingNew && currentPage) {
       // Update existing page
@@ -307,6 +314,12 @@ export default function StudentNotesPage() {
                 {isEditing ? (
                   /* EDITING MODE WITH RICH TEXT EDITOR */
                   <div className="flex flex-col gap-4">
+                    {validationError && (
+                      <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-black flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        <span>{validationError}</span>
+                      </div>
+                    )}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-current/15">
                       <div className="flex items-center gap-2 flex-1">
                         {/* Icon selector */}

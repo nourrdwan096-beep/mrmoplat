@@ -38,6 +38,7 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
   const [redeemLoading, setRedeemLoading] = useState(false);
   const [redeemStatusText, setRedeemStatusText] = useState('');
   const [redeemError, setRedeemError] = useState('');
+  const [courseNotice, setCourseNotice] = useState('');
 
   // Success Confirmation Modal State
   const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -229,13 +230,15 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
   };
 
   const handleWalletBuy = async () => {
-    alert('شراء من المحفظة أو الدفع الفوري قيد الإعداد.');
+    setCourseNotice('شراء الكورس من المحفظة قيد التجهيز؛ يرجى استخدام كود التفعيل المجاني حالياً.');
+    setTimeout(() => setCourseNotice(''), 5000);
   };
 
   const handleDownloadDocument = (e: React.MouseEvent, item: UnitItemData, isAccessible: boolean) => {
     e.stopPropagation();
     if (!isAccessible) {
-      alert('يجب اجتياز المحتوى السابق أولاً لفتح هذا المستند والتمكن من تحميله.');
+      setCourseNotice('يجب اجتياز المحتوى السابق أولاً لفتح هذا المستند والتمكن من تحميله.');
+      setTimeout(() => setCourseNotice(''), 5000);
       return;
     }
 
@@ -415,6 +418,22 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
       </div>
 
       <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 space-y-8">
+        {courseNotice && (
+          <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-xs sm:text-sm font-black flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{courseNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCourseNotice('')}
+              className="p-1 rounded-lg hover:bg-amber-500/10"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* 2. Enrollment / Activation Card (If not yet enrolled) */}
         {!isEnrolled && (
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl max-w-2xl mx-auto -mt-10 relative z-20 space-y-6">

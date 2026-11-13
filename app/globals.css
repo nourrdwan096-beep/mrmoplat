@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Architects+Daughter&family=Aref+Ruqaa:wght@400;700&family=Cairo:wght@400;500;600;700;800;900&family=Caveat:wght@500;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Lora:wght@500;700&family=Marhey:wght@400;600;700&family=Outfit:wght@500;700;800&family=Patrick+Hand&family=Plus+Jakarta+Sans:wght@500;700;800&family=Reem+Kufi:wght@500;700&family=Tajawal:wght@400;500;700;800;900&display=swap');
 @import "tailwindcss";
 
 @custom-variant dark (&:is(.dark, .dark *));
@@ -22,6 +22,85 @@
   .badge-text {
     font-family: 'Tajawal', sans-serif !important;
   }
+}
+
+/* Mind Map Custom Typography & Sketchbook Paper Textures */
+.mindmap-custom-font,
+.mindmap-custom-font h1,
+.mindmap-custom-font h2,
+.mindmap-custom-font h3,
+.mindmap-custom-font h4,
+.mindmap-custom-font h5,
+.mindmap-custom-font h6,
+.mindmap-custom-font p,
+.mindmap-custom-font span,
+.mindmap-custom-font input,
+.mindmap-custom-font button,
+.mindmap-custom-font [class*="text-xl"],
+.mindmap-custom-font [class*="text-2xl"],
+.mindmap-custom-font [class*="text-3xl"] {
+  font-family: var(--mm-font, 'Tajawal', sans-serif) !important;
+}
+
+.mm-paper-plain {
+  background-color: #ffffff;
+}
+.dark .mm-paper-plain {
+  background-color: #0f172a;
+}
+
+.mm-paper-cream {
+  background-color: #fdfbf2;
+}
+.dark .mm-paper-cream {
+  background-color: #131722;
+}
+
+.mm-paper-grid {
+  background-color: #ffffff;
+  background-image:
+    linear-gradient(to right, rgba(148, 163, 184, 0.16) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.16) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.dark .mm-paper-grid {
+  background-color: #0f172a;
+  background-image:
+    linear-gradient(to right, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.mm-paper-ruled {
+  background-color: #fffef9;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 31px,
+    rgba(59, 130, 246, 0.14) 31px,
+    rgba(59, 130, 246, 0.14) 32px
+  );
+}
+.dark .mm-paper-ruled {
+  background-color: #0f172a;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent,
+    transparent 31px,
+    rgba(56, 189, 248, 0.09) 31px,
+    rgba(56, 189, 248, 0.09) 32px
+  );
+}
+
+.mm-paper-dots {
+  background-color: #ffffff;
+  background-image: radial-gradient(rgba(100, 116, 139, 0.25) 1.2px, transparent 1.2px);
+  background-size: 20px 20px;
+}
+.dark .mm-paper-dots {
+  background-color: #0f172a;
+  background-image: radial-gradient(rgba(148, 163, 184, 0.15) 1.2px, transparent 1.2px);
+  background-size: 20px 20px;
 }
 
 html {

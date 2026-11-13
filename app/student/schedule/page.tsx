@@ -21,7 +21,8 @@ import UndoDeleteToast from '@/components/UndoDeleteToast';
 import RichContentViewer from '@/components/RichContentViewer';
 import RichTextEditor from '@/components/RichTextEditor';
 import MindMapCreator from '@/components/student/MindMapCreator';
-import { BrainCircuit } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import { PenTool } from 'lucide-react';
 
 interface Task {
   id: string;
@@ -34,10 +35,17 @@ interface Task {
 }
 
 const DAYS = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
-const LOCAL_STORAGE_KEY = 'mr_radwan_student_schedule';
 
 export default function StudentSchedulePage() {
-  const [scheduleTab, setScheduleTab] = useState<'mindmap' | 'timetable'>('mindmap');
+  const { currentUser } = useAuth();
+  const storageKey = `mr_radwan_student_schedule_${currentUser?.id || 'guest'}`;
+  const [scheduleTab, setScheduleTab] = useState<'mindmap' | 'timetable'>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('tab') === 'timetable') return 'timetable';
+    }
+    return 'mindmap';
+  });
   // ZERO-STATE ENFORCED: starts with zero tasks, strictly no fake mock data!
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeDay, setActiveDay] = useState<number>(new Date().getDay());
@@ -57,29 +65,44 @@ export default function StudentSchedulePage() {
   const [isUndoToastOpen, setIsUndoToastOpen] = useState(false);
   const [notificationMsg, setNotificationMsg] = useState('');
 
-  // Load from local storage
+  // Load from user-scoped local storage
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+      const stored = localStorage.getItem(storageKey);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
           setTasks(parsed);
+          return;
         }
       }
+      setTasks([]);
     } catch (e) {
       console.warn('Could not read stored tasks:', e);
     }
-  }, []);
+  }, [storageKey]);
 
-  // Persist to local storage
+  // Persist to user-scoped local storage
   const persistTasks = (newTasks: Task[]) => {
     setTasks(newTasks);
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newTasks));
+      localStorage.setItem(storageKey, JSON.stringify(newTasks));
     } catch (e) {
       console.warn('Could not save tasks:', e);
     }
+  };
+
+  const logActivityToday = () => {
+    if (!currentUser?.id) return;
+    try {
+      const actKey = `mr_radwan_study_activity_${currentUser.id}`;
+      const existing = JSON.parse(localStorage.getItem(actKey) || '[]');
+      const todayIso = new Date().toISOString().slice(0, 10);
+      if (Array.isArray(existing) && !existing.includes(todayIso)) {
+        existing.push(todayIso);
+        localStorage.setItem(actKey, JSON.stringify(existing.slice(-60)));
+      }
+    } catch {}
   };
 
   const activeDayTasks = tasks
@@ -97,6 +120,7 @@ export default function StudentSchedulePage() {
       t.id === id ? { ...t, completed: !t.completed } : t
     );
     persistTasks(updated);
+    logActivityToday();
   };
 
   const openAddModal = () => {
@@ -204,32 +228,29 @@ export default function StudentSchedulePage() {
   return (
     <div className="p-4 md:p-8 max-w-6xl mx-auto space-y-6">
       {/* Top Main Navigation Tabs */}
-      <div className="no-print bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-2 shadow-xs flex items-center gap-2">
+      <div className="no-print bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-1.5 shadow-xs flex items-center gap-1.5">
         <button
           onClick={() => setScheduleTab('mindmap')}
-          className={`flex-1 py-3 px-4 rounded-2xl font-black text-xs sm:text-sm transition-all flex items-center justify-center gap-2 ${
+          className={`flex-1 py-2.5 px-4 rounded-xl font-black text-xs sm:text-sm transition-all flex items-center justify-center gap-2 whitespace-nowrap ${
             scheduleTab === 'mindmap'
-              ? 'bg-gradient-to-r from-violet-600 to-indigo-600 text-white shadow-md shadow-violet-500/20'
+              ? 'bg-emerald-600 text-white shadow-sm'
               : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
           }`}
         >
-          <BrainCircuit className="w-4 h-4 text-amber-300" />
-          <span>إنشاء الخريطة الذهنية الذكية</span>
-          <span className="hidden sm:inline-block px-2 py-0.5 rounded-full text-[10px] bg-amber-400/20 text-amber-300 border border-amber-400/30">
-            موصى به 2030
-          </span>
+          <PenTool className="w-4 h-4" />
+          <span>إنشاء خريطة ذهنية</span>
         </button>
 
         <button
           onClick={() => setScheduleTab('timetable')}
-          className={`flex-1 py-3 px-4 rounded-2xl font-black text-xs sm:text-sm transition-all flex items-center justify-center gap-2 ${
+          className={`flex-1 py-2.5 px-4 rounded-xl font-black text-xs sm:text-sm transition-all flex items-center justify-center gap-2 whitespace-nowrap ${
             scheduleTab === 'timetable'
-              ? 'bg-violet-600 text-white shadow-md shadow-violet-500/20'
+              ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-sm'
               : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
           }`}
         >
           <CalendarDays className="w-4 h-4" />
-          <span>جدول المذاكرة الأسبوعي (المواعيد)</span>
+          <span>جدول المذاكرة الأسبوعي</span>
         </button>
       </div>
 

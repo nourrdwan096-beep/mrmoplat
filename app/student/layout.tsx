@@ -17,13 +17,9 @@ import {
   LogOut,
   Menu,
   Lock,
-  Moon,
-  Sun,
   X,
   Award
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import { useTheme } from '@/context/ThemeContext';
 import ThemeToggle from '@/components/ThemeToggle';
 import NotificationBell from '@/components/notifications/NotificationBell';
 
@@ -44,7 +40,6 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
   const router = useRouter();
   const pathname = usePathname();
   const { currentUser, logout } = useAuth();
-  const { theme, toggleTheme } = useTheme();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
 
@@ -75,18 +70,26 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
     );
   }
 
-  // If student is pending, show a locked screen
+  // If student is pending, rejected, or banned, show a clear locked screen
   if (currentUser.status !== 'active') {
+    const isBlocked = currentUser.status === 'banned' || currentUser.status === 'rejected';
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-6">
         <div className="max-w-md w-full bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-200 dark:border-slate-800 p-8 text-center">
-          <div className="w-20 h-20 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-full flex items-center justify-center mx-auto mb-6">
+          <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 ${
+            isBlocked
+              ? 'bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400'
+              : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'
+          }`}>
             <Lock className="w-10 h-10" />
           </div>
-          <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-4">حسابك قيد المراجعة</h2>
+          <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-4">
+            {isBlocked ? 'تم تعليق أو إيقاف الحساب' : 'حسابك قيد المراجعة'}
+          </h2>
           <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
-            مرحباً بك في المنصة. حسابك حالياً قيد المراجعة من قبل الإدارة وسيتم تفعيله قريباً. 
-            يرجى الانتظار حتى تصلك رسالة التأكيد.
+            {isBlocked
+              ? 'تم إيقاف هذا الحساب من قبل إدارة المنصة. للمراجعة والاستفسار يرجى التواصل مع مستر محمد رضوان.'
+              : 'مرحباً بك في المنصة. حسابك حالياً قيد المراجعة من قبل الإدارة وسيتم تفعيله قريباً عبر رسالة كود التفعيل.'}
           </p>
           <button
             onClick={logout}
@@ -138,19 +141,13 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
       </div>
 
       {/* Sidebar Navigation */}
-      <AnimatePresence>
-        {(isMobileMenuOpen || (typeof window !== 'undefined' && window.innerWidth >= 768)) && (
-          <motion.aside
-            initial={{ x: 300, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: 300, opacity: 0 }}
-            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className={`
-              fixed md:sticky top-0 right-0 h-screen w-72 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 z-40
-              flex flex-col overflow-y-auto transform transition-transform duration-300 ease-in-out
-              ${isMobileMenuOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
-            `}
-          >
+      <aside
+        className={`
+          fixed md:sticky top-0 right-0 h-screen w-72 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 z-40
+          flex flex-col overflow-y-auto transform transition-transform duration-300 ease-in-out
+          ${isMobileMenuOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'}
+        `}
+      >
             <div className="p-5 flex flex-col gap-6 flex-1">
               {/* Profile Card with Notification Bell */}
               <div className="hidden md:flex items-center justify-between gap-2.5 bg-slate-50 dark:bg-slate-950 p-3 rounded-2xl border border-slate-100 dark:border-slate-800/60">
@@ -218,9 +215,7 @@ export default function StudentLayout({ children }: { children: React.ReactNode 
                 </button>
               </div>
             </div>
-          </motion.aside>
-        )}
-      </AnimatePresence>
+          </aside>
 
       {/* Main Content Area */}
       <main className="flex-1 w-full min-w-0 overflow-x-hidden relative">
