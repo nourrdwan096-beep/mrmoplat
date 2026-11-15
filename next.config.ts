@@ -1,16 +1,13 @@
 import type {NextConfig} from 'next';
-import { PHASE_DEVELOPMENT_SERVER } from 'next/constants';
 
-export default function config(phase: string): NextConfig {
-  const nextConfig: NextConfig = {
-    distDir: phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev' : '.next',
-    reactStrictMode: true,
-    eslint: {
-      ignoreDuringBuilds: true,
-    },
-    typescript: {
-      ignoreBuildErrors: false,
-    },
+const nextConfig: NextConfig = {
+  reactStrictMode: true,
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  typescript: {
+    ignoreBuildErrors: false,
+  },
   // Allow access to remote image placeholder.
   experimental: {
     serverActions: {
@@ -42,5 +39,4 @@ export default function config(phase: string): NextConfig {
   },
 };
 
-  return nextConfig;
-}
+export default nextConfig;
