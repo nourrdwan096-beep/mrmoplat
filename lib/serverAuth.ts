@@ -1,7 +1,6 @@
 import 'server-only';
 
 import { cookies } from 'next/headers';
-import crypto from 'crypto';
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import {
   SESSION_COOKIE_NAME,
@@ -22,15 +21,17 @@ const MASTER_SECRETS = [
 ];
 
 function timingSafeCompare(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
-  if (bufA.length !== bufB.length) {
-    // Perform dummy comparison to avoid leaking length trivially
-    const dummy = Buffer.alloc(bufA.length);
-    crypto.timingSafeEqual(bufA, dummy);
-    return false;
+  const enc = new TextEncoder();
+  const bytesA = enc.encode(a);
+  const bytesB = enc.encode(b);
+  const maxLen = Math.max(bytesA.length, bytesB.length);
+  let diff = bytesA.length ^ bytesB.length;
+  for (let i = 0; i < maxLen; i++) {
+    const ba = i < bytesA.length ? bytesA[i] : 0;
+    const bb = i < bytesB.length ? bytesB[i] : 0;
+    diff |= ba ^ bb;
   }
-  return crypto.timingSafeEqual(bufA, bufB);
+  return diff === 0;
 }
 
 export function isTeacherEmail(email: string): boolean {

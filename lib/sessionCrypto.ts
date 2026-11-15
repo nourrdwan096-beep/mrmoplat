@@ -41,9 +41,12 @@ function base64UrlToBytes(b64Url: string): Uint8Array {
   return bytes;
 }
 
-async function importHmacKey(): Promise<CryptoKey> {
+async function importHmacKey(): Promise<CryptoKey | null> {
+  if (typeof globalThis === 'undefined' || !globalThis.crypto?.subtle) {
+    return null;
+  }
   const enc = new TextEncoder();
-  return crypto.subtle.importKey(
+  return globalThis.crypto.subtle.importKey(
     'raw',
     enc.encode(getSessionSecretString()),
     { name: 'HMAC', hash: 'SHA-256' },
@@ -57,7 +60,10 @@ export async function signSessionPayload(payload: SessionUserPayload): Promise<s
   const payloadBytes = enc.encode(JSON.stringify(payload));
   const payloadB64 = bytesToBase64Url(payloadBytes);
   const key = await importHmacKey();
-  const signatureBuffer = await crypto.subtle.sign('HMAC', key, enc.encode(payloadB64));
+  if (!key) {
+    throw new Error('Web Crypto subtle API unavailable');
+  }
+  const signatureBuffer = await globalThis.crypto.subtle.sign('HMAC', key, enc.encode(payloadB64));
   const sigB64 = bytesToBase64Url(new Uint8Array(signatureBuffer));
   return `${payloadB64}.${sigB64}`;
 }
@@ -73,9 +79,10 @@ export async function verifySessionToken(token: string | undefined | null): Prom
   try {
     const enc = new TextEncoder();
     const key = await importHmacKey();
+    if (!key) return null;
     const sigBytes = base64UrlToBytes(sigB64);
     const sigArrayBuffer = new Uint8Array(sigBytes).buffer;
-    const isValid = await crypto.subtle.verify('HMAC', key, sigArrayBuffer, enc.encode(payloadB64));
+    const isValid = await globalThis.crypto.subtle.verify('HMAC', key, sigArrayBuffer, enc.encode(payloadB64));
     if (!isValid) return null;
 
     const payloadBytes = base64UrlToBytes(payloadB64);
