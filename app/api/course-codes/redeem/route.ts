@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { requireStudentOrStaffSession } from '@/lib/serverAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -12,6 +13,14 @@ export async function POST(req: NextRequest) {
     const targetCourseId = body?.targetCourseId;
     const studentInfo = body?.studentInfo || {};
 
+    const session = await requireStudentOrStaffSession(studentId);
+    if (!session) {
+      return NextResponse.json({
+        success: false,
+        message: 'يجب تسجيل الدخول كطالب أولاً لتفعيل الكود.'
+      }, { status: 401 });
+    }
+
     if (!rawCode || typeof rawCode !== 'string' || !rawCode.trim()) {
       return NextResponse.json({
         success: false,
@@ -19,15 +28,8 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
-    if (!studentId || typeof studentId !== 'string' || !studentId.trim()) {
-      return NextResponse.json({
-        success: false,
-        message: 'يجب تسجيل الدخول كطالب أولاً لتفعيل الكود.'
-      }, { status: 400 });
-    }
-
     const cleanCode = rawCode.trim().toUpperCase().replace(/\s+/g, '');
-    const cleanStudentId = studentId.trim();
+    const cleanStudentId = session.isStaff && studentId?.trim() ? studentId.trim() : session.id;
 
     // 1. Fetch code record with course info using supabaseAdmin
     const { data: codeRecord, error: codeError } = await supabaseAdmin

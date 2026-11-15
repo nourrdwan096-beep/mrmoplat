@@ -1,10 +1,89 @@
 'use server';
 
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import {
+  getServerSession,
+  requireStaffSession,
+  requireStudentOrStaffSession,
+} from '@/lib/serverAuth';
 
-// Generic CRUD proxies for Supabase via Admin Client (bypasses RLS issues)
+const STAFF_PROXY_TABLES = new Set([
+  'announcements',
+  'teacher_schedules_and_notes',
+  'course_activation_codes',
+  'audit_logs',
+]);
+
+async function assertProxyAccess(
+  table: string,
+  payloadOrMatch?: Record<string, any> | any[]
+) {
+  if (STAFF_PROXY_TABLES.has(table)) {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      throw new Error('غير مصرح بهذه العملية الإدارية');
+    }
+    return staff;
+  }
+
+  if (table === 'student_item_progress') {
+    const session = await getServerSession();
+    if (!session) {
+      throw new Error('يجب تسجيل الدخول أولاً');
+    }
+    if (session.isStaff) return session;
+    const records = Array.isArray(payloadOrMatch) ? payloadOrMatch : [payloadOrMatch];
+    for (const rec of records) {
+      const targetStudentId = rec?.student_id || rec?.studentId;
+      if (targetStudentId && String(targetStudentId) !== session.id) {
+        throw new Error('غير مصرح بالوصول لبيانات طالب آخر');
+      }
+    }
+    return session;
+  }
+
+  throw new Error('الجدول غير مصرح بالوصول إليه عبر هذه الواجهة');
+}
+
+async function hasCourseContentAccess(
+  session: Awaited<ReturnType<typeof getServerSession>>,
+  courseId?: string | null
+): Promise<boolean> {
+  if (!session) return false;
+  if (session.isStaff) return true;
+  if (session.role !== 'student' || session.status !== 'active' || !courseId) return false;
+
+  const { data: enrollment } = await supabaseAdmin
+    .from('course_enrollments')
+    .select('id')
+    .eq('student_id', session.id)
+    .eq('course_id', courseId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (enrollment?.id) return true;
+
+  const { data: course } = await supabaseAdmin
+    .from('courses')
+    .select('is_free, price')
+    .eq('id', courseId)
+    .maybeSingle();
+
+  return Boolean(course && (course.is_free === true || Number(course.price) === 0));
+}
+
+// Generic CRUD proxies for Supabase via Admin Client (strictly role-guarded)
 export async function proxyUpsert(table: string, payload: any) {
-  const { data, error } = await supabaseAdmin.from(table).upsert(payload).select();
+  const session = await assertProxyAccess(table, payload);
+  let normalizedPayload = payload;
+  if (table === 'student_item_progress' && !session.isStaff) {
+    if (Array.isArray(payload)) {
+      normalizedPayload = payload.map((p: any) => ({ ...p, student_id: session.id }));
+    } else if (payload && typeof payload === 'object') {
+      normalizedPayload = { ...payload, student_id: session.id };
+    }
+  }
+  const { data, error } = await supabaseAdmin.from(table).upsert(normalizedPayload).select();
   if (error) {
     console.error(`proxyUpsert [${table}] error:`, error);
     throw new Error(error.message);
@@ -13,7 +92,16 @@ export async function proxyUpsert(table: string, payload: any) {
 }
 
 export async function proxyInsert(table: string, payload: any) {
-  const { data, error } = await supabaseAdmin.from(table).insert(payload).select();
+  const session = await assertProxyAccess(table, payload);
+  let normalizedPayload = payload;
+  if (table === 'student_item_progress' && !session.isStaff) {
+    if (Array.isArray(payload)) {
+      normalizedPayload = payload.map((p: any) => ({ ...p, student_id: session.id }));
+    } else if (payload && typeof payload === 'object') {
+      normalizedPayload = { ...payload, student_id: session.id };
+    }
+  }
+  const { data, error } = await supabaseAdmin.from(table).insert(normalizedPayload).select();
   if (error) {
     console.error(`proxyInsert [${table}] error:`, error);
     throw new Error(error.message);
@@ -22,7 +110,12 @@ export async function proxyInsert(table: string, payload: any) {
 }
 
 export async function proxyUpdate(table: string, match: Record<string, any>, payload: any) {
-  const { data, error } = await supabaseAdmin.from(table).update(payload).match(match).select();
+  const session = await assertProxyAccess(table, match);
+  const safeMatch =
+    table === 'student_item_progress' && !session.isStaff
+      ? { ...match, student_id: session.id }
+      : match;
+  const { data, error } = await supabaseAdmin.from(table).update(payload).match(safeMatch).select();
   if (error) {
     console.error(`proxyUpdate [${table}] error:`, error);
     throw new Error(error.message);
@@ -31,7 +124,12 @@ export async function proxyUpdate(table: string, match: Record<string, any>, pay
 }
 
 export async function proxyDelete(table: string, match: Record<string, any>) {
-  const { data, error } = await supabaseAdmin.from(table).delete().match(match);
+  const session = await assertProxyAccess(table, match);
+  const safeMatch =
+    table === 'student_item_progress' && !session.isStaff
+      ? { ...match, student_id: session.id }
+      : match;
+  const { data, error } = await supabaseAdmin.from(table).delete().match(safeMatch);
   if (error) {
     console.error(`proxyDelete [${table}] error:`, error);
     throw new Error(error.message);
@@ -40,9 +138,14 @@ export async function proxyDelete(table: string, match: Record<string, any>) {
 }
 
 export async function proxySelect(table: string, match?: Record<string, any>, orderBy?: { column: string; ascending?: boolean }) {
+  const session = await assertProxyAccess(table, match);
+  const safeMatch =
+    table === 'student_item_progress' && !session.isStaff
+      ? { ...(match || {}), student_id: session.id }
+      : match;
   let query = supabaseAdmin.from(table).select('*');
-  if (match) {
-    query = query.match(match);
+  if (safeMatch) {
+    query = query.match(safeMatch);
   }
   if (orderBy) {
     query = query.order(orderBy.column, { ascending: orderBy.ascending ?? true });
@@ -130,6 +233,10 @@ export async function fetchCoursesServer(): Promise<any[]> {
 }
 
 export async function saveCourseServer(course: any): Promise<any> {
+  const staff = await requireStaffSession();
+  if (!staff) {
+    throw new Error('غير مصرح بتعديل الكورسات');
+  }
   const courseId = course.id && course.id.length === 36 ? course.id : crypto.randomUUID();
 
   // Embed extra metadata cleanly into the description field so non-existent columns are avoided
@@ -175,6 +282,10 @@ export async function saveCourseServer(course: any): Promise<any> {
 }
 
 export async function deleteCourseServer(courseId: string): Promise<boolean> {
+  const staff = await requireStaffSession();
+  if (!staff) {
+    throw new Error('غير مصرح بحذف الكورسات');
+  }
   const { error } = await supabaseAdmin
     .from('courses')
     .delete()
@@ -220,6 +331,10 @@ export async function fetchUnitsServer(courseId: string): Promise<any[]> {
 }
 
 export async function saveUnitServer(unit: any): Promise<any> {
+  const staff = await requireStaffSession();
+  if (!staff) {
+    throw new Error('غير مصرح بتعديل الوحدات');
+  }
   const unitId = unit.id && unit.id.length === 36 ? unit.id : crypto.randomUUID();
   const payload = {
     id: unitId,
@@ -256,6 +371,10 @@ export async function saveUnitServer(unit: any): Promise<any> {
 }
 
 export async function deleteUnitServer(unitId: string): Promise<boolean> {
+  const staff = await requireStaffSession();
+  if (!staff) {
+    throw new Error('غير مصرح بحذف الوحدات');
+  }
   const { error } = await supabaseAdmin
     .from('course_units')
     .delete()
@@ -284,7 +403,12 @@ export async function fetchItemsServer(unitId: string): Promise<any[]> {
       return [];
     }
 
-    return (data || []).map((i: any) => ({
+    const rows = data || [];
+    const session = await getServerSession();
+    const courseId = rows[0]?.course_id;
+    const canViewMedia = courseId ? await hasCourseContentAccess(session, courseId) : Boolean(session?.isStaff);
+
+    return rows.map((i: any) => ({
       id: i.id,
       unitId: i.unit_id,
       courseId: i.course_id,
@@ -297,9 +421,9 @@ export async function fetchItemsServer(unitId: string): Promise<any[]> {
       passingScorePercentage: i.passing_score_percentage || 60,
       maxExamAttempts: i.max_exam_attempts !== null && i.max_exam_attempts !== undefined ? Number(i.max_exam_attempts) : 3,
       videoSourceType: i.video_source_type || 'internal_secured',
-      obfuscatedVideoId: i.obfuscated_video_id || '',
-      directVideoUrl: i.direct_video_url || '',
-      pdfAttachmentUrl: i.pdf_attachment_url || '',
+      obfuscatedVideoId: canViewMedia ? (i.obfuscated_video_id || '') : '',
+      directVideoUrl: canViewMedia ? (i.direct_video_url || '') : '',
+      pdfAttachmentUrl: canViewMedia ? (i.pdf_attachment_url || '') : '',
       isPrerequisiteRequired: i.is_prerequisite_required ?? true,
       createdAt: i.created_at || new Date().toISOString(),
     }));
@@ -310,6 +434,10 @@ export async function fetchItemsServer(unitId: string): Promise<any[]> {
 }
 
 export async function saveItemServer(item: any): Promise<any> {
+  const staff = await requireStaffSession();
+  if (!staff) {
+    throw new Error('غير مصرح بتعديل عناصر المنهج');
+  }
   const itemId = item.id && item.id.length === 36 ? item.id : crypto.randomUUID();
   const payload = {
     id: itemId,
@@ -375,6 +503,10 @@ export async function updateItemMetadataServer(itemId: string, metadata: {
   isPrerequisiteRequired?: boolean;
 }): Promise<{ success: boolean; item?: any; error?: string }> {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return { success: false, error: 'غير مصرح بتحديث بيانات العنصر' };
+    }
     const updatePayload: Record<string, any> = {
       updated_at: new Date().toISOString(),
     };
@@ -419,6 +551,9 @@ export async function fetchItemByIdServer(itemId: string): Promise<any | null> {
       return null;
     }
 
+    const session = await getServerSession();
+    const canViewMedia = await hasCourseContentAccess(session, data.course_id);
+
     return {
       id: data.id,
       unitId: data.unit_id,
@@ -434,9 +569,9 @@ export async function fetchItemByIdServer(itemId: string): Promise<any | null> {
       startDate: data.start_date || undefined,
       endDate: data.end_date || undefined,
       videoSourceType: data.video_source_type,
-      obfuscatedVideoId: data.obfuscated_video_id,
-      directVideoUrl: data.direct_video_url,
-      pdfAttachmentUrl: data.pdf_attachment_url,
+      obfuscatedVideoId: canViewMedia ? data.obfuscated_video_id : '',
+      directVideoUrl: canViewMedia ? data.direct_video_url : '',
+      pdfAttachmentUrl: canViewMedia ? data.pdf_attachment_url : '',
       isPrerequisiteRequired: data.is_prerequisite_required,
       createdAt: data.created_at,
     };
@@ -447,6 +582,10 @@ export async function fetchItemByIdServer(itemId: string): Promise<any | null> {
 }
 
 export async function deleteItemServer(itemId: string): Promise<boolean> {
+  const staff = await requireStaffSession();
+  if (!staff) {
+    throw new Error('غير مصرح بحذف عناصر المنهج');
+  }
   const { error } = await supabaseAdmin
     .from('unit_items')
     .delete()
@@ -464,6 +603,10 @@ export async function deleteItemServer(itemId: string): Promise<boolean> {
 // -------------------------------------------------------------
 export async function fetchQuestionsServer(itemId: string): Promise<any[]> {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return [];
+    }
     const { data, error } = await supabaseAdmin
       .from('quiz_questions')
       .select('*')
@@ -507,6 +650,20 @@ export async function fetchQuestionsServer(itemId: string): Promise<any[]> {
 // STRICT SECURITY: Student-facing question fetcher that STRIPS all answers, ideal answers, and explanations
 export async function fetchSecuredStudentQuestionsServer(itemId: string): Promise<any[]> {
   try {
+    const session = await getServerSession();
+    if (!session) return [];
+
+    if (!session.isStaff) {
+      const { data: itemMeta } = await supabaseAdmin
+        .from('unit_items')
+        .select('course_id')
+        .eq('id', itemId)
+        .maybeSingle();
+
+      const allowed = await hasCourseContentAccess(session, itemMeta?.course_id);
+      if (!allowed) return [];
+    }
+
     const { data, error } = await supabaseAdmin
       .from('quiz_questions')
       .select('*')
@@ -558,6 +715,10 @@ export async function fetchSecuredStudentQuestionsServer(itemId: string): Promis
 
 export async function saveQuestionsServer(itemId: string, questions: any[]): Promise<boolean> {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return false;
+    }
     await supabaseAdmin.from('quiz_questions').delete().eq('item_id', itemId);
 
     if (!questions || questions.length === 0) return true;
@@ -629,7 +790,42 @@ export async function submitAndGradeExamServer(payload: {
   error?: string;
 }> {
   try {
-    const { itemId, studentId, courseId, answers, isSecurityTerminated } = payload;
+    const session = await getServerSession();
+    if (!session) {
+      return {
+        success: false,
+        totalPoints: 0,
+        earnedPoints: 0,
+        percentage: 0,
+        isPassed: false,
+        attemptsCount: 0,
+        maxExamAttempts: 3,
+        isExhausted: false,
+        questionResults: {},
+        error: 'يجب تسجيل الدخول لتسليم الاختبار',
+      };
+    }
+
+    const { itemId, courseId, answers, isSecurityTerminated } = payload;
+    const studentId = session.isStaff ? payload.studentId : session.id;
+
+    if (!session.isStaff) {
+      const enrolled = await hasCourseContentAccess(session, courseId);
+      if (!enrolled) {
+        return {
+          success: false,
+          totalPoints: 0,
+          earnedPoints: 0,
+          percentage: 0,
+          isPassed: false,
+          attemptsCount: 0,
+          maxExamAttempts: 3,
+          isExhausted: false,
+          questionResults: {},
+          error: 'غير مصرح بتسليم هذا الاختبار بدون اشتراك مفعل',
+        };
+      }
+    }
 
     if (!itemId || !studentId || !courseId) {
       return {
@@ -914,11 +1110,14 @@ export async function submitAndGradeExamServer(payload: {
 export async function fetchStudentProgressServer(studentId: string, courseId?: string): Promise<any[]> {
   try {
     if (!studentId) return [];
+    const session = await requireStudentOrStaffSession(studentId);
+    if (!session) return [];
+    const targetStudentId = session.isStaff ? studentId : session.id;
 
     let query = supabaseAdmin
       .from('student_item_progress')
       .select('*, unit_items(title, max_exam_attempts, item_type)')
-      .eq('student_id', studentId);
+      .eq('student_id', targetStudentId);
 
     if (courseId) {
       query = query.eq('course_id', courseId);
@@ -930,7 +1129,7 @@ export async function fetchStudentProgressServer(studentId: string, courseId?: s
       let fallbackQuery = supabaseAdmin
         .from('student_item_progress')
         .select('*')
-        .eq('student_id', studentId);
+        .eq('student_id', targetStudentId);
       if (courseId) {
         fallbackQuery = fallbackQuery.eq('course_id', courseId);
       }
@@ -966,6 +1165,16 @@ export async function grantStudentExtraAttemptsServer(
   isPassed: boolean;
 }> {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return {
+        success: false,
+        message: 'غير مصرح بهذه العملية الإدارية',
+        attemptsCount: 0,
+        maxAttempts: 3,
+        isPassed: false,
+      };
+    }
     if (!studentId || !courseId || !itemId) {
       return {
         success: false,
@@ -1039,8 +1248,8 @@ export async function grantStudentExtraAttemptsServer(
     try {
       await supabaseAdmin.from('audit_logs').insert({
         id: crypto.randomUUID(),
-        actor_name: 'مستر محمد رضوان (المعلم)',
-        actor_role: 'teacher',
+        actor_name: staff.fullName,
+        actor_role: staff.role,
         action_type: 'grant_extra_attempt',
         target_entity: 'student_item_progress',
         target_id: recordPayload.id,
@@ -1091,6 +1300,15 @@ export async function resetStudentItemProgressServer(
   isPassed: boolean;
 }> {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return {
+        success: false,
+        message: 'غير مصرح بهذه العملية الإدارية',
+        attemptsCount: 0,
+        isPassed: false,
+      };
+    }
     if (!studentId || !courseId || !itemId) {
       return {
         success: false,
@@ -1148,8 +1366,8 @@ export async function resetStudentItemProgressServer(
     try {
       await supabaseAdmin.from('audit_logs').insert({
         id: crypto.randomUUID(),
-        actor_name: 'مستر محمد رضوان (المعلم)',
-        actor_role: 'teacher',
+        actor_name: staff.fullName,
+        actor_role: staff.role,
         action_type: 'reset_exam_progress',
         target_entity: 'student_item_progress',
         target_id: recordPayload.id,
@@ -1197,7 +1415,26 @@ export async function verifyHomeworkQuestionAnswerServer(payload: {
   explanation?: string;
 }> {
   try {
+    const session = await getServerSession();
+    if (!session) {
+      return { success: false, isCorrect: false, earnedPoints: 0, maxPoints: 1 };
+    }
+
     const { itemId, questionId, chosenAnswer } = payload;
+
+    if (!session.isStaff) {
+      const { data: itemMeta } = await supabaseAdmin
+        .from('unit_items')
+        .select('course_id')
+        .eq('id', itemId)
+        .maybeSingle();
+
+      const allowed = await hasCourseContentAccess(session, itemMeta?.course_id);
+      if (!allowed) {
+        return { success: false, isCorrect: false, earnedPoints: 0, maxPoints: 1 };
+      }
+    }
+
     const { data: q, error } = await supabaseAdmin
       .from('quiz_questions')
       .select('*')
@@ -1306,6 +1543,9 @@ export async function verifyHomeworkQuestionAnswerServer(payload: {
 // -------------------------------------------------------------
 export async function fetchCodesServer(courseId?: string): Promise<any[]> {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) return [];
+
     let query = supabaseAdmin.from('course_activation_codes').select('*').order('created_at', { ascending: false });
     if (courseId) {
       query = query.eq('course_id', courseId);
@@ -1333,6 +1573,8 @@ export async function fetchCodesServer(courseId?: string): Promise<any[]> {
 
 export async function insertCodesServer(codes: any[]): Promise<boolean> {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) return false;
     if (!codes || codes.length === 0) return true;
     const rows = codes.map((c: any) => ({
       id: c.id && c.id.length === 36 ? c.id : crypto.randomUUID(),
@@ -1357,6 +1599,9 @@ export async function insertCodesServer(codes: any[]): Promise<boolean> {
 
 export async function markCodeUsedServer(codeId: string, studentId: string, nowIso: string): Promise<boolean> {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) return false;
+
     const { error } = await supabaseAdmin
       .from('course_activation_codes')
       .update({
@@ -1378,10 +1623,14 @@ export async function markCodeUsedServer(codeId: string, studentId: string, nowI
 // -------------------------------------------------------------
 export async function fetchStudentEnrollmentsServer(studentId: string): Promise<string[]> {
   try {
+    const session = await requireStudentOrStaffSession(studentId);
+    if (!session) return [];
+    const targetStudentId = session.isStaff ? studentId : session.id;
+
     const { data, error } = await supabaseAdmin
       .from('course_enrollments')
       .select('course_id')
-      .eq('student_id', studentId)
+      .eq('student_id', targetStudentId)
       .eq('is_active', true);
 
     if (error) {
@@ -1398,22 +1647,42 @@ export async function fetchStudentEnrollmentsServer(studentId: string): Promise<
 
 export async function saveEnrollmentServer(enrollment: any, walletTx?: any): Promise<boolean> {
   try {
+    const session = await requireStudentOrStaffSession(enrollment?.studentId);
+    if (!session) return false;
+
+    const targetStudentId = session.isStaff ? enrollment.studentId : session.id;
+    const courseId = enrollment?.courseId;
+    if (!targetStudentId || !courseId) return false;
+
+    // Students may only self-enroll directly into explicitly FREE courses; paid courses require activation code or staff
+    if (!session.isStaff) {
+      const { data: courseRow } = await supabaseAdmin
+        .from('courses')
+        .select('is_free, price')
+        .eq('id', courseId)
+        .maybeSingle();
+
+      if (!courseRow || !(courseRow.is_free === true || Number(courseRow.price) === 0)) {
+        return false;
+      }
+    }
+
     const enrollmentRow = {
       id: enrollment.id && enrollment.id.length === 36 ? enrollment.id : crypto.randomUUID(),
-      student_id: enrollment.studentId,
-      course_id: enrollment.courseId,
-      payment_method: enrollment.paymentMethod || 'activation_code',
-      amount_paid: Number(enrollment.amountPaid) || 0,
+      student_id: targetStudentId,
+      course_id: courseId,
+      payment_method: session.isStaff ? (enrollment.paymentMethod || 'activation_code') : 'free',
+      amount_paid: session.isStaff ? (Number(enrollment.amountPaid) || 0) : 0,
       is_active: true,
       enrolled_at: enrollment.enrolledAt || new Date().toISOString(),
     };
 
     await supabaseAdmin.from('course_enrollments').upsert(enrollmentRow);
 
-    if (walletTx) {
+    if (walletTx && session.isStaff) {
       const txRow = {
         id: walletTx.id && walletTx.id.length === 36 ? walletTx.id : crypto.randomUUID(),
-        student_id: walletTx.studentId,
+        student_id: targetStudentId,
         amount: Number(walletTx.amount) || 0,
         transaction_type: walletTx.transactionType || 'course_purchase',
         fawry_reference_number: walletTx.fawryReference || null,
@@ -1435,6 +1704,10 @@ export async function saveEnrollmentServer(enrollment: any, walletTx?: any): Pro
 // -------------------------------------------------------------
 export async function syncLocalCoursesServer(localCourses: any[]): Promise<any[]> {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return await fetchCoursesServer();
+    }
     if (!localCourses || localCourses.length === 0) {
       return await fetchCoursesServer();
     }
@@ -1458,14 +1731,18 @@ export async function syncLocalCoursesServer(localCourses: any[]): Promise<any[]
 
 export async function fetchCourseEnrolledStudentsDataServer(courseId: string) {
   try {
-    const { data: dbEnrollments, error: enrollErr } = await supabaseAdmin
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return { success: false, enrollments: [], progress: [] };
+    }
+    const { data: dbEnrollments } = await supabaseAdmin
       .from('course_enrollments')
       .select('*, profiles(id, full_name, phone, parent_phone, avatar_url, role)')
       .eq('course_id', courseId)
       .eq('is_active', true)
       .order('enrolled_at', { ascending: false });
 
-    const { data: progressData, error: progressErr } = await supabaseAdmin
+    const { data: progressData } = await supabaseAdmin
       .from('student_item_progress')
       .select('id, student_id, course_id, item_id, attempts_count, status, highest_score, last_score, is_passed, completed_at, updated_at, unit_items(id, title, max_exam_attempts, item_type, total_marks, passing_score_percentage)')
       .eq('course_id', courseId);

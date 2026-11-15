@@ -285,7 +285,16 @@ export function getPersistentUniqueDeviceToken(): string {
   } catch {}
 
   if (!token) {
-    const cookieVal = getCookie(UNIQUE_DEVICE_STORAGE_KEY);
+    try {
+      const sess = sessionStorage.getItem(UNIQUE_DEVICE_STORAGE_KEY) || sessionStorage.getItem('mr_hw_device_fp');
+      if (sess && !isLegacyGenericFingerprint(sess)) {
+        token = sess;
+      }
+    } catch {}
+  }
+
+  if (!token) {
+    const cookieVal = getCookie(UNIQUE_DEVICE_STORAGE_KEY) || getCookie('mr_hw_device_fp') || getCookie('mr_radwan_device_fp');
     if (cookieVal && !isLegacyGenericFingerprint(cookieVal)) {
       token = cookieVal;
     }
@@ -311,12 +320,32 @@ export function getPersistentUniqueDeviceToken(): string {
     localStorage.setItem('mr_hw_device_fp', token);
     localStorage.setItem('mr_device_fingerprint', token);
     localStorage.setItem('mr_radwan_device_fp', token);
+    sessionStorage.setItem(UNIQUE_DEVICE_STORAGE_KEY, token);
+    sessionStorage.setItem('mr_hw_device_fp', token);
     setCookie(UNIQUE_DEVICE_STORAGE_KEY, token);
     setCookie('mr_hw_device_fp', token);
     setCookie('mr_radwan_device_fp', token);
   } catch {}
 
   return token;
+}
+
+/**
+ * Computes an auxiliary cross-browser physical hardware signature using Canvas, WebGL, AudioContext, and device geometry.
+ * Used alongside the persistent MR_DEV token to strengthen telemetry without false-positive cross-student collisions.
+ */
+export async function computeHardwareSignature(): Promise<string> {
+  if (typeof window === 'undefined') return 'MR_HW_SERVER';
+  try {
+    const canvasFp = getCanvasFingerprint();
+    const webglFp = getWebGLFingerprint();
+    const audioFp = await getAudioFingerprint();
+    const hwProfile = getHardwareProfile();
+    const combined = `${canvasFp}::${webglFp}::${audioFp}::${hwProfile}`;
+    return `MR_HW_${hashString(combined).toUpperCase()}`;
+  } catch {
+    return `MR_HW_${hashString(getHardwareProfile()).toUpperCase()}`;
+  }
 }
 
 // 5. IndexedDB Persistence Layer for Hardware Tag
@@ -452,35 +481,91 @@ async function saveCacheToken(dataObj: any): Promise<void> {
 }
 
 /**
- * Main function to generate and retrieve the unforgeable device fingerprint
- * Truly deterministic per physical hardware, invariant across all browsers, tabs, and private windows.
+ * Gather and synchronize the persistent device token across ALL 5 storage layers
+ * (localStorage, sessionStorage, Cookie, IndexedDB, Cache API).
+ * If any layer was cleared by the user, the surviving layer re-hydrates all others.
  */
 export async function getStrictDeviceFingerprint(): Promise<string> {
   if (typeof window === 'undefined') return 'SERVER_ENVIRONMENT';
 
-  // Compute Deterministic Physical Hardware Fingerprint
-  const physicalProfile = getPhysicalHardwareProfile();
-  const physicalFp = physicalProfile.hardwareFingerprint;
+  let recoveredToken: string | null = null;
 
-  // Re-anchor across all persistence layers
   try {
-    localStorage.setItem('mr_hw_device_fp', physicalFp);
-    localStorage.setItem('mr_device_fingerprint', physicalFp);
-    localStorage.setItem('mr_radwan_device_fp', physicalFp);
-    sessionStorage.setItem('mr_hw_device_fp', physicalFp);
+    const lToken =
+      localStorage.getItem(UNIQUE_DEVICE_STORAGE_KEY) ||
+      localStorage.getItem('mr_hw_device_fp') ||
+      localStorage.getItem('mr_radwan_device_fp');
+    if (lToken && !isLegacyGenericFingerprint(lToken)) {
+      recoveredToken = lToken;
+    }
   } catch {}
 
-  setCookie('mr_hw_device_fp', physicalFp);
-  setCookie('mr_radwan_device_fp', physicalFp);
-  saveIndexedDBToken(physicalFp).catch(() => {});
-  saveCacheToken({ token: physicalFp, updatedAt: new Date().toISOString() }).catch(() => {});
+  if (!recoveredToken) {
+    try {
+      const sToken =
+        sessionStorage.getItem(UNIQUE_DEVICE_STORAGE_KEY) ||
+        sessionStorage.getItem('mr_hw_device_fp');
+      if (sToken && !isLegacyGenericFingerprint(sToken)) {
+        recoveredToken = sToken;
+      }
+    } catch {}
+  }
 
-  return physicalFp;
+  if (!recoveredToken) {
+    const cToken =
+      getCookie(UNIQUE_DEVICE_STORAGE_KEY) ||
+      getCookie('mr_hw_device_fp') ||
+      getCookie('mr_radwan_device_fp');
+    if (cToken && !isLegacyGenericFingerprint(cToken)) {
+      recoveredToken = cToken;
+    }
+  }
+
+  // Crucial recovery check: inspect IndexedDB and Cache Storage before generating a new ID!
+  if (!recoveredToken) {
+    try {
+      const idbToken = await getIndexedDBToken();
+      if (idbToken && !isLegacyGenericFingerprint(idbToken)) {
+        recoveredToken = idbToken;
+      }
+    } catch {}
+  }
+
+  if (!recoveredToken) {
+    try {
+      const cacheToken = await getCacheToken();
+      if (cacheToken && !isLegacyGenericFingerprint(cacheToken)) {
+        recoveredToken = cacheToken;
+      }
+    } catch {}
+  }
+
+  // Only create a brand new UUID if ALL 5 storage layers were empty
+  const finalFp = recoveredToken || getPersistentUniqueDeviceToken();
+
+  // Re-anchor across all 5 persistence layers synchronously & asynchronously
+  try {
+    localStorage.setItem(UNIQUE_DEVICE_STORAGE_KEY, finalFp);
+    localStorage.setItem('mr_hw_device_fp', finalFp);
+    localStorage.setItem('mr_device_fingerprint', finalFp);
+    localStorage.setItem('mr_radwan_device_fp', finalFp);
+    sessionStorage.setItem(UNIQUE_DEVICE_STORAGE_KEY, finalFp);
+    sessionStorage.setItem('mr_hw_device_fp', finalFp);
+  } catch {}
+
+  setCookie(UNIQUE_DEVICE_STORAGE_KEY, finalFp);
+  setCookie('mr_hw_device_fp', finalFp);
+  setCookie('mr_radwan_device_fp', finalFp);
+  await saveIndexedDBToken(finalFp).catch(() => {});
+  await saveCacheToken({ token: finalFp, updatedAt: new Date().toISOString() }).catch(() => {});
+
+  return finalFp;
 }
 
 export interface StrictDeviceIdentity {
   primaryFingerprint: string;
   candidateFingerprints: string[];
+  hardwareSignature?: string;
   isLocallyLocked: boolean;
   studentId?: string;
   storedStudent: {
@@ -493,44 +578,60 @@ export interface StrictDeviceIdentity {
 }
 
 /**
- * Gather complete identity with all historical fingerprints and lock status
+ * Gather complete identity with all historical fingerprints, hardware signature, and lock status
  */
 export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
   if (typeof window === 'undefined') {
     return {
       primaryFingerprint: 'SERVER',
       candidateFingerprints: [],
+      hardwareSignature: 'MR_HW_SERVER',
       isLocallyLocked: false,
       storedStudent: null,
     };
   }
 
-  const primaryFp = await getStrictDeviceFingerprint();
+  const [primaryFp, hardwareSignature, idbData, cacheData] = await Promise.all([
+    getStrictDeviceFingerprint(),
+    computeHardwareSignature(),
+    getIndexedDBData().catch(() => ({ token: null, studentInfo: null })),
+    getCacheData().catch(() => ({ token: null, studentInfo: null })),
+  ]);
+
   const candidateSet = new Set<string>();
   if (primaryFp && !isLegacyGenericFingerprint(primaryFp)) {
     candidateSet.add(primaryFp);
   }
 
-  // Collect candidate legitimate tokens across stores, strictly ignoring legacy screen dimensions
+  // Collect candidate legitimate tokens across all 5 stores, strictly ignoring legacy screen dimensions
   try {
     const k1 = localStorage.getItem(UNIQUE_DEVICE_STORAGE_KEY);
     const k2 = localStorage.getItem('mr_device_fingerprint');
     const k3 = localStorage.getItem('mr_hw_device_fp');
-    [k1, k2, k3].forEach(k => {
+    const k4 = localStorage.getItem('mr_radwan_device_fp');
+    const s1 = sessionStorage.getItem(UNIQUE_DEVICE_STORAGE_KEY);
+    const s2 = sessionStorage.getItem('mr_hw_device_fp');
+    [k1, k2, k3, k4, s1, s2].forEach(k => {
       if (k && !isLegacyGenericFingerprint(k)) candidateSet.add(k);
     });
   } catch {}
 
-  const c1 = getCookie(UNIQUE_DEVICE_STORAGE_KEY);
-  if (c1 && !isLegacyGenericFingerprint(c1)) candidateSet.add(c1);
+  [
+    getCookie(UNIQUE_DEVICE_STORAGE_KEY),
+    getCookie('mr_hw_device_fp'),
+    getCookie('mr_radwan_device_fp'),
+    idbData?.token,
+    cacheData?.token,
+  ].forEach(tok => {
+    if (tok && !isLegacyGenericFingerprint(tok)) candidateSet.add(tok);
+  });
 
-  // Check Local Lock and Stored Student Profile (only if actually authenticated on this browser)
+  // Check Local Lock and Stored Student Profile
   let isLocallyLocked = false;
   let studentId: string | undefined = undefined;
   let storedStudent: StrictDeviceIdentity['storedStudent'] = null;
 
   try {
-    // Check modern robust device student binding
     const rawBinding = localStorage.getItem('mr_device_student_binding') || getCookie('mr_device_student_binding');
     if (rawBinding) {
       try {
@@ -543,7 +644,13 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
       } catch {}
     }
 
-    // Also check current active user if student
+    const deepStored = idbData?.studentInfo || cacheData?.studentInfo;
+    if (!storedStudent && deepStored && (deepStored.id || deepStored.email || deepStored.phone)) {
+      storedStudent = deepStored;
+      isLocallyLocked = true;
+      if (deepStored.id) studentId = deepStored.id;
+    }
+
     const rawUser = localStorage.getItem('mr_radwan_current_user');
     if (rawUser && !storedStudent) {
       try {
@@ -566,6 +673,7 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
   return {
     primaryFingerprint: primaryFp,
     candidateFingerprints: Array.from(candidateSet).filter(Boolean),
+    hardwareSignature,
     isLocallyLocked,
     studentId,
     storedStudent,
@@ -781,7 +889,7 @@ export async function registerOrVerifyStudentCourseDevice(
   }
 
   const profile = getPhysicalHardwareProfile();
-  const currentFp = profile.hardwareFingerprint;
+  const currentFp = await getStrictDeviceFingerprint();
 
   try {
     const { checkAndRegisterStudentDeviceAction } = await import('@/app/actions/studentActions');
@@ -816,8 +924,13 @@ export async function registerOrVerifyStudentCourseDevice(
       };
     }
   } catch (err) {
-    console.warn('Server device check fallback to local check:', err);
-    return { allowed: true, isPrimary: true, deviceNumber: 1 };
+    console.warn('Server device verification rejected or unavailable:', err);
+    return {
+      allowed: false,
+      isPrimary: false,
+      deviceNumber: 3,
+      message: 'تعذر التحقق من صلاحية الجهاز على الخادم. يرجى تسجيل الدخول والمحاولة مرة أخرى.',
+    };
   }
 }
 

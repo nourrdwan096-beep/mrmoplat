@@ -47,8 +47,6 @@ import {
 } from '@/lib/teacherService';
 import { fetchAllCourses, CourseData } from '@/lib/academicService';
 
-const TEACHER_MASTER_SECRET = 'sse-000-#######-****&mr+pp';
-
 export default function TeacherAssistantsPage() {
   const [assistants, setAssistants] = useState<AssistantData[]>([]);
   const [courses, setCourses] = useState<CourseData[]>([]);
@@ -148,29 +146,31 @@ export default function TeacherAssistantsPage() {
     }
   };
 
-  const handleVerifyMasterSecret = (e: React.FormEvent) => {
+  const handleVerifyMasterSecret = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanSecret = secretInput.trim();
-    const isValidSecret =
-      cleanSecret === TEACHER_MASTER_SECRET ||
-      cleanSecret === 'hfhrefjker4390430458&-cmdsfo3-@iofm3omfoew' ||
-      cleanSecret === 'sse-000-#######-****&mr+pp';
-
-    if (!isValidSecret) {
-      setSecretError('كلمة السر الرئيسية للمعلم غير صحيحة! يرجى إدخال Master Key المعتمد.');
-      return;
-    }
 
     if (captchaCode && captchaInput.trim() !== captchaCode) {
       setSecretError('رمز التحقق البشري (Captcha) غير مطابق! يرجى إعادة المحاولة.');
       return;
     }
 
-    setIsMasterVerified(true);
-    setIsMasterSecretModalOpen(false);
-    setSecretError('');
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('mr_radwan_master_unlocked', 'true');
+    try {
+      const { verifyMasterKeyAction } = await import('@/app/actions/studentActions');
+      const res = await verifyMasterKeyAction(cleanSecret);
+      if (!res.success) {
+        setSecretError(res.message || 'كلمة السر الرئيسية للمعلم غير صحيحة! يرجى إدخال Master Key المعتمد.');
+        return;
+      }
+
+      setIsMasterVerified(true);
+      setIsMasterSecretModalOpen(false);
+      setSecretError('');
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('mr_radwan_master_unlocked', 'true');
+      }
+    } catch {
+      setSecretError('تعذر التحقق من الخادم حالياً. يرجى المحاولة مرة أخرى.');
     }
   };
 

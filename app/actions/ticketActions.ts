@@ -2,6 +2,7 @@
 
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import { revalidatePath } from 'next/cache';
+import { getServerSession, requireStaffSession, requireStudentOrStaffSession } from '@/lib/serverAuth';
 
 function isUuid(str: string): boolean {
   if (!str) return false;
@@ -22,6 +23,9 @@ function toValidUuid(seed: string): string {
 // Fetch all tickets for a specific student with messages & course info
 export async function getStudentTickets(studentId: string) {
   try {
+    const session = await requireStudentOrStaffSession(studentId);
+    if (!session) return [];
+
     const studentUuid = toValidUuid(studentId);
     const { data, error } = await supabaseAdmin
       .from('support_tickets')
@@ -60,8 +64,13 @@ export async function getStudentTickets(studentId: string) {
 }
 
 // Fetch tickets for staff based on role and Smart Dispatching
-export async function getStaffTickets(userId: string, role: string) {
+export async function getStaffTickets(_userId: string, _role: string) {
   try {
+    const session = await requireStaffSession();
+    if (!session) return [];
+    const userId = session.id;
+    const role = session.role;
+
     const { data: allTickets, error } = await supabaseAdmin
       .from('support_tickets')
       .select(`
@@ -146,9 +155,13 @@ export async function createTicket(data: {
   description: string;
   priority?: 'low' | 'normal' | 'high' | 'urgent';
 }) {
+  const session = await requireStudentOrStaffSession(data.student_id);
+  if (!session) {
+    throw new Error('غير مصرح بإنشاء تذكرة دعم');
+  }
   const ticketId = crypto.randomUUID();
   const ticketNumber = Math.floor(1000 + Math.random() * 9000);
-  const studentUuid = toValidUuid(data.student_id);
+  const studentUuid = toValidUuid(session.isStaff ? data.student_id : session.id);
   const courseUuid = data.course_id && isUuid(data.course_id) ? data.course_id : null;
 
   try {
@@ -231,6 +244,9 @@ export async function updateTicketStatus(
   actor?: { id?: string; name?: string; role?: string }
 ) {
   try {
+    const session = await requireStaffSession();
+    if (!session) return null;
+
     const { data } = await supabaseAdmin
       .from('support_tickets')
       .update({ status, updated_at: new Date().toISOString() })
@@ -277,6 +293,9 @@ export async function assignTicketToAssistant(
   actor?: { id?: string; name?: string; role?: string }
 ) {
   try {
+    const session = await requireStaffSession();
+    if (!session) return null;
+
     const assistantUuid = toValidUuid(assistantId);
     const { data } = await supabaseAdmin
       .from('support_tickets')
@@ -318,6 +337,20 @@ export async function assignTicketToAssistant(
 // Get messages for a ticket
 export async function getTicketMessages(ticketId: string) {
   try {
+    const session = await getServerSession();
+    if (!session) return [];
+
+    if (!session.isStaff) {
+      const { data: ticketCheck } = await supabaseAdmin
+        .from('support_tickets')
+        .select('student_id')
+        .eq('id', ticketId)
+        .maybeSingle();
+      if (!ticketCheck || ticketCheck.student_id !== toValidUuid(session.id)) {
+        return [];
+      }
+    }
+
     const { data, error } = await supabaseAdmin
       .from('ticket_messages')
       .select(`
@@ -346,13 +379,28 @@ export async function getTicketMessages(ticketId: string) {
 // Add a message to a ticket
 export async function addTicketMessage(
   ticketId: string,
-  senderId: string,
-  senderRole: string,
+  _senderId: string,
+  _senderRole: string,
   message: string,
-  senderName?: string
+  _senderName?: string
 ) {
   try {
-    const isStaff = senderRole === 'teacher' || senderRole === 'assistant' || senderRole === 'super_admin';
+    const session = await getServerSession();
+    if (!session) return null;
+
+    if (!session.isStaff) {
+      const { data: ticketCheck } = await supabaseAdmin
+        .from('support_tickets')
+        .select('student_id')
+        .eq('id', ticketId)
+        .maybeSingle();
+      if (!ticketCheck || ticketCheck.student_id !== toValidUuid(session.id)) {
+        return null;
+      }
+    }
+
+    const senderRole = session.role;
+    const isStaff = session.isStaff;
     const updatePayload: Record<string, any> = { updated_at: new Date().toISOString() };
     if (isStaff) {
       updatePayload.status = 'in_progress';
@@ -363,7 +411,8 @@ export async function addTicketMessage(
       .update(updatePayload)
       .eq('id', ticketId);
 
-    const resolvedSenderId = toValidUuid(senderId);
+    const resolvedSenderId = toValidUuid(session.id);
+    const senderName = session.fullName;
 
     const msgId = crypto.randomUUID();
     const { data, error } = await supabaseAdmin

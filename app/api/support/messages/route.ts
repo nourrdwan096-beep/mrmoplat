@@ -1,17 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { getServerSession } from '@/lib/serverAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-// GET: Fetch messages for a specific ticket
+// GET: Fetch messages for a specific ticket (owner or staff only)
 export async function GET(req: NextRequest) {
   try {
+    const session = await getServerSession();
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized', messages: [] }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const ticketId = searchParams.get('ticketId') || searchParams.get('ticket_id');
 
     if (!ticketId) {
       return NextResponse.json({ success: false, error: 'معرف التذكرة مطلوب' }, { status: 400 });
+    }
+
+    // Check ticket ownership / info
+    const { data: ticket } = await supabaseAdmin
+      .from('support_tickets')
+      .select(`
+        student_id,
+        student:profiles!support_tickets_student_id_fkey(full_name),
+        assigned_assistant:profiles!support_tickets_assigned_to_assistant_id_fkey(full_name)
+      `)
+      .eq('id', ticketId)
+      .maybeSingle();
+
+    if (!ticket) {
+      return NextResponse.json({ success: false, error: 'التذكرة غير موجودة', messages: [] }, { status: 404 });
+    }
+
+    if (!session.isStaff && ticket.student_id !== session.id) {
+      return NextResponse.json({ success: false, error: 'غير مصرح بعرض هذه المحادثة', messages: [] }, { status: 403 });
     }
 
     const { data: messages, error } = await supabaseAdmin
@@ -24,16 +49,6 @@ export async function GET(req: NextRequest) {
       console.error('API /api/support/messages GET error:', error);
       return NextResponse.json({ success: false, error: error.message, messages: [] }, { status: 500 });
     }
-
-    // Also get ticket to know student & assistant names
-    const { data: ticket } = await supabaseAdmin
-      .from('support_tickets')
-      .select(`
-        student:profiles!support_tickets_student_id_fkey(full_name),
-        assigned_assistant:profiles!support_tickets_assigned_to_assistant_id_fkey(full_name)
-      `)
-      .eq('id', ticketId)
-      .maybeSingle();
 
     const studentObj = Array.isArray((ticket as any)?.student) ? (ticket as any).student[0] : (ticket as any)?.student;
     const asstObj = Array.isArray((ticket as any)?.assigned_assistant) ? (ticket as any).assigned_assistant[0] : (ticket as any)?.assigned_assistant;
@@ -74,68 +89,46 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST: Add a new message to a ticket
+// POST: Add a new message to a ticket (verified role and ownership)
 export async function POST(req: NextRequest) {
   try {
+    const session = await getServerSession();
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
       ticketId,
       ticket_id,
-      senderId,
-      sender_id,
-      senderRole,
-      sender_role,
-      senderName,
       message,
       attachmentUrl,
       attachment_url,
     } = body;
 
     const targetTicketId = ticketId || ticket_id;
-    const rawSenderId = senderId || sender_id;
-    const finalRole = senderRole || sender_role || 'student';
     const cleanMsg = (message || '').trim();
 
     if (!targetTicketId || !cleanMsg) {
       return NextResponse.json({ success: false, error: 'معرف التذكرة والرسالة مطلوبان' }, { status: 400 });
     }
 
-    // 1. Resolve sender_id to a valid UUID in profiles
-    let resolvedSenderId = rawSenderId;
-    if (finalRole === 'teacher' || finalRole === 'super_admin') {
-      resolvedSenderId = 'a0000000-0000-4000-8000-000000000001';
-    } else if (finalRole === 'assistant') {
-      if (!resolvedSenderId || resolvedSenderId === 'asst-1') {
-        resolvedSenderId = 'a1000000-0000-4000-8000-000000000001';
-      } else {
-        const { data: pCheck } = await supabaseAdmin
-          .from('profiles')
-          .select('id')
-          .eq('id', resolvedSenderId)
-          .maybeSingle();
-        if (!pCheck) {
-          resolvedSenderId = 'a1000000-0000-4000-8000-000000000001';
-        }
-      }
-    } else {
-      // Student sender
-      const { data: pCheck } = await supabaseAdmin
-        .from('profiles')
-        .select('id')
-        .eq('id', resolvedSenderId)
-        .maybeSingle();
-      if (!pCheck) {
-        // Fallback to the ticket's student_id
-        const { data: t } = await supabaseAdmin
-          .from('support_tickets')
-          .select('student_id')
-          .eq('id', targetTicketId)
-          .maybeSingle();
-        if (t?.student_id) {
-          resolvedSenderId = t.student_id;
-        }
-      }
+    const { data: ticket } = await supabaseAdmin
+      .from('support_tickets')
+      .select('student_id')
+      .eq('id', targetTicketId)
+      .maybeSingle();
+
+    if (!ticket) {
+      return NextResponse.json({ success: false, error: 'التذكرة غير موجودة' }, { status: 404 });
     }
+
+    if (!session.isStaff && ticket.student_id !== session.id) {
+      return NextResponse.json({ success: false, error: 'غير مصرح بالرد على هذه التذكرة' }, { status: 403 });
+    }
+
+    const finalRole = session.isTeacher ? 'teacher' : session.isStaff ? 'assistant' : 'student';
+    const resolvedSenderId = session.id;
 
     const newMsgId = crypto.randomUUID();
     const { data: insertedMsg, error: insertError } = await supabaseAdmin
@@ -156,7 +149,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: insertError.message }, { status: 500 });
     }
 
-    // 2. Update ticket updated_at and status if needed
+    // 2. Update ticket updated_at
     await supabaseAdmin
       .from('support_tickets')
       .update({
@@ -172,7 +165,7 @@ export async function POST(req: NextRequest) {
       sender_id: insertedMsg.sender_id,
       senderRole: insertedMsg.sender_role,
       sender_role: insertedMsg.sender_role,
-      senderName: senderName || (finalRole === 'teacher' ? 'مستر / محمد رضوان' : finalRole === 'assistant' ? 'فريق المساعدين' : 'الطالب'),
+      senderName: session.fullName || (finalRole === 'teacher' ? 'مستر / محمد رضوان' : finalRole === 'assistant' ? 'فريق المساعدين' : 'الطالب'),
       message: insertedMsg.message,
       attachmentUrl: insertedMsg.attachment_url,
       attachment_url: insertedMsg.attachment_url,

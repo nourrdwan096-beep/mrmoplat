@@ -1,12 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useSyncExternalStore, useState } from 'react';
+import React, { createContext, useContext, useSyncExternalStore, useState, useEffect } from 'react';
 import { UserProfile } from '@/lib/types';
-
-export const TEACHER_CREDENTIALS = {
-  email: 'mr-mohamedrdwan-eng-langue-99@gmail.mnsa.nour.com',
-  password: 'hfhrefjker4390430458&-cmdsfo3-@iofm3omfoew',
-};
 
 interface AuthContextType {
   currentUser: UserProfile | null;
@@ -135,41 +130,62 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // fallback defaults
   }
 
+  const logout = () => {
+    localStorage.removeItem('mr_radwan_current_user');
+    localStorage.removeItem('mr_device_student_binding');
+    localStorage.removeItem('mr_registered_student_info');
+    localStorage.removeItem('mr_student_id');
+    localStorage.removeItem('mr_student_email');
+    localStorage.removeItem('mr_student_phone');
+    sessionStorage.removeItem('mr_device_student_binding');
+    sessionStorage.removeItem('mr_registered_student_info');
+    sessionStorage.removeItem('mr_student_id');
+    sessionStorage.removeItem('mr_student_email');
+    sessionStorage.removeItem('mr_student_phone');
+    sessionStorage.removeItem('mr_radwan_master_unlocked');
+    try {
+      document.cookie = 'mr_radwan_role=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_radwan_user=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_device_student_binding=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_student_id=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_student_email=; path=/; max-age=0; SameSite=Lax';
+      document.cookie = 'mr_student_phone=; path=/; max-age=0; SameSite=Lax';
+    } catch {}
+    notifyAuth();
+    import('@/app/actions/studentActions')
+      .then((m) => m.logoutServerAction())
+      .catch(() => {});
+  };
+
+  // Reconcile cached UI state with HttpOnly signed session cookie on mount
+  useEffect(() => {
+    let active = true;
+    const hadCachedUser = typeof window !== 'undefined' && Boolean(localStorage.getItem('mr_radwan_current_user'));
+    if (!hadCachedUser) return;
+
+    import('@/app/actions/studentActions')
+      .then((m) => m.getVerifiedSessionAction())
+      .then((session) => {
+        if (!active) return;
+        if (!session.authenticated) {
+          // Only clear if there is still no fresh login occurring
+          const stillHasCached = Boolean(localStorage.getItem('mr_radwan_current_user'));
+          if (stillHasCached) {
+            logout();
+          }
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const loginWithCredentials = async (email: string, pass: string): Promise<{ success: boolean; message: string; requiresOtp?: boolean; studentId?: string; isPending?: boolean; student?: any }> => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanPass = pass.trim();
 
-    // 1. Teacher Check
-    if (cleanEmail === TEACHER_CREDENTIALS.email.toLowerCase()) {
-      if (cleanPass === TEACHER_CREDENTIALS.password) {
-        const teacherProfile: UserProfile = {
-          id: 'a0000000-0000-4000-8000-000000000001',
-          fullName: 'مستر / محمد رضوان',
-          email: TEACHER_CREDENTIALS.email,
-          phone: '01552191172',
-          parentPhone: '',
-          carrier: 'Vodafone',
-          role: 'teacher',
-          stage: 'high',
-          educationType: 'general',
-          grade: 3,
-          status: 'active',
-          walletBalance: 0,
-          registeredDevices: [{ id: '1', name: 'Master Device (Primary)', isPrimary: true, lastActive: 'الآن' }]
-        };
-        localStorage.setItem('mr_radwan_current_user', JSON.stringify(teacherProfile));
-        try {
-          document.cookie = 'mr_radwan_role=teacher; path=/; max-age=31536000; SameSite=Lax';
-          document.cookie = 'mr_radwan_user=' + encodeURIComponent(JSON.stringify(teacherProfile)) + '; path=/; max-age=31536000; SameSite=Lax';
-        } catch {}
-        notifyAuth();
-        return { success: true, message: 'مرحباً بك يا مستر محمد رضوان، تم تسجيل الدخول بنجاح إلى لوحة الإدارة.' };
-      } else {
-        return { success: false, message: 'كلمة المرور غير صحيحة لحساب المعلم.' };
-      }
-    }
-
-    // 2. Students & Assistants from Database via Action
     try {
       let deviceFp = '';
       let deviceInfo: { name?: string; browser?: string } | undefined = undefined;
@@ -183,17 +199,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const { loginAction } = await import('@/app/actions/studentActions');
       const res = await loginAction(cleanEmail, cleanPass, deviceFp, deviceInfo);
-      
+
       if (res.success) {
         if (res.requiresOtp) {
           return { success: true, message: res.message || '', requiresOtp: true, studentId: res.studentId };
         }
-        
-        // Log in user (Assistant or Student)
+
         if (res.user) {
-          const userToStore = { ...res.user };
+          const userToStore: any = { ...res.user };
           if (userToStore.avatarUrl && userToStore.avatarUrl.length > 100000) {
-            userToStore.avatarUrl = null; // Prevent localStorage quota exceeded error for large base64 images
+            userToStore.avatarUrl = null;
           }
           localStorage.setItem('mr_radwan_current_user', JSON.stringify(userToStore));
           try {
@@ -201,7 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             document.cookie = `mr_radwan_user=${encodeURIComponent(JSON.stringify(userToStore))}; path=/; max-age=31536000; SameSite=Lax`;
           } catch {}
           notifyAuth();
-          
+
           if (res.user.role === 'student') {
             try {
               const { lockDevicePermanently } = await import('@/lib/deviceSecurity');
@@ -209,17 +224,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             } catch {}
           }
 
-          if (res.user.role === 'assistant') {
-            return { 
-              success: true, 
-              message: `مرحباً بك يا ${res.user.fullName}، تم تسجيل دخولك بنجاح كمساعد معتمد للمستر محمد رضوان.` 
+          if (res.user.role === 'teacher' || res.user.role === 'super_admin') {
+            return {
+              success: true,
+              message: res.message || 'مرحباً بك يا مستر محمد رضوان، تم تسجيل الدخول بنجاح إلى لوحة الإدارة.',
             };
           }
-          
+
+          if (res.user.role === 'assistant') {
+            return {
+              success: true,
+              message: `مرحباً بك يا ${res.user.fullName}، تم تسجيل دخولك بنجاح كمساعد معتمد للمستر محمد رضوان.`,
+            };
+          }
+
           return { success: true, message: 'تم تسجيل الدخول بنجاح!' };
         }
       }
-      
+
       if ((res as any)?.isPending) {
         if ((res as any)?.student) {
           try {
@@ -227,127 +249,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             await lockDevicePermanently((res as any).student);
           } catch {}
         }
-        return { 
-          success: false, 
-          isPending: true, 
+        return {
+          success: false,
+          isPending: true,
           student: (res as any)?.student,
-          message: res.message || 'طلبك قيد المراجعة لدى مستر محمد رضوان.' 
+          message: res.message || 'طلبك قيد المراجعة لدى مستر محمد رضوان.',
         };
       }
-      
-      // Fallback check for locally saved assistant credentials if server action couldn't find it
-      const localAssistantsRaw = localStorage.getItem('mr_radwan_assistants');
-      if (localAssistantsRaw) {
-        try {
-          const localAssistants = JSON.parse(localAssistantsRaw);
-          const foundLocal = localAssistants.find(
-            (a: any) => a.email.toLowerCase() === cleanEmail
-          );
-          if (foundLocal) {
-            if (foundLocal.passwordVault === cleanPass || foundLocal.passwordHash === cleanPass) {
-              if (foundLocal.isFrozen) {
-                return { success: false, message: 'عذراً، تم تجميد حساب المساعد من قبل المعلم. يرجى مراجعة إدارة المنصة.' };
-              }
-              const assistantProfile: UserProfile = {
-                id: foundLocal.id,
-                fullName: foundLocal.fullName,
-                email: foundLocal.email,
-                phone: foundLocal.phone || '',
-                parentPhone: '',
-                carrier: 'Vodafone',
-                role: 'assistant',
-                stage: 'high',
-                educationType: 'general',
-                grade: 1,
-                status: 'active',
-                walletBalance: 0,
-                assistantRoleTitle: foundLocal.assistantRoleTitle || 'مساعد إداري وأكاديمي',
-                permissions: foundLocal.permissions,
-                registeredDevices: [],
-              };
-              localStorage.setItem('mr_radwan_current_user', JSON.stringify(assistantProfile));
-              notifyAuth();
-              return { 
-                success: true, 
-                message: `مرحباً بك يا ${foundLocal.fullName}، تم تسجيل دخولك بنجاح كمساعد معتمد للمستر محمد رضوان.` 
-              };
-            } else {
-              return { success: false, message: 'كلمة المرور غير صحيحة لحساب المساعد.' };
-            }
-          }
-        } catch (e) {
-          console.error('Local assistant fallback parse error:', e);
-        }
-      }
-      
-      return { success: false, message: res.message || 'البريد الإلكتروني غير مسجل بالمنصة.' };
+
+      return { success: false, message: res.message || 'بيانات الدخول غير صحيحة.' };
     } catch (error) {
       console.error('Login action failed:', error);
-      
-      // Also attempt local assistant fallback on network exception
-      const localAssistantsRaw = localStorage.getItem('mr_radwan_assistants');
-      if (localAssistantsRaw) {
-        try {
-          const localAssistants = JSON.parse(localAssistantsRaw);
-          const foundLocal = localAssistants.find(
-            (a: any) => a.email.toLowerCase() === cleanEmail
-          );
-          if (foundLocal && (foundLocal.passwordVault === cleanPass || foundLocal.passwordHash === cleanPass)) {
-            if (foundLocal.isFrozen) {
-              return { success: false, message: 'عذراً، تم تجميد حساب المساعد من قبل المعلم.' };
-            }
-            const assistantProfile: UserProfile = {
-              id: foundLocal.id,
-              fullName: foundLocal.fullName,
-              email: foundLocal.email,
-              phone: foundLocal.phone || '',
-              parentPhone: '',
-              carrier: 'Vodafone',
-              role: 'assistant',
-              stage: 'high',
-              educationType: 'general',
-              grade: 1,
-              status: 'active',
-              walletBalance: 0,
-              assistantRoleTitle: foundLocal.assistantRoleTitle || 'مساعد إداري وأكاديمي',
-              permissions: foundLocal.permissions,
-              registeredDevices: [],
-            };
-            localStorage.setItem('mr_radwan_current_user', JSON.stringify(assistantProfile));
-            notifyAuth();
-            return { 
-              success: true, 
-              message: `مرحباً بك يا ${foundLocal.fullName}، تم تسجيل دخولك بنجاح كمساعد معتمد.` 
-            };
-          }
-        } catch {}
-      }
-
       return { success: false, message: 'حدث خطأ أثناء محاولة الاتصال بالخادم.' };
     }
-  };
-
-  const logout = () => {
-    localStorage.removeItem('mr_radwan_current_user');
-    localStorage.removeItem('mr_device_student_binding');
-    localStorage.removeItem('mr_registered_student_info');
-    localStorage.removeItem('mr_student_id');
-    localStorage.removeItem('mr_student_email');
-    localStorage.removeItem('mr_student_phone');
-    sessionStorage.removeItem('mr_device_student_binding');
-    sessionStorage.removeItem('mr_registered_student_info');
-    sessionStorage.removeItem('mr_student_id');
-    sessionStorage.removeItem('mr_student_email');
-    sessionStorage.removeItem('mr_student_phone');
-    try {
-      document.cookie = 'mr_radwan_role=; path=/; max-age=0; SameSite=Lax';
-      document.cookie = 'mr_radwan_user=; path=/; max-age=0; SameSite=Lax';
-      document.cookie = 'mr_device_student_binding=; path=/; max-age=0; SameSite=Lax';
-      document.cookie = 'mr_student_id=; path=/; max-age=0; SameSite=Lax';
-      document.cookie = 'mr_student_email=; path=/; max-age=0; SameSite=Lax';
-      document.cookie = 'mr_student_phone=; path=/; max-age=0; SameSite=Lax';
-    } catch {}
-    notifyAuth();
   };
 
   const registerStudent = async (studentData: Partial<UserProfile> & { password?: string }) => {

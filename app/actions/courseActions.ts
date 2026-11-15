@@ -1,7 +1,9 @@
 'use server';
 
 import { supabase } from '@/lib/supabaseClient';
+import { supabaseAdmin } from '@/lib/supabaseServer';
 import { revalidatePath } from 'next/cache';
+import { requireStaffSession } from '@/lib/serverAuth';
 
 export async function getTeacherCourses() {
   const { data, error } = await supabase
@@ -47,7 +49,9 @@ export async function getCourseDetails(courseId: string) {
 }
 
 export async function createCourse(courseData: any) {
-  const { data, error } = await supabase
+  const session = await requireStaffSession();
+  if (!session) throw new Error('غير مصرح بإنشاء الكورسات');
+  const { data, error } = await supabaseAdmin
     .from('courses')
     .insert([courseData])
     .select()
@@ -59,7 +63,9 @@ export async function createCourse(courseData: any) {
 }
 
 export async function createCourseUnit(unitData: any) {
-  const { data, error } = await supabase
+  const session = await requireStaffSession();
+  if (!session) throw new Error('غير مصرح بإنشاء الوحدات');
+  const { data, error } = await supabaseAdmin
     .from('course_units')
     .insert([unitData])
     .select()
@@ -71,7 +77,9 @@ export async function createCourseUnit(unitData: any) {
 }
 
 export async function createUnitItem(itemData: any) {
-  const { data, error } = await supabase
+  const session = await requireStaffSession();
+  if (!session) throw new Error('غير مصرح بإنشاء الدروس');
+  const { data, error } = await supabaseAdmin
     .from('unit_items')
     .insert([itemData])
     .select()
@@ -82,40 +90,77 @@ export async function createUnitItem(itemData: any) {
   return data;
 }
 
-import crypto from 'crypto';
-
-export async function generateActivationCodes(courseId: string, count: number, batchName: string, createdBy: string) {
+export async function generateActivationCodes(
+  courseId: string, 
+  count: number, 
+  batchName: string, 
+  createdBy?: string,
+  options?: {
+    studentBirthDate?: string;
+    assignedStudentName?: string;
+    centerOrGroup?: string;
+  }
+) {
+  const session = await requireStaffSession();
+  if (!session) throw new Error('غير مصرح بإصدار أكواد التفعيل');
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const prefixes = ['MR', 'RAD', 'ENG', 'SEC', 'EDU'];
+  const client = supabaseAdmin || supabase;
+
+  // Format date tag: birth date if provided, otherwise current issue date
+  let dateTag = '';
+  const resolvedDob = options?.studentBirthDate?.trim();
+  if (resolvedDob) {
+    const parts = resolvedDob.split(/[-/]/);
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        dateTag = `${parts[0].slice(2)}${parts[1].padStart(2, '0')}${parts[2].padStart(2, '0')}`;
+      } else if (parts[2].length === 4) {
+        dateTag = `${parts[2].slice(2)}${parts[1].padStart(2, '0')}${parts[0].padStart(2, '0')}`;
+      }
+    }
+    if (!dateTag) {
+      const digits = resolvedDob.replace(/\D/g, '');
+      dateTag = digits.slice(-6).padStart(6, '0');
+    }
+  }
+
+  if (!dateTag) {
+    const now = new Date();
+    const y = String(now.getFullYear()).slice(2);
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    dateTag = `${y}${m}${d}`;
+  }
 
   const codesToInsert = Array.from({ length: count }).map(() => {
-    const bytes = crypto.randomBytes(24);
-    const prefix = prefixes[bytes[0] % prefixes.length];
-    const layout = bytes[1] % 3;
-
-    let raw = '';
-    for (let i = 2; i < 22; i++) {
-      raw += chars[bytes[i] % chars.length];
+    let part1 = '';
+    let part2 = '';
+    for (let c = 0; c < 4; c++) {
+      part1 += chars.charAt(Math.floor(Math.random() * chars.length));
+      part2 += chars.charAt(Math.floor(Math.random() * chars.length));
     }
+    const code = `MR-${dateTag}-${part1}-${part2}`;
 
-    let code = '';
-    if (layout === 0) {
-      code = `${prefix}-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}`;
-    } else if (layout === 1) {
-      code = `${prefix}-${raw.slice(0, 5)}-${raw.slice(5, 10)}-${raw.slice(10, 15)}`;
-    } else {
-      code = `${prefix}-${raw.slice(0, 3)}-${raw.slice(3, 7)}-${raw.slice(7, 11)}-${raw.slice(11, 14)}`;
+    let fullBatchDisplay = batchName?.trim() || 'دفعة ' + new Date().toLocaleDateString('ar-EG');
+    if (options?.centerOrGroup?.trim()) {
+      fullBatchDisplay += ` [سنتر: ${options.centerOrGroup.trim()}]`;
+    }
+    if (options?.assignedStudentName?.trim()) {
+      fullBatchDisplay += ` [مخصص: ${options.assignedStudentName.trim()}]`;
+    }
+    if (resolvedDob) {
+      fullBatchDisplay += ` [ميلاد: ${resolvedDob}]`;
     }
 
     return {
       course_id: courseId,
       code,
-      batch_name: batchName,
+      batch_name: fullBatchDisplay,
       created_by: createdBy && createdBy !== 'teacher' && createdBy !== 'assistant' ? createdBy : null
     };
   });
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('course_activation_codes')
     .insert(codesToInsert)
     .select();
@@ -126,7 +171,10 @@ export async function generateActivationCodes(courseId: string, count: number, b
 }
 
 export async function getCourseCodes(courseId: string) {
-  const { data, error } = await supabase
+  const session = await requireStaffSession();
+  if (!session) throw new Error('غير مصرح بعرض أكواد التفعيل');
+  const client = supabaseAdmin || supabase;
+  const { data, error } = await client
     .from('course_activation_codes')
     .select('*, used_by:profiles(full_name)')
     .eq('course_id', courseId)

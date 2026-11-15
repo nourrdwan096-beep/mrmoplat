@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { getServerSession, requireStaffSession } from '@/lib/serverAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -89,10 +90,13 @@ function formatTicket(ticket: any) {
 // GET: Fetch tickets with complete relationships (Teacher, Assistant, or Student)
 export async function GET(req: NextRequest) {
   try {
+    const session = await getServerSession();
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized', tickets: [] }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
-    const role = searchParams.get('role');
     const studentId = searchParams.get('studentId') || searchParams.get('student_id');
-    const assistantId = searchParams.get('assistantId') || searchParams.get('assistant_id');
     const status = searchParams.get('status');
     const ticketType = searchParams.get('type') || searchParams.get('ticket_type');
     const courseId = searchParams.get('courseId') || searchParams.get('course_id');
@@ -113,7 +117,10 @@ export async function GET(req: NextRequest) {
       query = query.eq('id', ticketId);
     }
 
-    if (studentId) {
+    if (!session.isStaff) {
+      // Students can only view their own tickets
+      query = query.eq('student_id', session.id);
+    } else if (studentId) {
       query = query.eq('student_id', studentId);
     }
 
@@ -129,10 +136,9 @@ export async function GET(req: NextRequest) {
       query = query.eq('status', status);
     }
 
-    // Assistant role filtering
-    if (role === 'assistant' && assistantId) {
-      // If specific assistant is assigned or open
-      query = query.or(`assigned_to_assistant_id.eq.${assistantId},assigned_to_assistant_id.is.null`);
+    // Assistant role filtering enforced from verified session
+    if (session.role === 'assistant') {
+      query = query.or(`assigned_to_assistant_id.eq.${session.id},assigned_to_assistant_id.is.null`);
     }
 
     const { data, error } = await query;
@@ -153,6 +159,11 @@ export async function GET(req: NextRequest) {
 // POST: Create a new support ticket
 export async function POST(req: NextRequest) {
   try {
+    const session = await getServerSession();
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
       studentId,
@@ -168,7 +179,7 @@ export async function POST(req: NextRequest) {
       priority,
     } = body;
 
-    const rawStudentId = studentId || student_id;
+    const rawStudentId = session.isStaff ? (studentId || student_id) : session.id;
     const rawCourseId = courseId || course_id;
     const finalType = ticketType || ticket_type || 'technical';
     const cleanSubject = (subject || '').trim();
@@ -308,6 +319,10 @@ export async function POST(req: NextRequest) {
 // PATCH: Update ticket status, priority, or assigned assistant
 export async function PATCH(req: NextRequest) {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 403 });
+    }
     const body = await req.json();
     const {
       ticketId,

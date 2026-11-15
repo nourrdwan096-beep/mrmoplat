@@ -1,6 +1,7 @@
 'use server';
 
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { getServerSession, requireTeacherSession } from '@/lib/serverAuth';
 
 export interface AssistantPayload {
   id?: string;
@@ -32,8 +33,83 @@ export interface AssistantPayload {
   };
 }
 
+export async function fetchMyAssistantProfileServerAction() {
+  try {
+    const session = await getServerSession();
+    if (!session || session.role !== 'assistant') {
+      return { success: false, data: null };
+    }
+
+    const { data: profile, error } = await supabaseAdmin
+      .from('profiles')
+      .select('id, full_name, email, phone, carrier, is_frozen, created_at')
+      .eq('id', session.id)
+      .maybeSingle();
+
+    if (error || !profile) {
+      return { success: false, data: null };
+    }
+
+    const { data: perm } = await supabaseAdmin
+      .from('assistant_permissions')
+      .select('*')
+      .eq('assistant_id', profile.id)
+      .maybeSingle();
+
+    return {
+      success: true,
+      data: {
+        id: profile.id,
+        fullName: profile.full_name,
+        assistantRoleTitle: profile.carrier || '',
+        email: profile.email,
+        phone: profile.phone || '',
+        passwordVault: '••••••••',
+        role: 'assistant' as const,
+        isFrozen: !!profile.is_frozen,
+        createdAt: profile.created_at,
+        permissions: perm
+          ? {
+              canManageStudents: perm.can_manage_students ?? false,
+              canApproveRegistrations: perm.can_approve_registrations ?? false,
+              canViewStudentPasswords: perm.can_view_student_passwords ?? false,
+              canManageAllCourses: perm.can_manage_all_courses ?? false,
+              assignedCourseIds: perm.assigned_course_ids ?? [],
+              courseActions: (perm as any).course_actions || {},
+              canHandleAcademicSupport: perm.can_handle_academic_support ?? false,
+              canHandleTechnicalSupport: perm.can_handle_technical_support ?? false,
+              canReviewHomework: perm.can_review_homework ?? false,
+              canPublishAnnouncements: perm.can_publish_announcements ?? false,
+              canSendMessages: (perm as any).can_send_messages ?? true,
+            }
+          : {
+              canManageStudents: true,
+              canApproveRegistrations: true,
+              canViewStudentPasswords: false,
+              canManageAllCourses: false,
+              assignedCourseIds: [],
+              courseActions: {},
+              canHandleAcademicSupport: true,
+              canHandleTechnicalSupport: true,
+              canReviewHomework: true,
+              canPublishAnnouncements: false,
+              canSendMessages: true,
+            },
+      },
+    };
+  } catch (err) {
+    console.error('fetchMyAssistantProfileServerAction error:', err);
+    return { success: false, data: null };
+  }
+}
+
 export async function fetchAssistantsServerAction() {
   try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return { success: false, data: [] };
+    }
+
     const { data: profiles, error: pError } = await supabaseAdmin
       .from('profiles')
       .select('*')
@@ -100,6 +176,11 @@ export async function fetchAssistantsServerAction() {
 
 export async function createAssistantServerAction(payload: AssistantPayload) {
   try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return { success: false, error: 'غير مصرح. هذه العملية متاحة للمعلم فقط.' };
+    }
+
     const cleanEmail = payload.email.trim().toLowerCase();
     const cleanPass = payload.passwordHash.trim();
 
@@ -198,6 +279,11 @@ export async function createAssistantServerAction(payload: AssistantPayload) {
 
 export async function updateAssistantServerAction(payload: AssistantPayload & { id: string }) {
   try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return { success: false, error: 'غير مصرح. هذه العملية متاحة للمعلم فقط.' };
+    }
+
     const cleanEmail = payload.email.trim().toLowerCase();
     const cleanPass = payload.passwordHash ? payload.passwordHash.trim() : undefined;
 
@@ -262,6 +348,11 @@ export async function updateAssistantServerAction(payload: AssistantPayload & { 
 
 export async function toggleAssistantFreezeServerAction(id: string, isFrozen: boolean) {
   try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return { success: false, error: 'غير مصرح. هذه العملية متاحة للمعلم فقط.' };
+    }
+
     await supabaseAdmin
       .from('profiles')
       .update({ is_frozen: isFrozen, updated_at: new Date().toISOString() })
@@ -292,6 +383,11 @@ export async function toggleAssistantFreezeServerAction(id: string, isFrozen: bo
 
 export async function deleteAssistantServerAction(id: string) {
   try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return { success: false, error: 'غير مصرح. هذه العملية متاحة للمعلم فقط.' };
+    }
+
     await supabaseAdmin
       .from('assistant_permissions')
       .delete()

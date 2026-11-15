@@ -1,13 +1,23 @@
 'use server';
 
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { requireStaffSession } from '@/lib/serverAuth';
 
 const isValidUUID = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 
+async function checkAnnouncementAuth() {
+  const session = await requireStaffSession();
+  if (!session) return false;
+  if (session.isTeacher) return true;
+  return Boolean(session.assistantPermissions?.can_publish_announcements);
+}
+
 export async function deleteAnnouncementServerAction(id: string) {
+  if (!(await checkAnnouncementAuth())) {
+    return { success: false, error: 'غير مصرح لك بإدارة الإعلانات.' };
+  }
+
   if (!isValidUUID(id)) {
-    // If it's not a valid UUID (e.g. an old local ID like ann-1234), just pretend we deleted it 
-    // because it only exists in local storage anyway.
     return { success: true };
   }
 
@@ -37,6 +47,10 @@ export async function createAnnouncementServerAction(payload: {
   targetGrade?: 1 | 2 | 3 | null;
   isPublished?: boolean;
 }) {
+  if (!(await checkAnnouncementAuth())) {
+    return { success: false, error: 'غير مصرح لك بنشر الإعلانات.' };
+  }
+
   try {
     const { data, error } = await supabaseAdmin
       .from('announcements')
@@ -76,6 +90,10 @@ export async function updateAnnouncementServerAction(
     isPublished?: boolean;
   }
 ) {
+  if (!(await checkAnnouncementAuth())) {
+    return { success: false, error: 'غير مصرح لك بتعديل الإعلانات.' };
+  }
+
   if (!isValidUUID(id)) {
     return { success: true, data: { ...payload, id } };
   }

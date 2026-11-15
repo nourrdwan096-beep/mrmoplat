@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from '@/lib/serverAuth';
+
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 /**
  * High-Accuracy Multi-Layer Video Info & Duration Resolver
@@ -9,11 +13,16 @@ import { NextRequest, NextResponse } from 'next/server';
  * 4. Fallback to public invidious endpoints if needed
  */
 export async function GET(req: NextRequest) {
+  const session = await getServerSession();
+  if (!session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(req.url);
   const videoId = searchParams.get('videoId');
 
-  if (!videoId || videoId.length < 5) {
-    return NextResponse.json({ error: 'Valid videoId required' }, { status: 400 });
+  if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+    return NextResponse.json({ error: 'Valid 11-character YouTube videoId required' }, { status: 400 });
   }
 
   try {

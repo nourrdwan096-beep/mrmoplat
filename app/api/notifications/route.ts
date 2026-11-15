@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
+import { getServerSession } from '@/lib/serverAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -115,15 +116,16 @@ async function markNotificationUnreadInDb(userId: string, notifId: string): Prom
 // =========================================================================
 export async function GET(req: NextRequest) {
   try {
+    const session = await getServerSession();
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized', notifications: [], unreadCount: 0, readIds: [] }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
-    const userId = searchParams.get('userId');
-    const role = searchParams.get('role') || 'student';
+    const userId = session.id;
+    const role = session.role;
     const stage = searchParams.get('stage');
     const grade = searchParams.get('grade');
-
-    if (!userId) {
-      return NextResponse.json({ success: true, notifications: [], unreadCount: 0, readIds: [] });
-    }
 
     // Load global read IDs from database
     const readIdsSet = await getUserReadNotificationIds(userId);
@@ -783,12 +785,14 @@ export async function GET(req: NextRequest) {
 // =========================================================================
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { action, userId, notifId, notifIds } = body || {};
-
-    if (!userId) {
-      return NextResponse.json({ success: false, error: 'User ID is required' }, { status: 400 });
+    const session = await getServerSession();
+    if (!session) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
+
+    const body = await req.json();
+    const { action, notifId, notifIds } = body || {};
+    const userId = session.id;
 
     if (action === 'mark_read' && notifId) {
       const updated = await saveUserReadNotificationIds(userId, [notifId]);

@@ -279,41 +279,40 @@ export default function StudentsManagementClient() {
   const handleUnlockMasterKey = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanKey = masterKey.trim();
-    const isKeyValid = 
-      cleanKey === 'sse-000-#######-****&mr+pp' ||
-      cleanKey === 'sse-000-#######-****&mr' ||
-      cleanKey === 'hfhrefjker4390430458&-cmdsfo3-@iofm3omfoew';
-
-    if (!isKeyValid) {
-      setMasterKeyError('كلمة المرور الرئيسية غير صحيحة! يرجى إدخال المفتاح السري المعتمد.');
-      return;
-    }
 
     if (enteredCaptcha.trim() !== captchaCode) {
       setMasterKeyError('رمز التحقق البشري غير صحيح! يرجى كتابة الـ 4 أرقام الموضحة.');
       return;
     }
 
+    if (!cleanKey) {
+      setMasterKeyError('يرجى إدخال كلمة المرور الرئيسية.');
+      return;
+    }
+
     try {
       const { revealStudentPasswordsAction } = await import('@/app/actions/studentActions');
       const res = await revealStudentPasswordsAction(cleanKey);
-      if (res.success && res.vaultMap) {
-        setStudents(prev => prev.map(s => ({
-          ...s,
-          passwordVault: res.vaultMap[s.id] || s.passwordVault,
-        })));
+      if (!res.success || !res.vaultMap) {
+        setMasterKeyError(res.message || 'كلمة المرور الرئيسية غير صحيحة! يرجى إدخال المفتاح السري المعتمد.');
+        return;
       }
-    } catch (err) {
-      console.warn('Error fetching revealed passwords:', err);
-    }
 
-    setIsMasterKeyUnlocked(true);
-    setShowMasterKeyModal(false);
-    setMasterKey('');
-    setEnteredCaptcha('');
-    setMasterKeyError('');
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('mr_radwan_master_unlocked', 'true');
+      setStudents(prev => prev.map(s => ({
+        ...s,
+        passwordVault: res.vaultMap[s.id] || s.passwordVault,
+      })));
+
+      setIsMasterKeyUnlocked(true);
+      setShowMasterKeyModal(false);
+      setMasterKey('');
+      setEnteredCaptcha('');
+      setMasterKeyError('');
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('mr_radwan_master_unlocked', 'true');
+      }
+    } catch {
+      setMasterKeyError('تعذر الاتصال بالخادم للتحقق من المفتاح السري.');
     }
   };
 

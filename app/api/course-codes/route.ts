@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import { supabase } from '@/lib/supabaseClient';
+import { requireStaffSession } from '@/lib/serverAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-// GET: Fetch codes for a specific course or all courses
+// GET: Fetch codes for a specific course or all courses (staff-only)
 export async function GET(req: NextRequest) {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return NextResponse.json({ success: false, error: 'Unauthorized', codes: [] }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const courseId = searchParams.get('courseId');
 
@@ -35,9 +41,14 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST: Insert or Upsert activation codes
+// POST: Insert or Upsert activation codes (staff-only)
 export async function POST(req: NextRequest) {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await req.json();
     const codes = Array.isArray(body?.codes) ? body.codes : [];
 
@@ -53,7 +64,7 @@ export async function POST(req: NextRequest) {
       code: String(c.code).trim().toUpperCase(),
       batch_name: c.batchName || c.batch_name || 'دفعة عامة',
       is_used: Boolean(c.isUsed || c.is_used || false),
-      created_by: c.createdBy || c.created_by || null,
+      created_by: staff.id,
     }));
 
     const { data, error } = await client
@@ -73,9 +84,14 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// DELETE: Remove an activation code by ID
+// DELETE: Remove an activation code by ID (staff-only)
 export async function DELETE(req: NextRequest) {
   try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
 

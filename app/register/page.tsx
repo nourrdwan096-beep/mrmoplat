@@ -13,6 +13,7 @@ import {
 import { 
   getStrictDeviceFingerprint, 
   getStrictDeviceIdentity, 
+  computeHardwareSignature,
   lockDevicePermanently,
   clearDeviceLock
 } from '@/lib/deviceSecurity';
@@ -55,25 +56,32 @@ import {
   validateArabicName 
 } from '@/lib/utils';
 
+interface SafeDeviceAccount {
+  id: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  parentPhone?: string | null;
+  stage?: string;
+  grade?: number;
+  educationType?: string;
+  status: 'pending_review' | 'active' | 'rejected' | 'banned';
+  needsOtpActivation?: boolean;
+  otp_verified?: boolean;
+  createdAt?: string;
+  banReason?: string | null;
+  rejectionReason?: string | null;
+}
+
 interface DeviceStatusInfo {
   isRegistered: boolean;
   isBanned: boolean;
-  student?: {
-    id: string;
-    fullName: string;
-    email: string;
-    phone: string;
-    parentPhone?: string | null;
-    stage?: string;
-    grade?: number;
-    educationType?: string;
-    status: 'pending_review' | 'active' | 'rejected' | 'banned';
-    whatsapp_otp?: string | null;
-    otp_verified?: boolean;
-    createdAt?: string;
-    banReason?: string | null;
-    rejectionReason?: string | null;
-  } | null;
+  canRegisterNew: boolean;
+  blockReason?: 'DEVICE_BANNED' | 'PENDING_ACCOUNT_EXISTS' | null;
+  hasApprovedAccounts?: boolean;
+  approvedAccounts?: SafeDeviceAccount[];
+  pendingAccount?: SafeDeviceAccount | null;
+  student?: SafeDeviceAccount | null;
   reason?: string | null;
 }
 
@@ -90,9 +98,10 @@ export default function RegisterPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCheckingDevice, setIsCheckingDevice] = useState(true);
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatusInfo | null>(null);
-  const [existingDeviceStudent, setExistingDeviceStudent] = useState<any>(null);
+  const [showNewAccountForm, setShowNewAccountForm] = useState(false);
   const [fingerprint, setFingerprint] = useState<string>('');
   const [candidateFingerprints, setCandidateFingerprints] = useState<string[]>([]);
+  const [hardwareSignature, setHardwareSignature] = useState<string>('');
 
   // OTP Verification state for students accepted with OTP
   const [otpInput, setOtpInput] = useState('');
@@ -126,19 +135,22 @@ export default function RegisterPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Initialize strict hardware identity and check device registration lock on mount
+  // Initialize strict hardware identity and check device registration status on mount
   useEffect(() => {
     let isCancelled = false;
 
     const initSecurity = async () => {
       setIsCheckingDevice(true);
       try {
-        const identity = await getStrictDeviceIdentity();
+        const [identity, hwSig] = await Promise.all([
+          getStrictDeviceIdentity(),
+          computeHardwareSignature().catch(() => ''),
+        ]);
         if (isCancelled) return;
         setFingerprint(identity.primaryFingerprint);
         setCandidateFingerprints(identity.candidateFingerprints);
+        if (hwSig) setHardwareSignature(hwSig);
 
-        // Gather candidate emails and phones
         let storedEmail = identity.storedStudent?.email;
         let storedPhone = identity.storedStudent?.phone;
 
@@ -153,21 +165,18 @@ export default function RegisterPage() {
         }
 
         const res = await checkDeviceStatusAction(
-          identity.primaryFingerprint, 
-          storedEmail, 
-          storedPhone, 
+          identity.primaryFingerprint,
+          storedEmail,
+          storedPhone,
           identity.candidateFingerprints,
           identity.studentId
         );
         if (isCancelled) return;
 
-        if (res.isBanned) {
-          setDeviceStatus(res);
+        if (res.isBanned || !res.canRegisterNew || res.hasApprovedAccounts || res.isRegistered) {
+          setDeviceStatus(res as DeviceStatusInfo);
         } else {
           setDeviceStatus(null);
-          if (res.student) {
-            setExistingDeviceStudent(res.student);
-          }
           if (identity.isLocallyLocked) {
             await clearDeviceLock();
           }
@@ -192,7 +201,14 @@ export default function RegisterPage() {
   const refreshDeviceStatus = async () => {
     setIsCheckingDevice(true);
     try {
-      const identity = await getStrictDeviceIdentity();
+      const [identity, hwSig] = await Promise.all([
+        getStrictDeviceIdentity(),
+        computeHardwareSignature().catch(() => ''),
+      ]);
+      setFingerprint(identity.primaryFingerprint);
+      setCandidateFingerprints(identity.candidateFingerprints);
+      if (hwSig) setHardwareSignature(hwSig);
+
       let storedEmail = identity.storedStudent?.email;
       let storedPhone = identity.storedStudent?.phone;
 
@@ -202,20 +218,20 @@ export default function RegisterPage() {
       }
 
       const res = await checkDeviceStatusAction(
-        identity.primaryFingerprint, 
-        storedEmail, 
-        storedPhone, 
+        identity.primaryFingerprint,
+        storedEmail,
+        storedPhone,
         identity.candidateFingerprints,
         identity.studentId
       );
-      
-      if (res.isBanned) {
-        setDeviceStatus(res);
+
+      if (res.isBanned || !res.canRegisterNew || res.hasApprovedAccounts || res.isRegistered) {
+        setDeviceStatus(res as DeviceStatusInfo);
+        if (!res.canRegisterNew || res.isBanned) {
+          setShowNewAccountForm(false);
+        }
       } else {
         setDeviceStatus(null);
-        if (res.student) {
-          setExistingDeviceStudent(res.student);
-        }
         if (identity.isLocallyLocked) {
           await clearDeviceLock();
         }
@@ -228,8 +244,14 @@ export default function RegisterPage() {
     }
   };
 
-  const handleVerifyOtpFromScreen = async () => {
-    if (!deviceStatus?.student?.id) return;
+  const handleVerifyOtpFromScreen = async (explicitStudentId?: string) => {
+    const targetStudentId =
+      explicitStudentId ||
+      deviceStatus?.pendingAccount?.id ||
+      deviceStatus?.approvedAccounts?.find((a) => a.needsOtpActivation)?.id ||
+      deviceStatus?.student?.id;
+
+    if (!targetStudentId) return;
     if (!otpInput || otpInput.trim().length !== 4) {
       setOtpError('يرجى إدخال رمز التحقق المكون من 4 أرقام');
       return;
@@ -239,10 +261,9 @@ export default function RegisterPage() {
     setOtpError('');
 
     try {
-      const res = await verifyOtpAction(deviceStatus.student.id, otpInput.trim());
+      const res = await verifyOtpAction(targetStudentId, otpInput.trim());
       if (res.success) {
         setOtpSuccess(true);
-        // Save auth state or redirect to login
         setTimeout(() => {
           router.push('/login?activated=true');
         }, 1500);
@@ -465,13 +486,21 @@ export default function RegisterPage() {
   const handleSubmitFinal = async () => {
     setIsSubmitting(true);
     setSubmitError(null);
-    
+
     let fp = fingerprint;
     let candidates = candidateFingerprints;
+    let hwSig = hardwareSignature;
     try {
-      const identity = await getStrictDeviceIdentity();
+      const [identity, computedSig] = await Promise.all([
+        getStrictDeviceIdentity(),
+        computeHardwareSignature().catch(() => ''),
+      ]);
       fp = identity.primaryFingerprint;
       candidates = identity.candidateFingerprints;
+      if (computedSig) {
+        hwSig = computedSig;
+        setHardwareSignature(computedSig);
+      }
       setFingerprint(fp);
       setCandidateFingerprints(candidates);
     } catch {
@@ -486,7 +515,8 @@ export default function RegisterPage() {
         fullName,
         avatarUrl: photoPreview,
         deviceFingerprint: fp,
-        candidateFingerprints: candidates
+        candidateFingerprints: candidates,
+        hardwareSignature: hwSig,
       });
 
       if (result.success) {
@@ -503,24 +533,44 @@ export default function RegisterPage() {
           createdAt: new Date().toISOString()
         };
 
-        // Save student record in session for confirmation display
         if (typeof window !== 'undefined') {
           sessionStorage.setItem('radwan_registered_student', JSON.stringify(studentRecord));
         }
 
-        // Allow subsequent student registrations on the device (device serial tracked on server)
-        setDeviceStatus(null);
+        // Re-sync device status in background so going back enforces the pending lock cleanly
+        setDeviceStatus((prev) => ({
+          isBanned: false,
+          isRegistered: true,
+          canRegisterNew: false,
+          blockReason: 'PENDING_ACCOUNT_EXISTS',
+          hasApprovedAccounts: prev?.hasApprovedAccounts || false,
+          approvedAccounts: prev?.approvedAccounts || [],
+          pendingAccount: {
+            id: result.studentId || '',
+            fullName,
+            email: formData.email,
+            phone: formData.phone,
+            stage: formData.stage,
+            grade: Number(formData.grade),
+            educationType: formData.educationType,
+            status: 'pending_review',
+            createdAt: new Date().toISOString(),
+          },
+          student: studentRecord,
+        }));
+        setShowNewAccountForm(false);
 
-        // Move to final success step
         setStep(6);
       } else {
         setSubmitError(result.error || 'حدث خطأ أثناء إرسال طلبك، يرجى المحاولة لاحقاً');
-        if (result.error && (result.error.includes('محظور') || result.error.includes('حظر'))) {
+        if (
+          (result as any).isPendingDeviceLock ||
+          (result.error && (result.error.includes('محظور') || result.error.includes('حظر') || result.error.includes('قيد المراجعة')))
+        ) {
           await refreshDeviceStatus();
         }
       }
     } catch (err: any) {
-      // In case of server disconnect or failure, allow the student to retry
       setSubmitError(err.message || 'تعذر الاتصال بالخادم، لم يتم حفظ الطلب. يرجى التأكد من اتصال الإنترنت وإعادة المحاولة.');
     } finally {
       setIsSubmitting(false);
@@ -543,14 +593,30 @@ export default function RegisterPage() {
   }
 
   // ==========================================
-  // SCREEN: DEVICE IS BANNED BY PLATFORM ADMINISTRATION
+  // DEVICE GATE SCREENS:
+  // 1) Banned Device (Strict Block)
+  // 2) Pending Review Account Exists (Hard Lock until reviewed)
+  // 3) Approved Account(s) Found (Remind + Allow Login OR New Registration)
   // ==========================================
-  if (deviceStatus && deviceStatus.isBanned) {
-    const student = deviceStatus.student;
-    const isBanned = true;
-    const isActive = !isBanned && student?.status === 'active';
-    const isRejected = !isBanned && student?.status === 'rejected';
-    const isPending = !isBanned && !isActive && !isRejected;
+  const isDeviceGateVisible =
+    step !== 6 &&
+    deviceStatus &&
+    (deviceStatus.isBanned ||
+      deviceStatus.blockReason === 'PENDING_ACCOUNT_EXISTS' ||
+      (!deviceStatus.canRegisterNew) ||
+      (deviceStatus.hasApprovedAccounts && !showNewAccountForm));
+
+  if (isDeviceGateVisible && deviceStatus) {
+    const isBanned = Boolean(deviceStatus.isBanned);
+    const pendingStudent = deviceStatus.pendingAccount || null;
+    const isPendingLocked = !isBanned && (deviceStatus.blockReason === 'PENDING_ACCOUNT_EXISTS' || !deviceStatus.canRegisterNew);
+    const approvedAccounts = deviceStatus.approvedAccounts || [];
+    const primaryApproved = approvedAccounts[0] || null;
+    const isApprovedReminderOnly = !isBanned && !isPendingLocked && approvedAccounts.length > 0;
+    const otpTargetAccount =
+      pendingStudent?.needsOtpActivation
+        ? pendingStudent
+        : approvedAccounts.find((a) => a.needsOtpActivation) || null;
 
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col justify-between p-4 sm:p-8 text-white relative overflow-hidden">
@@ -559,19 +625,18 @@ export default function RegisterPage() {
         <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-violet-600/15 rounded-full blur-3xl pointer-events-none" />
 
         <div className="max-w-2xl w-full mx-auto my-auto relative z-10 py-8">
-          
-          {/* Header Card */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-xl relative overflow-hidden mb-6">
-            
-            {/* Top Status Badge */}
-            <div className="flex items-center justify-between gap-4 mb-6 border-b border-slate-800 pb-6">
+            {/* Top Status Header */}
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6 border-b border-slate-800 pb-6">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-emerald-500/5 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
                   <Smartphone className="w-6 h-6" />
                 </div>
                 <div>
                   <h1 className="text-xl font-black text-white">حالة تسجيل هذا الجهاز</h1>
-                  <p className="text-xs text-slate-400 font-bold mt-0.5">معرف الحماية: {fingerprint.substring(0, 16)}...</p>
+                  <p className="text-xs text-slate-400 font-bold mt-0.5">
+                    معرف الحماية: {fingerprint ? `${fingerprint.substring(0, 16)}...` : 'موثق'}
+                  </p>
                 </div>
               </div>
 
@@ -581,26 +646,20 @@ export default function RegisterPage() {
                 </span>
               )}
 
-              {isActive && (
-                <span className="px-3.5 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-xs font-black flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4" /> حساب معتمد ونشط
-                </span>
-              )}
-
-              {isPending && (
+              {isPendingLocked && (
                 <span className="px-3.5 py-1.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-black flex items-center gap-1.5">
                   <Clock className="w-4 h-4 animate-spin" /> قيد المراجعة والتدقيق
                 </span>
               )}
 
-              {isRejected && (
-                <span className="px-3.5 py-1.5 rounded-full bg-slate-500/20 border border-slate-500/40 text-slate-300 text-xs font-black flex items-center gap-1.5">
-                  <XCircle className="w-4 h-4" /> تم رفض الطلب
+              {isApprovedReminderOnly && (
+                <span className="px-3.5 py-1.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 text-xs font-black flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" /> تم التعرف على حساب معتمد
                 </span>
               )}
             </div>
 
-            {/* BANNED SCREEN */}
+            {/* 1. BANNED SCREEN */}
             {isBanned && (
               <div className="space-y-6">
                 <div className="p-5 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-right">
@@ -616,11 +675,11 @@ export default function RegisterPage() {
                   </p>
                 </div>
 
-                <div className="p-4 bg-slate-800/60 rounded-2xl border border-slate-700/60 text-sm font-bold text-slate-300 flex items-center justify-between">
+                <div className="p-4 bg-slate-800/60 rounded-2xl border border-slate-700/60 text-sm font-bold text-slate-300 flex flex-col sm:flex-row items-center justify-between gap-3">
                   <span>إذا كنت ترى أن هذا الإجراء تم بالخطأ، تواصل مع المعلم:</span>
-                  <a 
-                    href="https://wa.me/201552191172" 
-                    target="_blank" 
+                  <a
+                    href="https://wa.me/201552191172"
+                    target="_blank"
                     rel="noreferrer"
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 transition-colors"
                   >
@@ -630,54 +689,75 @@ export default function RegisterPage() {
               </div>
             )}
 
-            {/* PENDING REVIEW SCREEN */}
-            {isPending && (
+            {/* 2. PENDING REVIEW HARD LOCK SCREEN */}
+            {isPendingLocked && (
               <div className="space-y-6">
                 <div className="p-6 bg-gradient-to-br from-amber-500/10 to-orange-500/5 border border-amber-500/30 rounded-2xl text-right relative overflow-hidden">
                   <div className="flex items-center gap-3 text-amber-400 font-black text-lg mb-3">
                     <Clock className="w-6 h-6 shrink-0 text-amber-400" />
-                    <span>طلبك قيد المراجعة حالياً لدى مستر محمد رضوان</span>
+                    <span>يوجد طلب تسجيل قيد المراجعة حالياً على هذا الجهاز</span>
                   </div>
                   <p className="text-slate-300 text-sm font-bold leading-relaxed mb-4">
-                    تم رفع طلبك بنجاح للوحة تحكم المعلم. للمحافظة على أمان المنصة، يتم تدقيق بيانات كل طالب يدوياً خلال <span className="text-amber-400 font-black">48 ساعة</span> كحد أقصى.
+                    تم استلام طلب تسجيلك ورفعه إلى لوحة تحكم <span className="text-amber-400 font-black">مستر محمد رضوان</span> للمراجعة خلال <span className="text-amber-400 font-black">48 ساعة</span> كحد أقصى.
+                    <span className="block mt-2 text-amber-200">
+                      لا يمكن تسجيل حساب طالب جديد إضافي من نفس الجهاز قبل البت في هذا الطلب بالقبول أو الرفض من قِبل الإدارة.
+                    </span>
                   </p>
                   <div className="p-3 bg-slate-900/80 rounded-xl border border-amber-500/20 text-xs font-bold text-amber-300 flex items-center gap-2">
-                    <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
-                    <span>يقوم النظام بتوثيق بصمة وسيريال هذا الجهاز مع حسابك لضمان الشفافية ومتابعة الطلب.</span>
+                    <Radio className="w-4 h-4 text-emerald-400 animate-pulse shrink-0" />
+                    <span>بمجرد قبول الطلب، سيتم إرسال كود التفعيل إليك عبر رسالة SMS وتفعيل إمكانية الدخول من نفس الجهاز.</span>
                   </div>
                 </div>
 
-                {/* Display Registered Data Summary */}
-                {student && (
+                {pendingStudent && (
                   <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-5 space-y-3">
                     <h3 className="text-sm font-black text-slate-400 border-b border-slate-800 pb-2 flex items-center gap-2">
-                      <User className="w-4 h-4 text-emerald-400" /> بيانات الحساب المرفوعة للمراجعة:
+                      <User className="w-4 h-4 text-amber-400" /> بيانات الطلب المرفوع للمراجعة:
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-bold">
                       <div className="flex justify-between p-2.5 bg-slate-900/60 rounded-xl border border-slate-800">
                         <span className="text-slate-400">اسم الطالب:</span>
-                        <span className="text-white font-black">{student.fullName}</span>
+                        <span className="text-white font-black">{pendingStudent.fullName}</span>
                       </div>
                       <div className="flex justify-between p-2.5 bg-slate-900/60 rounded-xl border border-slate-800">
                         <span className="text-slate-400">رقم الهاتف:</span>
-                        <span className="text-white font-black" dir="ltr">{student.phone}</span>
+                        <span className="text-white font-black" dir="ltr">{pendingStudent.phone}</span>
                       </div>
                       <div className="flex justify-between p-2.5 bg-slate-900/60 rounded-xl border border-slate-800">
                         <span className="text-slate-400">المرحلة والصف:</span>
                         <span className="text-white font-black">
-                          {student.stage === 'high' ? 'ثانوية' : 'إعدادية'} - الصف {student.grade}
+                          {pendingStudent.stage === 'high' ? 'ثانوية' : 'إعدادية'} - الصف {pendingStudent.grade}
                         </span>
                       </div>
                       <div className="flex justify-between p-2.5 bg-slate-900/60 rounded-xl border border-slate-800">
                         <span className="text-slate-400">البريد الإلكتروني:</span>
-                        <span className="text-white font-black truncate max-w-[140px]" dir="ltr">{student.email}</span>
+                        <span className="text-white font-black truncate max-w-[140px]" dir="ltr">{pendingStudent.email}</span>
                       </div>
                     </div>
                   </div>
                 )}
 
-                {/* Actions */}
-                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                {approvedAccounts.length > 0 && (
+                  <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 text-right">
+                    <div>
+                      <p className="text-xs font-black text-emerald-300">
+                        يمتلك هذا الجهاز أيضاً حساباً معتمداً مسبقاً ({approvedAccounts[0].fullName})
+                      </p>
+                      <p className="text-[11px] text-slate-300 font-bold mt-0.5">
+                        يمكنك الدخول بحسابك المعتمد الآن لحين انتهاء مراجعة الحساب الإضافي.
+                      </p>
+                    </div>
+                    <Link
+                      href="/login"
+                      className="w-full sm:w-auto px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs transition-all flex items-center justify-center gap-1.5 shrink-0"
+                    >
+                      <span>دخول الحساب المعتمد</span>
+                      <ArrowLeft className="w-4 h-4" />
+                    </Link>
+                  </div>
+                )}
+
+                <div className="flex flex-col sm:flex-row gap-3 pt-1">
                   <button
                     onClick={refreshDeviceStatus}
                     disabled={isCheckingDevice}
@@ -697,145 +777,126 @@ export default function RegisterPage() {
                     <span>تواصل مع المعلم واتساب</span>
                   </a>
                 </div>
-
-                <div className="pt-3 border-t border-slate-800 text-center">
-                  <p className="text-xs text-slate-400">
-                    تطبق المنصة بروتوكولات التوثيق الرقمي لربط الجهاز بالحساب لضمان أمان الامتحانات والبيانات.
-                  </p>
-                </div>
               </div>
             )}
 
-            {/* ACTIVE SCREEN - OTP or DIRECT LOGIN */}
-            {isActive && (
+            {/* 3. APPROVED ACCOUNT(S) RECOGNITION SCREEN */}
+            {isApprovedReminderOnly && (
               <div className="space-y-6">
                 <div className="p-6 bg-gradient-to-br from-emerald-500/20 to-teal-500/10 border border-emerald-500/40 rounded-2xl text-right">
                   <div className="flex items-center gap-3 text-emerald-400 font-black text-lg mb-2">
                     <CheckCircle2 className="w-7 h-7 shrink-0 text-emerald-400" />
-                    <span>هذا الجهاز مسجل به حساب طالب معتمد ومفعل</span>
+                    <span>
+                      {approvedAccounts.length > 1
+                        ? `تم التعرف على ${approvedAccounts.length} حسابات معتمدة مسجلة بهذا الجهاز`
+                        : 'هذا الجهاز مسجل به حساب طالب معتمد بالفعل'}
+                    </span>
                   </div>
-                  <p className="text-slate-200 text-sm font-bold leading-relaxed mb-3">
-                    يوجد حساب معتمد ومفعل مرتبط بهذا الجهاز باسم <span className="text-emerald-400 font-black">{student?.fullName || 'طالب المنصة'}</span>.
+                  <p className="text-slate-200 text-sm font-bold leading-relaxed mb-2">
+                    أهلاً بك! تشير بصمة جهازك إلى وجود {approvedAccounts.length > 1 ? 'حسابات مفعلة ومعتمدة' : 'حساب مفعل ومعتمد'} مسبقاً باسم{' '}
+                    <span className="text-emerald-400 font-black">{primaryApproved?.fullName || 'طالب المنصة'}</span>.
                   </p>
-                  <p className="text-slate-300 text-xs font-semibold">
-                    إذا كنت صاحب هذا الحساب يمكنك تسجيل الدخول فوراً، أو إكمال تسجيل حساب جديد حيث يتم ربط سجل الجهاز بملفك تلقائياً لدى المعلم.
+                  <p className="text-slate-300 text-xs font-semibold leading-relaxed">
+                    يمكنك تسجيل الدخول مباشرة بحسابك المعتمد دون الحاجة لإعادة التسجيل، أو بدء تسجيل حساب جديد (مثلاً لأخ أو أخت على نفس الجهاز) مع خضوع الطلب الجديد لمراجعة الإدارة.
                   </p>
                 </div>
 
-                {/* If student has an OTP that needs verification */}
-                {student?.whatsapp_otp && !student?.otp_verified ? (
-                  <div className="p-6 bg-slate-950/80 border border-violet-500/40 rounded-2xl text-center space-y-4">
-                    <div className="w-12 h-12 bg-violet-500/20 text-violet-400 rounded-2xl flex items-center justify-center mx-auto">
-                      <KeyRound className="w-6 h-6" />
-                    </div>
-                    <div>
-                      <h3 className="text-base font-black text-white">أدخل رمز التفعيل السري (OTP)</h3>
-                      <p className="text-xs text-slate-400 font-bold mt-1">
-                        تم إرسال رمز تفعيل مكون من 4 أرقام لهاتفك. أدخله هنا لتفعيل هذا الجهاز والبدء فوراً.
-                      </p>
-                    </div>
-
-                    <div className="max-w-xs mx-auto space-y-3">
-                      <input 
-                        type="text"
-                        maxLength={4}
-                        dir="ltr"
-                        value={otpInput}
-                        onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ''))}
-                        placeholder="----"
-                        className="w-full text-center py-3.5 bg-slate-900 border-2 border-violet-500/50 rounded-2xl text-3xl font-black tracking-[0.4em] text-white focus:outline-none focus:border-violet-400 transition-colors"
-                      />
-                      {otpError && <p className="text-xs text-rose-400 font-black">{otpError}</p>}
-                      {otpSuccess && <p className="text-xs text-emerald-400 font-black">تم تفعيل حسابك بنجاح! جاري تحويلك...</p>}
-
-                      <button
-                        onClick={handleVerifyOtpFromScreen}
-                        disabled={isVerifyingOtp || otpSuccess}
-                        className="w-full py-3.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white rounded-2xl font-black text-sm transition-all shadow-lg shadow-violet-600/30 flex items-center justify-center gap-2"
-                      >
-                        {isVerifyingOtp ? (
-                          <>
-                            <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                            <span>جاري التحقق...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Check className="w-4 h-4" />
-                            <span>تأكيد وتفعيل الحساب</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="pt-2">
-                    <Link
-                      href="/login"
-                      className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-base transition-all flex items-center justify-center gap-2 shadow-xl shadow-emerald-600/25 hover:scale-[1.01]"
+                {/* Approved accounts list */}
+                <div className="space-y-2.5">
+                  {approvedAccounts.map((acc) => (
+                    <div
+                      key={acc.id}
+                      className="p-4 rounded-2xl bg-slate-950/70 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-right"
                     >
-                      <span>الانتقال لتسجيل الدخول للحساب المعتمد</span>
-                      <ArrowLeft className="w-5 h-5" />
-                    </Link>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* REJECTED SCREEN */}
-            {isRejected && (
-              <div className="space-y-6">
-                <div className="p-6 bg-slate-800/80 border border-slate-700 rounded-2xl text-right">
-                  <div className="flex items-center gap-3 text-rose-400 font-black text-lg mb-2">
-                    <XCircle className="w-6 h-6 shrink-0" />
-                    <span>عذراً، تم رفض طلب التسجيل</span>
-                  </div>
-                  <p className="text-slate-300 text-sm font-bold leading-relaxed mb-4">
-                    تم رفض الطلب نظراً لعدم استيفاء البيانات المطلوبة أو عدم تطابق الصورة الشخصية.
-                    {deviceStatus.reason && (
-                      <span className="block mt-2 text-amber-300 font-black">ملاحظة المعلم: {deviceStatus.reason}</span>
-                    )}
-                  </p>
+                      <div>
+                        <p className="text-sm font-black text-white">{acc.fullName}</p>
+                        <p className="text-xs text-slate-400 font-bold mt-0.5" dir="ltr">
+                          {acc.phone} • {acc.email}
+                        </p>
+                      </div>
+                      <span className="self-start sm:self-center px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-black">
+                        {acc.needsOtpActivation ? 'بانتظار إدخال كود SMS' : 'حساب معتمد ونشط'}
+                      </span>
+                    </div>
+                  ))}
                 </div>
 
-                <div className="space-y-3">
+                {/* Primary & Secondary Action Buttons */}
+                <div className="space-y-3 pt-1">
+                  <Link
+                    href="/login"
+                    className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-base transition-all flex items-center justify-center gap-2 shadow-xl shadow-emerald-600/25 hover:scale-[1.01]"
+                  >
+                    <span>تسجيل الدخول بالحساب المعتمد</span>
+                    <ArrowLeft className="w-5 h-5" />
+                  </Link>
+
                   <button
-                    onClick={async () => {
-                      await clearDeviceLock();
-                      setDeviceStatus(null);
+                    type="button"
+                    onClick={() => {
+                      setShowNewAccountForm(true);
                       setStep(0);
                     }}
-                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-[0.99]"
+                    className="w-full py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 border border-slate-700"
                   >
-                    <RotateCcw className="w-4 h-4" />
-                    <span>إعادة تقديم طلب تسجيل جديد بالبيانات الصحيحة</span>
+                    <User className="w-4 h-4 text-sky-400" />
+                    <span>تسجيل حساب طالب جديد على هذا الجهاز</span>
                   </button>
-
-                  <div className="flex gap-3">
-                    <a
-                      href="https://wa.me/201552191172"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-2 border border-slate-700"
-                    >
-                      <Phone className="w-4 h-4 text-emerald-400" />
-                      <span>تواصل مع المعلم لمعرفة السبب</span>
-                    </a>
-                    <Link
-                      href="/"
-                      className="px-6 py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-black text-sm transition-all flex items-center justify-center border border-slate-700"
-                    >
-                      الرئيسية
-                    </Link>
-                  </div>
                 </div>
               </div>
             )}
 
+            {/* OTP Verification Box (shown when pending/approved account requires SMS OTP verification) */}
+            {!isBanned && otpTargetAccount && (
+              <div className="mt-6 p-6 bg-slate-950/80 border border-violet-500/40 rounded-2xl text-center space-y-4">
+                <div className="w-12 h-12 bg-violet-500/20 text-violet-400 rounded-2xl flex items-center justify-center mx-auto">
+                  <KeyRound className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white">أدخل رمز التفعيل المرسل عبر SMS</h3>
+                  <p className="text-xs text-slate-400 font-bold mt-1">
+                    للحساب: <span className="text-violet-300">{otpTargetAccount.fullName}</span> — أدخل الرمز المكون من 4 أرقام لتفعيل الدخول.
+                  </p>
+                </div>
+
+                <div className="max-w-xs mx-auto space-y-3">
+                  <input
+                    type="text"
+                    maxLength={4}
+                    dir="ltr"
+                    value={otpInput}
+                    onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="----"
+                    className="w-full text-center py-3.5 bg-slate-900 border-2 border-violet-500/50 rounded-2xl text-3xl font-black tracking-[0.4em] text-white focus:outline-none focus:border-violet-400 transition-colors"
+                  />
+                  {otpError && <p className="text-xs text-rose-400 font-black">{otpError}</p>}
+                  {otpSuccess && <p className="text-xs text-emerald-400 font-black">تم تفعيل حسابك بنجاح! جاري تحويلك لتسجيل الدخول...</p>}
+
+                  <button
+                    onClick={() => handleVerifyOtpFromScreen(otpTargetAccount.id)}
+                    disabled={isVerifyingOtp || otpSuccess}
+                    className="w-full py-3.5 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white rounded-2xl font-black text-sm transition-all shadow-lg shadow-violet-600/30 flex items-center justify-center gap-2"
+                  >
+                    {isVerifyingOtp ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                        <span>جاري التحقق...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>تأكيد وتفعيل الحساب</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Quick Return to Home */}
           <div className="text-center">
-            <Link 
+            <Link
               href="/"
               className="inline-flex items-center gap-2 px-6 py-2.5 bg-slate-900/80 hover:bg-slate-800 text-slate-300 rounded-full text-xs font-bold border border-slate-800 transition-colors"
             >
@@ -843,14 +904,12 @@ export default function RegisterPage() {
               <span>العودة إلى الصفحة الرئيسية</span>
             </Link>
           </div>
-
         </div>
 
         {/* Footer Signature */}
         <div className="text-center py-4 text-xs font-black text-slate-500 tracking-wider">
           Built With Developer & Designer NOUR M. EL-SAIED 💚 💚
         </div>
-
       </div>
     );
   }
@@ -974,8 +1033,8 @@ export default function RegisterPage() {
             </div>
           )}
 
-          {/* Informational banner if an account is already registered on this device */}
-          {existingDeviceStudent && step < 5 && (
+          {/* Informational reminder banner when device already has approved account(s) */}
+          {deviceStatus?.hasApprovedAccounts && deviceStatus.approvedAccounts && deviceStatus.approvedAccounts.length > 0 && step < 5 && (
             <div className="mb-6 p-4 rounded-2xl bg-sky-950/40 border border-sky-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-right">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
@@ -983,10 +1042,10 @@ export default function RegisterPage() {
                 </div>
                 <div>
                   <h4 className="text-xs font-black text-white">
-                    تم رصد حساب مسجل من هذا الجهاز: <span className="text-sky-300 font-bold">{existingDeviceStudent.fullName}</span>
+                    جهازك مسجل بحساب معتمد مسبقاً: <span className="text-sky-300 font-bold">{deviceStatus.approvedAccounts[0].fullName}</span>
                   </h4>
                   <p className="text-[11px] text-slate-300 font-bold mt-0.5">
-                    إذا كان هذا حسابك يمكنك تسجيل الدخول به مباشرة، أو متابعة تسجيل حساب طالب جديد بالأسفل.
+                    يمكنك تسجيل الدخول بحسابك السابق مباشرة، أو استكمال تسجيل حساب جديد يخضع لمراجعة الإدارة.
                   </p>
                 </div>
               </div>
@@ -1494,7 +1553,7 @@ export default function RegisterPage() {
                 <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 flex gap-3 text-amber-300 text-xs font-bold mb-6 text-right">
                   <Info className="w-5 h-5 shrink-0 text-amber-400" />
                   <p className="leading-relaxed">
-                    بمجرد الضغط على تأكيد، يتم حظر إنشاء أي حسابات أخرى من هذا الجهاز نهائياً، ويتم رفع الطلب لمستر محمد رضوان للمراجعة والاعتماد.
+                    عند تأكيد الطلب يتم توثيق بصمة هذا الجهاز مع الحساب ورفعه لإدارة المنصة للمراجعة (ولا يمكن إرسال طلب تسجيل جديد آخر من نفس الجهاز حتى يتم البت في هذا الطلب).
                   </p>
                 </div>
 

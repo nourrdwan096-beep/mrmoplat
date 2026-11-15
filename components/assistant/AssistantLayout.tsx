@@ -19,7 +19,8 @@ import {
   CheckCircle2,
   Lock
 } from 'lucide-react';
-import { fetchAssistants, AssistantData } from '@/lib/teacherService';
+import { AssistantData } from '@/lib/teacherService';
+import { fetchMyAssistantProfileServerAction } from '@/app/actions/assistantActions';
 import ThemeToggle from '@/components/ThemeToggle';
 import NotificationBell from '@/components/notifications/NotificationBell';
 
@@ -41,10 +42,9 @@ export function AssistantLayout({ children }: { children: React.ReactNode }) {
 
       if (currentRole === 'assistant' && currentUser?.id) {
         try {
-          const all = await fetchAssistants();
-          const found = all.find((a) => a.id === currentUser.id || a.email === currentUser.email);
-          if (found) {
-            setAssistantData(found);
+          const res = await fetchMyAssistantProfileServerAction();
+          if (res.success && res.data) {
+            setAssistantData(res.data as AssistantData);
           }
         } catch (err) {
           console.error(err);

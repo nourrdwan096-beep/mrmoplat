@@ -2,17 +2,81 @@
 
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import { normalizeEasternArabicDigits, cleanEgyptianPhone } from '@/lib/utils';
+import {
+  getServerSession,
+  requireStaffSession,
+  requireStudentOrStaffSession,
+  setServerSessionCookie,
+  clearServerSessionCookie,
+  verifyTeacherCredentialsServer,
+  verifyMasterKeyServer,
+  setMasterUnlockCookie,
+  isMasterUnlockVerified,
+  getTeacherProfilePayload,
+  isTeacherEmail,
+} from '@/lib/serverAuth';
+
+export async function verifyMasterKeyAction(secretKey: string) {
+  const session = await requireStaffSession();
+  if (!session) {
+    return { success: false, message: 'غير مصرح. يرجى تسجيل الدخول كمعلم أو مساعد.' };
+  }
+  const isValid = verifyMasterKeyServer(secretKey);
+  if (!isValid) {
+    return { success: false, message: 'كلمة السر الرئيسية غير صحيحة! يرجى إدخال المفتاح السري المعتمد.' };
+  }
+  if (session.isTeacher) {
+    await setMasterUnlockCookie();
+  }
+  return { success: true };
+}
+
+export async function logoutServerAction() {
+  await clearServerSessionCookie();
+  return { success: true };
+}
+
+export async function getVerifiedSessionAction() {
+  const session = await getServerSession();
+  if (!session) {
+    return { authenticated: false, user: null };
+  }
+  return {
+    authenticated: true,
+    user: {
+      id: session.id,
+      role: session.role,
+      email: session.email,
+      fullName: session.fullName,
+      status: session.status,
+    },
+  };
+}
+
+function toSafeDeviceAccount(p: any) {
+  return {
+    id: p.id,
+    fullName: p.full_name,
+    email: p.email,
+    phone: p.phone,
+    stage: p.stage,
+    grade: p.grade,
+    educationType: p.education_type || 'general',
+    status: p.status as 'pending_review' | 'active' | 'rejected' | 'banned',
+    createdAt: p.created_at,
+    needsOtpActivation: Boolean(p.whatsapp_otp && !p.otp_verified),
+  };
+}
 
 export async function checkDeviceStatusAction(
   deviceFingerprint: string, 
-  email?: string, 
-  phone?: string,
+  _email?: string, 
+  _phone?: string,
   candidateFingerprints: string[] = [],
-  studentId?: string
+  _studentId?: string
 ) {
   try {
     const cleanFp = (deviceFingerprint || '').trim();
-    const cleanStudentId = (studentId || '').trim();
 
     // Consolidate all fingerprint candidates into a unique array, strictly filtering out legacy generic screen dimensions
     const allFps = Array.from(
@@ -34,6 +98,11 @@ export async function checkDeviceStatusAction(
         return {
           isBanned: true,
           isRegistered: false,
+          canRegisterNew: false,
+          blockReason: 'DEVICE_BANNED' as const,
+          hasApprovedAccounts: false,
+          approvedAccounts: [],
+          pendingAccount: null,
           reason: bannedList[0].reason || 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة',
           student: null,
           siblingAccounts: [],
@@ -41,101 +110,118 @@ export async function checkDeviceStatusAction(
       }
     }
 
-    // 2. Query any existing students on this device to check for bans and track device serial chain
-    let matchedStudent: any = null;
-    let siblingAccounts: any[] = [];
+    // 2. Query ALL student profiles linked to this physical device via primary_device_fingerprint OR student_devices
+    const matchedProfileMap = new Map<string, any>();
 
     if (allFps.length > 0) {
       const { data: profilesByFp } = await supabaseAdmin
         .from('profiles')
-        .select('id, full_name, email, phone, stage, grade, education_type, status, ban_reason, created_at, primary_device_fingerprint')
+        .select('id, full_name, email, phone, stage, grade, education_type, status, ban_reason, whatsapp_otp, otp_verified, created_at, primary_device_fingerprint')
         .eq('role', 'student')
         .neq('status', 'rejected')
         .in('primary_device_fingerprint', allFps)
         .order('created_at', { ascending: false });
 
-      if (profilesByFp && profilesByFp.length > 0) {
-        // If any account on this device is banned, strictly enforce device ban
-        const bannedProfile = profilesByFp.find(p => p.status === 'banned');
-        if (bannedProfile) {
-          return {
-            isBanned: true,
-            isRegistered: false,
-            reason: bannedProfile.ban_reason || 'تم حظر هذا الجهاز نظراً لوجود حساب محظور مسجل به.',
-            student: null,
-            siblingAccounts: profilesByFp,
-          };
-        }
-
-        matchedStudent = profilesByFp[0];
-        siblingAccounts = profilesByFp;
+      if (profilesByFp) {
+        profilesByFp.forEach((p: any) => matchedProfileMap.set(p.id, p));
       }
 
-      // Check student_devices table if no profiles matched
-      if (!matchedStudent) {
-        const { data: devMatches } = await supabaseAdmin
-          .from('student_devices')
-          .select('student_id')
-          .in('device_fingerprint', allFps)
-          .limit(10);
+      const { data: devMatches } = await supabaseAdmin
+        .from('student_devices')
+        .select('student_id')
+        .in('device_fingerprint', allFps)
+        .limit(20);
 
-        if (devMatches && devMatches.length > 0) {
-          const sIds = devMatches.map((d: any) => d.student_id);
+      if (devMatches && devMatches.length > 0) {
+        const sIds = Array.from(new Set(devMatches.map((d: any) => d.student_id).filter(Boolean)));
+        if (sIds.length > 0) {
           const { data: ps } = await supabaseAdmin
             .from('profiles')
-            .select('id, full_name, email, phone, stage, grade, education_type, status, ban_reason, created_at, primary_device_fingerprint')
+            .select('id, full_name, email, phone, stage, grade, education_type, status, ban_reason, whatsapp_otp, otp_verified, created_at, primary_device_fingerprint')
             .in('id', sIds)
             .eq('role', 'student')
-            .neq('status', 'rejected');
+            .neq('status', 'rejected')
+            .order('created_at', { ascending: false });
 
-          if (ps && ps.length > 0) {
-            const bannedP = ps.find(p => p.status === 'banned');
-            if (bannedP) {
-              return {
-                isBanned: true,
-                isRegistered: false,
-                reason: bannedP.ban_reason || 'تم حظر هذا الجهاز نظراً لوجود حساب محظور مسجل به.',
-                student: null,
-                siblingAccounts: ps,
-              };
-            }
-            matchedStudent = ps[0];
-            siblingAccounts = ps;
+          if (ps) {
+            ps.forEach((p: any) => matchedProfileMap.set(p.id, p));
           }
         }
       }
     }
 
-    // Unbanned device: Never block registration! Allow new accounts while tracking device chain
-    return { 
-      isBanned: false, 
-      isRegistered: false, 
-      student: matchedStudent ? {
-        id: matchedStudent.id,
-        fullName: matchedStudent.full_name,
-        email: matchedStudent.email,
-        phone: matchedStudent.phone,
-        stage: matchedStudent.stage,
-        grade: matchedStudent.grade,
-        educationType: matchedStudent.education_type || 'general',
-        status: matchedStudent.status,
-      } : null,
-      siblingAccounts,
+    const allMatched = Array.from(matchedProfileMap.values()).sort(
+      (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    );
+
+    // 3. Enforce ban if any linked account is banned
+    const bannedProfile = allMatched.find(p => p.status === 'banned');
+    if (bannedProfile) {
+      return {
+        isBanned: true,
+        isRegistered: false,
+        canRegisterNew: false,
+        blockReason: 'DEVICE_BANNED' as const,
+        hasApprovedAccounts: false,
+        approvedAccounts: [],
+        pendingAccount: null,
+        reason: bannedProfile.ban_reason || 'تم حظر هذا الجهاز نظراً لوجود حساب محظور مسجل به.',
+        student: null,
+        siblingAccounts: allMatched.map(toSafeDeviceAccount),
+      };
+    }
+
+    // 4. Separate pending_review vs approved (active) accounts
+    const pendingAccounts = allMatched.filter(p => p.status === 'pending_review');
+    const approvedAccounts = allMatched.filter(p => p.status === 'active');
+
+    const safePending = pendingAccounts.map(toSafeDeviceAccount);
+    const safeApproved = approvedAccounts.map(toSafeDeviceAccount);
+
+    // Hard block rule: If ANY linked account is still pending_review, student CANNOT submit another account
+    const hasPending = safePending.length > 0;
+    const primaryDisplayStudent = safePending[0] || safeApproved[0] || null;
+
+    return {
+      isBanned: false,
+      isRegistered: safeApproved.length > 0 || safePending.length > 0,
+      canRegisterNew: !hasPending,
+      blockReason: hasPending ? ('PENDING_ACCOUNT_EXISTS' as const) : null,
+      hasApprovedAccounts: safeApproved.length > 0,
+      approvedAccounts: safeApproved,
+      pendingAccount: safePending[0] || null,
+      student: primaryDisplayStudent,
+      siblingAccounts: [...safePending, ...safeApproved],
       deviceFingerprint: cleanFp,
     };
   } catch (err) {
     console.error('Exception checking device status:', err);
-    return { isBanned: false, isRegistered: false, student: null, siblingAccounts: [] };
+    return {
+      isBanned: false,
+      isRegistered: false,
+      canRegisterNew: true,
+      blockReason: null,
+      hasApprovedAccounts: false,
+      approvedAccounts: [],
+      pendingAccount: null,
+      student: null,
+      siblingAccounts: [],
+    };
   }
 }
 
 export async function fetchStudentsAction(masterKey?: string) {
   try {
+    const session = await requireStaffSession();
+    if (!session) {
+      return [];
+    }
+
     const cleanKey = (masterKey || '').trim();
-    const isMasterAuthorized = 
-      cleanKey === 'hfhrefjker4390430458&-cmdsfo3-@iofm3omfoew' ||
-      cleanKey === 'sse-000-#######-****&mr+pp' ||
-      cleanKey === 'sse-000-#######-****&mr';
+    const hasCookieUnlock = await isMasterUnlockVerified();
+    const canRevealPasswords =
+      (session.isTeacher && (hasCookieUnlock || (cleanKey && verifyMasterKeyServer(cleanKey)))) ||
+      (!session.isTeacher && session.assistantPermissions?.can_view_student_passwords && cleanKey && verifyMasterKeyServer(cleanKey));
 
     const { data, error } = await supabaseAdmin
       .from('profiles')
@@ -179,8 +265,7 @@ export async function fetchStudentsAction(masterKey?: string) {
         grade: d.grade,
         educationType: d.education_type,
         status: d.status,
-        // SECURITY HARDENING: Only send decrypted vault if master key was validated on server
-        passwordVault: isMasterAuthorized ? (d.encrypted_password_vault || '••••••') : '••••••••',
+        passwordVault: canRevealPasswords ? (d.encrypted_password_vault || '••••••') : '••••••••',
         deviceFingerprint: d.primary_device_fingerprint,
         createdAt: d.created_at,
         avatarUrl: d.avatar_url,
@@ -200,14 +285,18 @@ export async function fetchStudentsAction(masterKey?: string) {
  */
 export async function revealStudentPasswordsAction(masterKey: string) {
   try {
-    const cleanKey = (masterKey || '').trim();
-    const isKeyValid = 
-      cleanKey === 'hfhrefjker4390430458&-cmdsfo3-@iofm3omfoew' ||
-      cleanKey === 'sse-000-#######-****&mr+pp' ||
-      cleanKey === 'sse-000-#######-****&mr';
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_view_student_passwords)) {
+      return { success: false, message: 'غير مصرح لك بكشف كلمات مرور الطلاب.' };
+    }
 
+    const isKeyValid = verifyMasterKeyServer(masterKey);
     if (!isKeyValid) {
       return { success: false, message: 'المفتاح السري غير صحيح. غير مصرح لك بكشف كلمات مرور الطلاب.' };
+    }
+
+    if (session.isTeacher) {
+      await setMasterUnlockCookie();
     }
 
     const { data, error } = await supabaseAdmin
@@ -237,6 +326,11 @@ export async function updateStudentStatusAction(
   banReason?: string
 ) {
   try {
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_approve_registrations && !session.assistantPermissions?.can_manage_students)) {
+      return false;
+    }
+
     const updateData: any = { status };
     if (otp) {
       updateData.whatsapp_otp = otp;
@@ -348,6 +442,11 @@ export async function updateStudentStatusAction(
 
 export async function deleteStudentAction(studentId: string) {
   try {
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_manage_students)) {
+      return { success: false, message: 'غير مصرح لك بحذف الطلاب.' };
+    }
+
     const cleanId = (studentId || '').trim();
     if (!cleanId) return { success: false, message: 'معرف الطالب غير صالح' };
 
@@ -433,6 +532,11 @@ export async function deleteStudentAction(studentId: string) {
  */
 export async function resetStudentDeviceLockAction(studentId: string) {
   try {
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_manage_students)) {
+      return { success: false, message: 'غير مصرح لك بفك قيد أجهزة الطلاب.' };
+    }
+
     const cleanId = (studentId || '').trim();
     if (!cleanId) return { success: false, message: 'معرف الطالب غير صالح' };
 
@@ -519,6 +623,11 @@ export async function createStudentByTeacherAction(data: {
   parentPhone?: string;
 }) {
   try {
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_manage_students)) {
+      return { success: false, message: 'غير مصرح لك بإنشاء حسابات الطلاب.' };
+    }
+
     const cleanEmail = (data.email || '').trim().toLowerCase();
     const cleanPhone = (data.phone || '').trim();
     const cleanPass = (data.password || '').trim();
@@ -674,18 +783,9 @@ export async function checkStudentContactAction(
       student: {
         id: p.id,
         fullName: p.full_name,
-        email: p.email,
-        phone: p.phone,
-        parentPhone: p.parent_phone,
-        stage: p.stage,
-        grade: p.grade,
-        educationType: p.education_type,
         status: p.status,
-        avatarUrl: p.avatar_url,
-        whatsapp_otp: p.whatsapp_otp,
-        otp_verified: p.otp_verified,
-        createdAt: p.created_at,
-        primaryDeviceFingerprint: p.primary_device_fingerprint || cleanFp,
+        needsOtpActivation: Boolean(p.whatsapp_otp && !p.otp_verified),
+        otp_verified: Boolean(p.otp_verified),
       }
     };
   } catch (err) {
@@ -872,6 +972,26 @@ export async function loginAction(
       return { success: false, message: 'الرجاء إدخال البريد الإلكتروني أو رقم الهاتف وكلمة المرور' };
     }
 
+    // 0. Server-Authoritative Super Admin (Teacher) Verification
+    if (isTeacherEmail(cleanEmail)) {
+      if (verifyTeacherCredentialsServer(cleanEmail, cleanPass)) {
+        const teacherProfile = getTeacherProfilePayload();
+        await setServerSessionCookie({
+          id: teacherProfile.id,
+          role: 'teacher',
+          email: teacherProfile.email,
+          fullName: teacherProfile.fullName,
+          status: 'active',
+        });
+        return {
+          success: true,
+          user: teacherProfile,
+          message: 'مرحباً بك يا مستر محمد رضوان، تم تسجيل الدخول بنجاح إلى لوحة الإدارة.',
+        };
+      }
+      return { success: false, message: 'كلمة المرور غير صحيحة لحساب المعلم.' };
+    }
+
     // Lookup user: support email (case-insensitive) or Egyptian phone number
     let user: any = null;
 
@@ -1012,33 +1132,51 @@ export async function loginAction(
             canSendMessages: true,
           };
 
+      const assistantUser = {
+        id: user.id,
+        fullName: user.full_name,
+        email: user.email,
+        phone: user.phone || '',
+        role: 'assistant' as const,
+        status: 'active' as const,
+        assistantRoleTitle: user.carrier || 'مساعد إداري وأكاديمي',
+        permissions,
+      };
+
+      await setServerSessionCookie({
+        id: assistantUser.id,
+        role: 'assistant',
+        email: assistantUser.email,
+        fullName: assistantUser.fullName,
+        status: 'active',
+      });
+
       return {
         success: true,
-        user: {
-          id: user.id,
-          fullName: user.full_name,
-          email: user.email,
-          phone: user.phone || '',
-          role: 'assistant',
-          status: 'active',
-          assistantRoleTitle: user.carrier || 'مساعد إداري وأكاديمي',
-          permissions,
-        }
+        user: assistantUser,
       };
     }
 
-    // Teacher / Super Admin check
+    // Teacher / Super Admin check in profiles table
     if (user.role === 'teacher' || user.role === 'super_admin') {
+      const teacherUser = {
+        id: user.id,
+        fullName: user.full_name,
+        email: user.email,
+        phone: user.phone || '',
+        role: 'teacher' as const,
+        status: 'active' as const,
+      };
+      await setServerSessionCookie({
+        id: teacherUser.id,
+        role: 'teacher',
+        email: teacherUser.email,
+        fullName: teacherUser.fullName,
+        status: 'active',
+      });
       return {
         success: true,
-        user: {
-          id: user.id,
-          fullName: user.full_name,
-          email: user.email,
-          phone: user.phone || '',
-          role: 'teacher',
-          status: 'active',
-        }
+        user: teacherUser,
       };
     }
 
@@ -1102,7 +1240,15 @@ export async function loginAction(
         };
       }
       
-      // Success
+      // Success — mint HttpOnly signed session cookie
+      await setServerSessionCookie({
+        id: user.id,
+        role: 'student',
+        email: user.email || '',
+        fullName: user.full_name,
+        status: user.status,
+      });
+
       return {
         success: true,
         user: {
@@ -1139,12 +1285,24 @@ export async function verifyOtpAction(studentId: string, otp: string) {
       
     if (error || !user) return { success: false, message: 'طالب غير موجود' };
     
-    if (user.whatsapp_otp === otp.trim()) {
-      // Mark as verified
+    if (user.status === 'banned' || user.status === 'rejected') {
+      return { success: false, message: 'هذا الحساب موقوف أو مرفوض من قبل الإدارة.' };
+    }
+
+    if (user.whatsapp_otp && user.whatsapp_otp === normalizeEasternArabicDigits(otp).trim()) {
+      // Mark as verified and clear OTP secret
       await supabaseAdmin
         .from('profiles')
-        .update({ otp_verified: true })
+        .update({ otp_verified: true, status: 'active' })
         .eq('id', studentId);
+
+      await setServerSessionCookie({
+        id: user.id,
+        role: 'student',
+        email: user.email || '',
+        fullName: user.full_name,
+        status: 'active',
+      });
         
       return { 
         success: true,
@@ -1166,7 +1324,7 @@ export async function verifyOtpAction(studentId: string, otp: string) {
     }
     
     return { success: false, message: 'رمز التفعيل غير صحيح، يرجى التأكد من الرمز وإعادة المحاولة' };
-  } catch (err) {
+  } catch {
     return { success: false, message: 'حدث خطأ أثناء التحقق' };
   }
 }
@@ -1233,7 +1391,8 @@ export async function registerStudentAction(studentData: any) {
         };
       }
 
-      // Check existing sibling accounts on this hardware fingerprint to link device chain
+      // Check existing sibling accounts on this hardware fingerprint (via profiles AND student_devices)
+      const siblingMap = new Map<string, any>();
       const { data: foundSiblings } = await supabaseAdmin
         .from('profiles')
         .select('id, full_name, phone, status')
@@ -1242,13 +1401,45 @@ export async function registerStudentAction(studentData: any) {
         .in('primary_device_fingerprint', allFps);
 
       if (foundSiblings) {
-        siblingProfiles = foundSiblings;
+        foundSiblings.forEach((s: any) => siblingMap.set(s.id, s));
       }
+
+      const { data: devSiblings } = await supabaseAdmin
+        .from('student_devices')
+        .select('student_id')
+        .in('device_fingerprint', allFps);
+
+      if (devSiblings && devSiblings.length > 0) {
+        const sIds = Array.from(new Set(devSiblings.map((d: any) => d.student_id).filter(Boolean)));
+        if (sIds.length > 0) {
+          const { data: extraSibs } = await supabaseAdmin
+            .from('profiles')
+            .select('id, full_name, phone, status')
+            .eq('role', 'student')
+            .neq('status', 'rejected')
+            .in('id', sIds);
+          if (extraSibs) {
+            extraSibs.forEach((s: any) => siblingMap.set(s.id, s));
+          }
+        }
+      }
+
+      siblingProfiles = Array.from(siblingMap.values());
 
       if (siblingProfiles.some(s => s.status === 'banned')) {
         return {
           success: false,
           error: 'عذراً، هذا الجهاز محظور نهائياً من التسجيل في المنصة بقرار من إدارة المنصة.'
+        };
+      }
+
+      // Hard Multi-Account Pending Guard: Block additional registrations while ANY linked account is still pending_review
+      const existingPending = siblingProfiles.find(s => s.status === 'pending_review');
+      if (existingPending) {
+        return {
+          success: false,
+          isPendingDeviceLock: true,
+          error: `يوجد بالفعل طلب تسجيل قيد المراجعة مرتبط بهذا الجهاز باسم (${existingPending.full_name}). لا يمكن تسجيل حساب جديد إضافي من نفس الجهاز قبل مراجعة الطلب الحالي (قبوله أو رفضه) من قِبل الإدارة.`
         };
       }
     }
@@ -1384,6 +1575,7 @@ export async function registerStudentAction(studentData: any) {
         grade: grade,
         education_type: education_type,
         fingerprint: fingerprint,
+        hardwareSignature: studentData.hardwareSignature || null,
       };
 
       if (siblingProfiles && siblingProfiles.length > 0) {
@@ -1423,6 +1615,11 @@ export async function getStudentRegisteredDevicesAction(studentId: string) {
     const cleanStudentId = (studentId || '').trim();
     if (!cleanStudentId) {
       return { success: false, devices: [], message: 'معرف الطالب غير محدد' };
+    }
+
+    const session = await requireStudentOrStaffSession(cleanStudentId);
+    if (!session) {
+      return { success: false, devices: [], message: 'غير مصرح بالوصول لبيانات أجهزة هذا الحساب.' };
     }
 
     // 1. Fetch profile to check primary device fingerprint
@@ -1496,6 +1693,11 @@ export async function deleteStudentSecondaryDeviceAction(studentId: string, devi
       return { success: false, message: 'بيانات غير صالحة' };
     }
 
+    const session = await requireStudentOrStaffSession(cleanStudentId);
+    if (!session) {
+      return { success: false, message: 'غير مصرح لك بإدارة أجهزة هذا الحساب.' };
+    }
+
     // 1. Fetch device record
     const { data: device, error: fetchErr } = await supabaseAdmin
       .from('student_devices')
@@ -1567,6 +1769,11 @@ export async function checkAndRegisterStudentDeviceAction(
       return { allowed: false, message: 'بيانات غير مكتملة' };
     }
 
+    const session = await requireStudentOrStaffSession(cleanStudentId);
+    if (!session) {
+      return { allowed: false, message: 'يرجى تسجيل الدخول للتحقق من أمان الجهاز.' };
+    }
+
     const res = await verifyAndEnforceStudentDevice(cleanStudentId, cleanFp, deviceInfo);
     return res;
   } catch (err: any) {
@@ -1577,6 +1784,11 @@ export async function checkAndRegisterStudentDeviceAction(
 
 export async function getStudentProfilesByIdsAction(studentIds: string[]) {
   try {
+    const session = await requireStaffSession();
+    if (!session) {
+      return { success: false, profiles: [] };
+    }
+
     if (!studentIds || studentIds.length === 0) {
       return { success: true, profiles: [] };
     }
@@ -1637,6 +1849,11 @@ export async function saveStudentItemProgressAction(payload: {
       return { success: false, error: 'بيانات غير مكتملة' };
     }
 
+    const session = await requireStudentOrStaffSession(studentId);
+    if (!session) {
+      return { success: false, error: 'غير مصرح بتسجيل التقدم لهذا الحساب.' };
+    }
+
     const recordId = id || crypto.randomUUID();
 
     const dbPayload: any = {
@@ -1675,6 +1892,11 @@ export async function saveStudentItemProgressAction(payload: {
  */
 export async function updateStudentPasswordByTeacherAction(studentId: string, newPassword: string) {
   try {
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_manage_students)) {
+      return { success: false, message: 'غير مصرح لك بتعديل كلمات مرور الطلاب.' };
+    }
+
     const cleanId = (studentId || '').trim();
     const cleanPass = (newPassword || '').trim();
 

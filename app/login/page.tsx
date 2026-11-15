@@ -56,13 +56,21 @@ export default function LoginPage() {
            setSuccessMsg(res.message || 'يرجى إدخال رمز التفعيل.');
         } else {
           const stored = localStorage.getItem('mr_radwan_current_user');
+          const searchParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+          const rawRedirect = searchParams?.get('redirect') || '';
+          const safeRedirect =
+            rawRedirect.startsWith('/') && !rawRedirect.startsWith('//') && rawRedirect !== '/login'
+              ? rawRedirect
+              : '';
+
           if (stored) {
             const user = JSON.parse(stored);
             if (user.role === 'teacher' || user.role === 'super_admin') {
-              router.push('/teacher');
+              router.push(safeRedirect || '/teacher');
               return;
             } else if (user.role === 'assistant') {
-              router.push('/assistant');
+              const target = safeRedirect && !safeRedirect.startsWith('/teacher') ? safeRedirect : '/assistant';
+              router.push(target);
               return;
             } else if (user.role === 'student' && user.status === 'active') {
               try {
@@ -72,8 +80,12 @@ export default function LoginPage() {
 
               setSuccessMsg('تم تسجيل دخولك بنجاح! مرحباً بك في منصة مستر محمد رضوان 💚');
 
+              const target =
+                safeRedirect && !safeRedirect.startsWith('/teacher') && !safeRedirect.startsWith('/assistant')
+                  ? safeRedirect
+                  : '/student';
               setTimeout(() => {
-                router.push('/student');
+                router.push(target);
               }, 500);
               return;
             }
