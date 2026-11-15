@@ -6,8 +6,23 @@ import {
   resetStudentDeviceLockAction,
   createStudentByTeacherAction,
   registerStudentAction,
-  checkDeviceStatusAction 
+  checkDeviceStatusAction,
+  fetchPasswordResetRequestsAction,
+  authorizeStudentPasswordResetByTeacherAction,
+  revokePasswordResetByTeacherAction,
+  PasswordResetRequestItem,
 } from '@/app/actions/studentActions';
+
+export type { PasswordResetRequestItem };
+
+export interface LinkedDeviceAccount {
+  id: string;
+  fullName: string;
+  phone: string;
+  status: string;
+  stage: string;
+  grade: number;
+}
 
 export interface StudentProfile {
   id: string;
@@ -20,12 +35,14 @@ export interface StudentProfile {
   educationType: string;
   status: 'pending_review' | 'active' | 'rejected' | 'banned';
   passwordVault: string | null;
+  isPasswordEncrypted?: boolean;
   deviceFingerprint: string | null;
   createdAt: string;
   avatarUrl: string | null;
   whatsapp_otp?: string | null;
   otp_verified?: boolean;
   banReason?: string | null;
+  linkedDeviceAccounts?: LinkedDeviceAccount[];
 }
 
 export async function fetchStudents(): Promise<StudentProfile[]> {
@@ -82,4 +99,17 @@ export async function generateStudentOTP(studentId: string): Promise<string | nu
 export async function registerStudent(studentData: any) {
   return await registerStudentAction(studentData);
 }
+
+export async function fetchPasswordResetRequests() {
+  return await fetchPasswordResetRequestsAction();
+}
+
+export async function authorizeStudentPasswordResetByTeacher(studentId: string, requestId?: string) {
+  return await authorizeStudentPasswordResetByTeacherAction(studentId, requestId);
+}
+
+export async function revokePasswordResetByTeacher(requestId: string, studentId: string, reason?: string) {
+  return await revokePasswordResetByTeacherAction(requestId, studentId, reason);
+}
+
 

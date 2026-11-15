@@ -1,10 +1,12 @@
 'use server';
 
 import { supabaseAdmin } from '@/lib/supabaseServer';
-import { normalizeEasternArabicDigits, cleanEgyptianPhone } from '@/lib/utils';
+import { normalizeEasternArabicDigits, cleanEgyptianPhone, maskEmail } from '@/lib/utils';
+import { hashPasswordSecure, verifyPasswordSecure, isPasswordHash } from '@/lib/passwordCrypto';
 import {
   getServerSession,
   requireStaffSession,
+  requireTeacherSession,
   requireStudentOrStaffSession,
   setServerSessionCookie,
   clearServerSessionCookie,
@@ -219,13 +221,12 @@ export async function fetchStudentsAction(masterKey?: string) {
 
     const cleanKey = (masterKey || '').trim();
     const hasCookieUnlock = await isMasterUnlockVerified();
-    const canRevealPasswords =
-      (session.isTeacher && (hasCookieUnlock || (cleanKey && verifyMasterKeyServer(cleanKey)))) ||
-      (!session.isTeacher && session.assistantPermissions?.can_view_student_passwords && cleanKey && verifyMasterKeyServer(cleanKey));
+    const canRevealEmails =
+      session.isTeacher && (hasCookieUnlock || Boolean(cleanKey && verifyMasterKeyServer(cleanKey)));
 
     const { data, error } = await supabaseAdmin
       .from('profiles')
-      .select('*')
+      .select('id, full_name, email, phone, parent_phone, stage, grade, education_type, status, primary_device_fingerprint, created_at, avatar_url, whatsapp_otp, ban_reason')
       .eq('role', 'student')
       .order('created_at', { ascending: false });
 
@@ -258,14 +259,15 @@ export async function fetchStudentsAction(masterKey?: string) {
       return {
         id: d.id,
         fullName: d.full_name,
-        email: d.email,
+        email: canRevealEmails ? d.email : maskEmail(d.email),
         phone: d.phone,
         parentPhone: d.parent_phone,
         stage: d.stage,
         grade: d.grade,
         educationType: d.education_type,
         status: d.status,
-        passwordVault: canRevealPasswords ? (d.encrypted_password_vault || '••••••') : '••••••••',
+        passwordVault: null,
+        isPasswordEncrypted: true,
         deviceFingerprint: d.primary_device_fingerprint,
         createdAt: d.created_at,
         avatarUrl: d.avatar_url,
@@ -281,39 +283,38 @@ export async function fetchStudentsAction(masterKey?: string) {
 }
 
 /**
- * Server-Authoritative Password Vault Revealer for Super Admin (Teacher)
+ * Server-Authoritative Contact Email Revealer for Super Admin (Teacher).
+ * Zero-Knowledge Security: Student passwords are NEVER decrypted or returned anywhere.
  */
 export async function revealStudentPasswordsAction(masterKey: string) {
   try {
-    const session = await requireStaffSession();
-    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_view_student_passwords)) {
-      return { success: false, message: 'غير مصرح لك بكشف كلمات مرور الطلاب.' };
+    const session = await requireTeacherSession();
+    if (!session) {
+      return { success: false, message: 'غير مصرح. كشف البريد الإلكتروني متاح للمعلم فقط.' };
     }
 
     const isKeyValid = verifyMasterKeyServer(masterKey);
     if (!isKeyValid) {
-      return { success: false, message: 'المفتاح السري غير صحيح. غير مصرح لك بكشف كلمات مرور الطلاب.' };
+      return { success: false, message: 'المفتاح السري غير صحيح.' };
     }
 
-    if (session.isTeacher) {
-      await setMasterUnlockCookie();
-    }
+    await setMasterUnlockCookie();
 
     const { data, error } = await supabaseAdmin
       .from('profiles')
-      .select('id, encrypted_password_vault')
+      .select('id, email')
       .eq('role', 'student');
 
     if (error) {
-      return { success: false, message: 'تعذر جلب كلمات المرور' };
+      return { success: false, message: 'تعذر جلب بيانات التواصل' };
     }
 
-    const vaultMap: Record<string, string> = {};
+    const emailMap: Record<string, string> = {};
     (data || []).forEach((d: any) => {
-      vaultMap[d.id] = d.encrypted_password_vault || '••••••';
+      emailMap[d.id] = d.email || '';
     });
 
-    return { success: true, vaultMap };
+    return { success: true, emailMap, vaultMap: {} as Record<string, string> };
   } catch (err: any) {
     return { success: false, message: err.message || 'حدث خطأ غير متوقع' };
   }
@@ -663,6 +664,8 @@ export async function createStudentByTeacherAction(data: {
     else if (cleanPhone.startsWith('012')) carrier = 'Orange';
     else if (cleanPhone.startsWith('015')) carrier = 'WE';
 
+    const hashedPassword = await hashPasswordSecure(cleanPass);
+
     const insertPayload = {
       role: 'student',
       full_name: data.fullName.trim(),
@@ -670,8 +673,8 @@ export async function createStudentByTeacherAction(data: {
       phone: cleanPhone,
       parent_phone: data.parentPhone?.trim() || null,
       phone_carrier: carrier,
-      password_hash: cleanPass,
-      encrypted_password_vault: cleanPass,
+      password_hash: hashedPassword,
+      encrypted_password_vault: null,
       avatar_url: 'https://api.dicebear.com/7.x/bottts/svg?seed=' + encodeURIComponent(data.fullName),
       stage: data.stage === 'middle' ? 'middle' : 'high',
       education_type: data.educationType === 'azhar' ? 'azhar' : 'general',
@@ -685,7 +688,7 @@ export async function createStudentByTeacherAction(data: {
     const { data: insertedUser, error } = await supabaseAdmin
       .from('profiles')
       .insert([insertPayload])
-      .select('id, full_name, email, phone, stage, grade, status, encrypted_password_vault')
+      .select('id, full_name, email, phone, stage, grade, status')
       .single();
 
     if (error) {
@@ -1055,40 +1058,73 @@ export async function loginAction(
       return { success: false, message: 'بيانات الدخول غير مسجلة بالمنصة. يرجى التأكد من البريد أو رقم الهاتف أو إنشاء حساب جديد للطلاب.' };
     }
 
-    // Verify Password (flexible matching against raw, trimmed, normalized digits, and no-space variants)
+    // Verify Password (Supports one-way PBKDF2-SHA256 hashes + seamless transparent migration for legacy accounts)
     const userPassHash = (user.password_hash || '').trim();
-    const userPassVault = (user.encrypted_password_vault || '').trim();
     const normalizedPass = normalizeEasternArabicDigits(cleanPass);
-    const noSpacePass = cleanPass.replace(/\s+/g, '');
-    const noSpaceVault = userPassVault.replace(/\s+/g, '');
-    const noSpaceHash = userPassHash.replace(/\s+/g, '');
+    let isPasswordValid = false;
 
-    const passVariants = [
-      cleanPass,
-      pass,
-      (pass || '').trim(),
-      cleanPass.toLowerCase(),
-      (pass || '').toLowerCase(),
-      normalizedPass,
-      normalizeEasternArabicDigits(pass || ''),
-      normalizeEasternArabicDigits((pass || '').trim()),
-      noSpacePass,
-    ];
+    if (isPasswordHash(userPassHash)) {
+      isPasswordValid = await verifyPasswordSecure(cleanPass, userPassHash);
+      if (!isPasswordValid && pass && pass !== cleanPass) {
+        isPasswordValid = await verifyPasswordSecure(pass, userPassHash);
+      }
+      if (!isPasswordValid && normalizedPass && normalizedPass !== cleanPass) {
+        isPasswordValid = await verifyPasswordSecure(normalizedPass, userPassHash);
+      }
+    } else {
+      const userPassVault = (user.encrypted_password_vault || '').trim();
+      const noSpacePass = cleanPass.replace(/\s+/g, '');
+      const noSpaceVault = userPassVault.replace(/\s+/g, '');
+      const noSpaceHash = userPassHash.replace(/\s+/g, '');
 
-    const isPasswordValid = 
-      passVariants.some(p => p && (
-        p === userPassHash || 
-        p === userPassVault || 
-        p === user.password_hash || 
-        p === user.encrypted_password_vault ||
-        p.toLowerCase() === userPassHash.toLowerCase() ||
-        p.toLowerCase() === userPassVault.toLowerCase() ||
-        (noSpaceVault && p.replace(/\s+/g, '') === noSpaceVault) ||
-        (noSpaceHash && p.replace(/\s+/g, '') === noSpaceHash)
-      ));
+      const passVariants = [
+        cleanPass,
+        pass,
+        (pass || '').trim(),
+        cleanPass.toLowerCase(),
+        (pass || '').toLowerCase(),
+        normalizedPass,
+        normalizeEasternArabicDigits(pass || ''),
+        normalizeEasternArabicDigits((pass || '').trim()),
+        noSpacePass,
+      ];
+
+      isPasswordValid =
+        passVariants.some(p => p && (
+          p === userPassHash ||
+          p === userPassVault ||
+          p === user.password_hash ||
+          p === user.encrypted_password_vault ||
+          p.toLowerCase() === userPassHash.toLowerCase() ||
+          p.toLowerCase() === userPassVault.toLowerCase() ||
+          (noSpaceVault && p.replace(/\s+/g, '') === noSpaceVault) ||
+          (noSpaceHash && p.replace(/\s+/g, '') === noSpaceHash)
+        ));
+
+      // Immediately upgrade student's legacy plaintext password to irreversible PBKDF2 hash & wipe vault
+      if (isPasswordValid && user.role === 'student') {
+        try {
+          const passwordToHash = userPassHash || userPassVault || cleanPass;
+          const upgradedHash = await hashPasswordSecure(passwordToHash);
+          await supabaseAdmin
+            .from('profiles')
+            .update({
+              password_hash: upgradedHash,
+              encrypted_password_vault: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', user.id);
+        } catch (migErr) {
+          console.warn('Password hash auto-migration warning:', migErr);
+        }
+      }
+    }
 
     if (!isPasswordValid) {
-      return { success: false, message: 'كلمة المرور غير صحيحة. يرجى التأكد من كلمة المرور وإعادة المحاولة أو التواصل مع مستر محمد رضوان لاستعادتها.' };
+      return {
+        success: false,
+        message: 'كلمة المرور غير صحيحة. يرجى التأكد من كلمة المرور وإعادة المحاولة، أو الضغط على "نسيت كلمة المرور؟" لطلب استعادتها بأمان.',
+      };
     }
 
     // Special Handling for Assistant Role
@@ -1519,7 +1555,8 @@ export async function registerStudentAction(studentData: any) {
     const parsedGrade = parseInt(studentData.grade, 10);
     const grade = isNaN(parsedGrade) || parsedGrade < 1 || parsedGrade > 3 ? 1 : parsedGrade;
 
-    // 9. Atomic & Guaranteed Insertion to profiles
+    // 9. Atomic & Guaranteed Insertion to profiles with Zero-Knowledge Hash
+    const hashedPassword = await hashPasswordSecure(cleanPass);
     const insertPayload = {
       role: 'student',
       full_name: studentData.fullName?.trim(),
@@ -1527,8 +1564,8 @@ export async function registerStudentAction(studentData: any) {
       phone: cleanPhone,
       parent_phone: cleanParentPhone || null,
       phone_carrier: carrier,
-      password_hash: cleanPass, 
-      encrypted_password_vault: cleanPass, 
+      password_hash: hashedPassword,
+      encrypted_password_vault: null,
       avatar_url: studentData.avatarUrl || null,
       stage: stage,
       education_type: education_type,
@@ -1888,65 +1925,756 @@ export async function saveStudentItemProgressAction(payload: {
 }
 
 /**
- * Teacher / Admin action to directly update or reset any student's password
+ * Zero-Knowledge Policy: Neither Teacher nor Assistants can directly read or overwrite student passwords.
+ * Teacher grants one-time reset permission so the student creates their own new password.
  */
-export async function updateStudentPasswordByTeacherAction(studentId: string, newPassword: string) {
+export async function updateStudentPasswordByTeacherAction(_studentId: string, _newPassword: string) {
+  return {
+    success: false,
+    message: 'لأقصى درجات الخصوصية والأمان، لا يمكن لأي شخص (حتى الإدارة) تعديل كلمة مرور الطالب مباشرة أو الاطلاع عليها. استخدم زر "السماح بتغيير كلمة المرور" ليقوم الطالب بإنشاء كلمة المرور الجديدة بنفسه.',
+  };
+}
+
+// =========================================================================
+// ZERO-KNOWLEDGE TEACHER-AUTHORIZED PASSWORD RESET SYSTEM
+// =========================================================================
+
+const TEACHER_RESET_WHATSAPP_NUMBER = '201552191172';
+
+function buildPasswordResetWhatsappUrl(student: { full_name: string; email: string; phone: string }) {
+  const text = [
+    'مرحباً مستر محمد رضوان أنا نسيت كلمة المرور الخاصة بي، ممكن حضرتك تسمح لي بإنشاء كلمة مرور جديدة؟',
+    '',
+    `• اسم الطالب: ${student.full_name}`,
+    `• البريد الإلكتروني المسجل: ${student.email}`,
+    `• رقم الهاتف المسجل: ${student.phone}`,
+  ].join('\n');
+  return `https://wa.me/${TEACHER_RESET_WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`;
+}
+
+async function lookupStudentForPasswordReset(identifier: string) {
+  const raw = (identifier || '').trim();
+  const normalized = normalizeEasternArabicDigits(raw);
+  const cleanEmail = normalized.toLowerCase();
+  const cleanPhone = cleanEgyptianPhone(normalized);
+
+  if (!normalized) return null;
+
+  if (normalized.includes('@')) {
+    if (isTeacherEmail(cleanEmail)) {
+      return { isStaff: true as const, student: null };
+    }
+    const { data } = await supabaseAdmin
+      .from('profiles')
+      .select('id, role, full_name, email, phone, stage, grade, status, ban_reason, primary_device_fingerprint')
+      .ilike('email', cleanEmail)
+      .maybeSingle();
+
+    if (!data) return null;
+    if (data.role !== 'student') return { isStaff: true as const, student: null };
+    return { isStaff: false as const, student: data };
+  }
+
+  const phoneCandidates = Array.from(
+    new Set([
+      cleanPhone,
+      normalized,
+      raw,
+      cleanPhone.startsWith('0') ? cleanPhone.slice(1) : `0${cleanPhone}`,
+      cleanPhone.startsWith('0') ? `+20${cleanPhone.slice(1)}` : `+20${cleanPhone}`,
+      cleanPhone.startsWith('+20') ? `0${cleanPhone.slice(3)}` : cleanPhone,
+    ].filter(Boolean))
+  );
+
+  if (phoneCandidates.length > 0) {
+    const { data: byPhone } = await supabaseAdmin
+      .from('profiles')
+      .select('id, role, full_name, email, phone, stage, grade, status, ban_reason, primary_device_fingerprint')
+      .in('phone', phoneCandidates)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (byPhone && byPhone.length > 0) {
+      const p = byPhone[0];
+      if (p.role !== 'student') return { isStaff: true as const, student: null };
+      return { isStaff: false as const, student: p };
+    }
+  }
+
+  // Exact email fallback in case input lacked @
+  const { data: byEmailFallback } = await supabaseAdmin
+    .from('profiles')
+    .select('id, role, full_name, email, phone, stage, grade, status, ban_reason, primary_device_fingerprint')
+    .ilike('email', cleanEmail)
+    .maybeSingle();
+
+  if (byEmailFallback) {
+    if (byEmailFallback.role !== 'student') return { isStaff: true as const, student: null };
+    return { isStaff: false as const, student: byEmailFallback };
+  }
+
+  return null;
+}
+
+export async function requestOrCheckPasswordResetAction(params: {
+  identifier: string;
+  deviceFingerprint?: string;
+  candidateFingerprints?: string[];
+  submitRequest?: boolean;
+}) {
   try {
-    const session = await requireStaffSession();
-    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_manage_students)) {
-      return { success: false, message: 'غير مصرح لك بتعديل كلمات مرور الطلاب.' };
+    const rawId = (params.identifier || '').trim();
+    if (!rawId) {
+      return { success: false, message: 'يرجى إدخال البريد الإلكتروني أو رقم الهاتف المسجل بحسابك.' };
     }
 
-    const cleanId = (studentId || '').trim();
-    const cleanPass = (newPassword || '').trim();
+    const cleanFp = (params.deviceFingerprint || '').trim();
+    const allFps = Array.from(
+      new Set([cleanFp, ...(Array.isArray(params.candidateFingerprints) ? params.candidateFingerprints : [])]
+        .map(f => (f || '').trim())
+        .filter(f => Boolean(f) && !/^DEV-(MOBILE|DESKTOP|TABLET)-(ANDROID|WINDOWS|IOS|LINUX|OTHER)-\d+X\d+/i.test(f)))
+    );
 
-    if (!cleanId || !cleanPass) {
-      return { success: false, message: 'معرف الطالب وكلمة المرور الجديدة مطلوبان' };
+    if (allFps.length > 0) {
+      const { data: bannedDevs } = await supabaseAdmin
+        .from('banned_devices')
+        .select('id, reason')
+        .in('device_fingerprint', allFps)
+        .limit(1);
+
+      if (bannedDevs && bannedDevs.length > 0) {
+        return {
+          success: false,
+          blockedReason: 'device_banned' as const,
+          message: 'هذا الجهاز محظور نهائياً من إدارة المنصة ولا يمكن إجراء استعادة كلمة المرور من خلاله.',
+        };
+      }
     }
 
-    if (cleanPass.length < 4) {
-      return { success: false, message: 'كلمة المرور يجب أن تكون 4 خانات على الأقل' };
+    const lookup = await lookupStudentForPasswordReset(rawId);
+    if (!lookup) {
+      return {
+        success: false,
+        notFound: true,
+        message: 'لا يوجد حساب طالب مسجل بهذا البريد الإلكتروني أو رقم الهاتف. يرجى التأكد من البيانات المدخلة.',
+      };
     }
 
-    const { data: updated, error } = await supabaseAdmin
+    if (lookup.isStaff || !lookup.student) {
+      return {
+        success: false,
+        blockedReason: 'staff_protected' as const,
+        message: 'بوابة استعادة كلمة المرور مخصصة للطلاب فقط. الحسابات الإدارية تُدار عبر الإدارة العليا.',
+      };
+    }
+
+    const student = lookup.student;
+
+    if (student.status === 'banned') {
+      return {
+        success: false,
+        blockedReason: 'banned' as const,
+        message: 'هذا الحساب محظور أمنياً من إدارة المنصة ولا يمكن استعادة كلمة المرور.',
+      };
+    }
+
+    if (student.status === 'rejected') {
+      return {
+        success: false,
+        blockedReason: 'rejected' as const,
+        message: 'تم رفض طلب تسجيل هذا الحساب مسبقاً.',
+      };
+    }
+
+    if (student.status === 'pending_review') {
+      return {
+        success: false,
+        blockedReason: 'pending_review' as const,
+        message: 'حسابك لا يزال قيد المراجعة والاعتماد الأولي من مستر محمد رضوان ولم يتم تفعيله بعد.',
+      };
+    }
+
+    // Fetch existing password_reset audit records for this student
+    const { data: logs } = await supabaseAdmin
+      .from('audit_logs')
+      .select('id, action_type, details, created_at')
+      .eq('target_entity', 'password_reset')
+      .eq('target_id', student.id)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    const nowMs = Date.now();
+    const activeApproved = (logs || []).find((row: any) => {
+      const d = row.details || {};
+      if (d.status !== 'approved') return false;
+      const exp = d.expiresAt ? new Date(d.expiresAt).getTime() : 0;
+      return exp > nowMs;
+    });
+
+    if (activeApproved) {
+      const d = activeApproved.details || {};
+      return {
+        success: true,
+        status: 'approved' as const,
+        requestId: d.requestId || activeApproved.id,
+        studentId: student.id,
+        studentName: student.full_name,
+        email: student.email,
+        maskedEmail: maskEmail(student.email),
+        expiresAt: d.expiresAt,
+        approvedAt: d.approvedAt,
+        message: 'تمت موافقة مستر محمد رضوان! يمكنك الآن إنشاء كلمة مرور جديدة وتأكيدها بنفسك.',
+      };
+    }
+
+    const activePending = (logs || []).find((row: any) => {
+      const d = row.details || {};
+      if (d.status !== 'pending') return false;
+      const createdMs = new Date(row.created_at).getTime();
+      return nowMs - createdMs < 24 * 60 * 60 * 1000;
+    });
+
+    const whatsappUrl = buildPasswordResetWhatsappUrl(student);
+
+    if (activePending) {
+      const d = activePending.details || {};
+      return {
+        success: true,
+        status: 'pending' as const,
+        alreadyRequested: true,
+        requestId: d.requestId || activePending.id,
+        studentId: student.id,
+        studentName: student.full_name,
+        studentEmail: student.email,
+        maskedEmail: maskEmail(student.email),
+        studentPhone: student.phone,
+        whatsappUrl,
+        requestedAt: activePending.created_at,
+        message: 'طلبك مسجل بالفعل في لوحة المعلم وبانتظار موافقة مستر محمد رضوان. يمكنك أيضاً إرسال تذكير عبر واتساب.',
+      };
+    }
+
+    const latestRow = logs && logs.length > 0 ? logs[0] : null;
+    if (!params.submitRequest) {
+      const latestDetails = latestRow?.details || {};
+      if (latestDetails.status === 'rejected' && latestRow) {
+        const rejAgeMs = nowMs - new Date(latestRow.created_at).getTime();
+        if (rejAgeMs < 15 * 60 * 1000) {
+          return {
+            success: true,
+            status: 'rejected' as const,
+            studentName: student.full_name,
+            maskedEmail: maskEmail(student.email),
+            whatsappUrl,
+            message: latestDetails.reason || 'تم إلغاء / رفض طلب الاستعادة السابق من الإدارة. يمكنك إرسال طلب جديد أو التواصل عبر واتساب.',
+          };
+        }
+      }
+
+      return {
+        success: true,
+        status: 'none' as const,
+        studentName: student.full_name,
+        maskedEmail: maskEmail(student.email),
+        message: 'تم العثور على الحساب. اضغط لإرسال طلب السماح للمعلم.',
+      };
+    }
+
+    // Check whether request originates from a registered trusted device for teacher visibility
+    let deviceMatch = false;
+    if (allFps.length > 0) {
+      if (student.primary_device_fingerprint && allFps.includes(student.primary_device_fingerprint)) {
+        deviceMatch = true;
+      } else {
+        const { data: devs } = await supabaseAdmin
+          .from('student_devices')
+          .select('device_fingerprint')
+          .eq('student_id', student.id);
+        if (devs && devs.some((dv: any) => allFps.includes(dv.device_fingerprint))) {
+          deviceMatch = true;
+        }
+      }
+    }
+
+    const requestId = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
+
+    const { error: insertErr } = await supabaseAdmin.from('audit_logs').insert([{
+      actor_id: student.id,
+      actor_name: student.full_name,
+      actor_role: 'student',
+      action_type: 'PASSWORD_RESET_REQUEST',
+      target_entity: 'password_reset',
+      target_id: student.id,
+      details: {
+        requestId,
+        status: 'pending',
+        studentId: student.id,
+        studentName: student.full_name,
+        studentEmail: student.email,
+        studentPhone: student.phone,
+        stage: student.stage,
+        grade: student.grade,
+        deviceFingerprint: cleanFp || null,
+        deviceMatch,
+        requestedAt: nowIso,
+      },
+    }]);
+
+    if (insertErr) {
+      console.error('Error inserting password reset request:', insertErr);
+      return { success: false, message: 'تعذر تسجيل طلب الاستعادة حالياً. يرجى المحاولة مرة أخرى.' };
+    }
+
+    return {
+      success: true,
+      status: 'pending' as const,
+      alreadyRequested: false,
+      requestId,
+      studentId: student.id,
+      studentName: student.full_name,
+      studentEmail: student.email,
+      maskedEmail: maskEmail(student.email),
+      studentPhone: student.phone,
+      whatsappUrl,
+      requestedAt: nowIso,
+      message: 'تم إرسال طلبك مباشرة إلى لوحة مستر محمد رضوان على المنصة! يمكنك أيضاً مراسلته على واتساب بالرسالة الجاهزة لتسريع الموافقة.',
+    };
+  } catch (err: any) {
+    console.error('requestOrCheckPasswordResetAction error:', err);
+    return { success: false, message: err.message || 'حدث خطأ غير متوقع' };
+  }
+}
+
+export async function completeStudentPasswordResetAction(params: {
+  identifier: string;
+  newPassword: string;
+  confirmPassword: string;
+  deviceFingerprint?: string;
+}) {
+  try {
+    const rawId = (params.identifier || '').trim();
+    const cleanPass = (params.newPassword || '').trim();
+    const cleanConfirm = (params.confirmPassword || '').trim();
+    const cleanFp = (params.deviceFingerprint || '').trim();
+
+    if (!rawId) {
+      return { success: false, message: 'بيانات الحساب غير محددة.' };
+    }
+    if (!cleanPass || cleanPass.length < 8) {
+      return { success: false, message: 'كلمة المرور الجديدة يجب أن تتكون من 8 خانات على الأقل.' };
+    }
+    if (cleanPass.length > 128) {
+      return { success: false, message: 'كلمة المرور طويلة جداً.' };
+    }
+    if (/\s/.test(cleanPass)) {
+      return { success: false, message: 'كلمة المرور لا يجب أن تحتوي على مسافات.' };
+    }
+    if (cleanPass !== cleanConfirm) {
+      return { success: false, message: 'كلمتا المرور غير متطابقتين. يرجى التأكد وإعادة المحاولة.' };
+    }
+
+    if (cleanFp) {
+      const { data: bannedDevs } = await supabaseAdmin
+        .from('banned_devices')
+        .select('id')
+        .eq('device_fingerprint', cleanFp)
+        .limit(1);
+      if (bannedDevs && bannedDevs.length > 0) {
+        return { success: false, message: 'هذا الجهاز محظور نهائياً من إدارة المنصة.' };
+      }
+    }
+
+    const lookup = await lookupStudentForPasswordReset(rawId);
+    if (!lookup || lookup.isStaff || !lookup.student) {
+      return { success: false, message: 'تعذر التحقق من حساب الطالب.' };
+    }
+
+    const student = lookup.student;
+    if (student.status !== 'active') {
+      return { success: false, message: 'حساب الطالب غير مفعل حالياً.' };
+    }
+
+    const { data: logs } = await supabaseAdmin
+      .from('audit_logs')
+      .select('id, action_type, details, created_at')
+      .eq('target_entity', 'password_reset')
+      .eq('target_id', student.id)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    const nowMs = Date.now();
+    const approvedRow = (logs || []).find((row: any) => {
+      const d = row.details || {};
+      if (d.status !== 'approved') return false;
+      const exp = d.expiresAt ? new Date(d.expiresAt).getTime() : 0;
+      return exp > nowMs;
+    });
+
+    if (!approvedRow) {
+      return {
+        success: false,
+        message: 'لم تتم الموافقة من المعلم بعد أو انتهت صلاحية الإذن. يرجى طلب السماح مجدداً.',
+      };
+    }
+
+    const hashedPassword = await hashPasswordSecure(cleanPass);
+    const nowIso = new Date().toISOString();
+
+    const { error: updateErr } = await supabaseAdmin
       .from('profiles')
       .update({
-        password_hash: cleanPass,
-        encrypted_password_vault: cleanPass,
-        updated_at: new Date().toISOString(),
+        password_hash: hashedPassword,
+        encrypted_password_vault: null,
+        updated_at: nowIso,
       })
-      .eq('id', cleanId)
-      .select('id, full_name, email, phone, encrypted_password_vault')
-      .single();
+      .eq('id', student.id);
 
-    if (error || !updated) {
-      return { success: false, message: 'فشل تحديث كلمة المرور في قاعدة البيانات: ' + (error?.message || '') };
+    if (updateErr) {
+      return { success: false, message: 'تعذر حفظ كلمة المرور الجديدة: ' + updateErr.message };
     }
 
-    // Audit log
+    // Atomically consume & invalidate all approved/pending reset rows so permission is strictly one-time
+    for (const row of logs || []) {
+      const d = row.details || {};
+      if (d.status === 'approved' || d.status === 'pending') {
+        await supabaseAdmin
+          .from('audit_logs')
+          .update({
+            action_type: d.status === 'approved' ? 'PASSWORD_RESET_COMPLETED' : 'PASSWORD_RESET_SUPERSEDED',
+            details: {
+              ...d,
+              status: d.status === 'approved' ? 'completed' : 'superseded',
+              completedAt: nowIso,
+              completedDeviceFp: cleanFp || null,
+            },
+          })
+          .eq('id', row.id);
+      }
+    }
+
+    // Security Audit Log (Zero-Knowledge: never logs any password)
     try {
       await supabaseAdmin.from('audit_logs').insert([{
-        actor_name: 'إدارة المنصة (المعلم)',
-        actor_role: 'teacher',
-        action_type: 'STUDENT_PASSWORD_RESET_BY_TEACHER',
+        actor_id: student.id,
+        actor_name: student.full_name,
+        actor_role: 'student',
+        action_type: 'STUDENT_PASSWORD_SELF_RESET_COMPLETED',
         target_entity: 'profiles',
-        target_id: cleanId,
+        target_id: student.id,
         details: {
-          name: updated.full_name,
-          email: updated.email,
-          newPasswordVault: cleanPass,
+          studentEmail: student.email,
+          completedAt: nowIso,
+          deviceFp: cleanFp || null,
         },
       }]);
     } catch {}
 
-    return { 
-      success: true, 
-      student: updated,
-      message: `تم تحديث كلمة المرور بنجاح للطالب (${updated.full_name}) إلى: ${cleanPass}` 
+    // Notify Student
+    try {
+      await supabaseAdmin.from('student_notifications').insert([{
+        student_id: student.id,
+        type: 'password_reset_completed',
+        title: 'تم تحديث كلمة المرور وتشفيرها بنجاح 🔐',
+        message: 'تم إلغاء كلمة المرور السابقة وتفعيل كلمتك الجديدة بنظام التشفير الأحادي الآمن.',
+        link: '/login',
+      }]);
+    } catch {}
+
+    return {
+      success: true,
+      email: student.email,
+      message: 'تم حفظ كلمة المرور الجديدة وتشفيرها بنجاح، وإلغاء كلمة المرور السابقة نهائياً!',
     };
   } catch (err: any) {
-    return { success: false, message: err.message || 'حدث خطأ أثناء تعديل كلمة المرور' };
+    console.error('completeStudentPasswordResetAction error:', err);
+    return { success: false, message: err.message || 'حدث خطأ أثناء تعيين كلمة المرور الجديدة' };
   }
 }
 
+export interface PasswordResetRequestItem {
+  id: string;
+  requestId: string;
+  studentId: string;
+  studentName: string;
+  studentEmail: string;
+  studentPhone: string;
+  stage: string;
+  grade: number;
+  avatarUrl: string | null;
+  studentStatus: string;
+  status: 'pending' | 'approved' | 'rejected' | 'completed' | 'expired' | 'superseded';
+  deviceFingerprint: string | null;
+  deviceMatch: boolean;
+  requestedAt: string;
+  approvedAt?: string;
+  expiresAt?: string;
+  completedAt?: string;
+  reason?: string;
+}
 
+export async function fetchPasswordResetRequestsAction(): Promise<{
+  success: boolean;
+  requests: PasswordResetRequestItem[];
+  message?: string;
+}> {
+  try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return { success: false, requests: [], message: 'صلاحية حصرية للمعلم فقط.' };
+    }
+
+    const { data: logs, error } = await supabaseAdmin
+      .from('audit_logs')
+      .select('id, actor_id, actor_name, action_type, target_id, details, created_at')
+      .eq('target_entity', 'password_reset')
+      .order('created_at', { ascending: false })
+      .limit(120);
+
+    if (error) {
+      return { success: false, requests: [], message: error.message };
+    }
+
+    const studentIds = Array.from(new Set((logs || []).map((l: any) => l.target_id || l.actor_id).filter(Boolean)));
+    const profileMap: Record<string, any> = {};
+
+    if (studentIds.length > 0) {
+      const { data: profs } = await supabaseAdmin
+        .from('profiles')
+        .select('id, full_name, email, phone, stage, grade, avatar_url, status')
+        .in('id', studentIds);
+      (profs || []).forEach((p: any) => {
+        profileMap[p.id] = p;
+      });
+    }
+
+    const nowMs = Date.now();
+    const mapped: PasswordResetRequestItem[] = (logs || [])
+      .map((row: any) => {
+        const d = row.details || {};
+        const sid = row.target_id || d.studentId || row.actor_id;
+        const prof = profileMap[sid];
+        let status = (d.status || 'pending') as PasswordResetRequestItem['status'];
+        if (status === 'approved' && d.expiresAt && new Date(d.expiresAt).getTime() <= nowMs) {
+          status = 'expired';
+        }
+        return {
+          id: row.id,
+          requestId: d.requestId || row.id,
+          studentId: sid,
+          studentName: prof?.full_name || d.studentName || row.actor_name || 'طالب',
+          studentEmail: prof?.email || d.studentEmail || '',
+          studentPhone: prof?.phone || d.studentPhone || '',
+          stage: prof?.stage || d.stage || 'high',
+          grade: Number(prof?.grade || d.grade || 1),
+          avatarUrl: prof?.avatar_url || null,
+          studentStatus: prof?.status || 'active',
+          status,
+          deviceFingerprint: d.deviceFingerprint || null,
+          deviceMatch: Boolean(d.deviceMatch),
+          requestedAt: d.requestedAt || row.created_at,
+          approvedAt: d.approvedAt,
+          expiresAt: d.expiresAt,
+          completedAt: d.completedAt,
+          reason: d.reason,
+        };
+      })
+      .filter((r) => r.status !== 'superseded');
+
+    const priorityOrder: Record<string, number> = {
+      pending: 0,
+      approved: 1,
+      completed: 2,
+      expired: 3,
+      rejected: 4,
+    };
+
+    mapped.sort((a, b) => {
+      const pa = priorityOrder[a.status] ?? 9;
+      const pb = priorityOrder[b.status] ?? 9;
+      if (pa !== pb) return pa - pb;
+      return new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime();
+    });
+
+    return { success: true, requests: mapped };
+  } catch (err: any) {
+    console.error('fetchPasswordResetRequestsAction error:', err);
+    return { success: false, requests: [], message: err.message };
+  }
+}
+
+export async function authorizeStudentPasswordResetByTeacherAction(studentId: string, requestId?: string) {
+  try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return { success: false, message: 'هذه الصلاحية الحساسة حصرية للمعلم (مستر محمد رضوان) فقط.' };
+    }
+
+    const cleanId = (studentId || '').trim();
+    if (!cleanId) {
+      return { success: false, message: 'معرف الطالب غير صالح.' };
+    }
+
+    const { data: student, error } = await supabaseAdmin
+      .from('profiles')
+      .select('id, role, full_name, email, phone, stage, grade, status')
+      .eq('id', cleanId)
+      .maybeSingle();
+
+    if (error || !student || student.role !== 'student') {
+      return { success: false, message: 'تعذر العثور على حساب الطالب.' };
+    }
+
+    if (student.status === 'banned' || student.status === 'rejected') {
+      return { success: false, message: 'لا يمكن منح إذن استعادة كلمة مرور لحساب محظور أو مرفوض.' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: existingLogs } = await supabaseAdmin
+      .from('audit_logs')
+      .select('id, details, created_at')
+      .eq('target_entity', 'password_reset')
+      .eq('target_id', cleanId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    let updatedTargetRow = false;
+
+    for (const row of existingLogs || []) {
+      const d = row.details || {};
+      const matchesTarget = requestId ? (d.requestId === requestId || row.id === requestId) : d.status === 'pending';
+
+      if (matchesTarget && !updatedTargetRow && (d.status === 'pending' || d.status === 'approved')) {
+        await supabaseAdmin
+          .from('audit_logs')
+          .update({
+            action_type: 'PASSWORD_RESET_APPROVED',
+            details: {
+              ...d,
+              status: 'approved',
+              approvedAt: nowIso,
+              approvedBy: teacher.fullName,
+              expiresAt,
+            },
+          })
+          .eq('id', row.id);
+        updatedTargetRow = true;
+      } else if (d.status === 'pending' || d.status === 'approved') {
+        await supabaseAdmin
+          .from('audit_logs')
+          .update({
+            action_type: 'PASSWORD_RESET_SUPERSEDED',
+            details: { ...d, status: 'superseded' },
+          })
+          .eq('id', row.id);
+      }
+    }
+
+    if (!updatedTargetRow) {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_id: cleanId,
+        actor_name: student.full_name,
+        actor_role: 'student',
+        action_type: 'PASSWORD_RESET_APPROVED',
+        target_entity: 'password_reset',
+        target_id: cleanId,
+        details: {
+          requestId: requestId || crypto.randomUUID(),
+          status: 'approved',
+          studentId: student.id,
+          studentName: student.full_name,
+          studentEmail: student.email,
+          studentPhone: student.phone,
+          stage: student.stage,
+          grade: student.grade,
+          deviceFingerprint: null,
+          deviceMatch: true,
+          requestedAt: nowIso,
+          approvedAt: nowIso,
+          approvedBy: teacher.fullName,
+          expiresAt,
+        },
+      }]);
+    }
+
+    // Security audit log & student notification
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_id: teacher.id,
+        actor_name: teacher.fullName,
+        actor_role: 'teacher',
+        action_type: 'TEACHER_APPROVED_PASSWORD_RESET',
+        target_entity: 'profiles',
+        target_id: cleanId,
+        details: {
+          studentName: student.full_name,
+          studentEmail: student.email,
+          approvedAt: nowIso,
+          expiresAt,
+        },
+      }]);
+    } catch {}
+
+    try {
+      await supabaseAdmin.from('student_notifications').insert([{
+        student_id: cleanId,
+        type: 'password_reset_approved',
+        title: 'تم السماح لك بإنشاء كلمة مرور جديدة 🔓',
+        message: 'وافق مستر محمد رضوان على طلب استعادة الحساب. توجه إلى صفحة تسجيل الدخول واختر "نسيت كلمة المرور؟" لإنشاء كلمتك الجديدة بنفسك.',
+        link: '/login?mode=forgot',
+      }]);
+    } catch {}
+
+    return {
+      success: true,
+      message: `تم السماح للبريد (${student.email}) بتغيير كلمة المرور لمدة 24 ساعة (لمرة واحدة). سيتم إلغاء الكلمة القديمة فور تعيين الجديدة.`,
+    };
+  } catch (err: any) {
+    console.error('authorizeStudentPasswordResetByTeacherAction error:', err);
+    return { success: false, message: err.message || 'تعذر منح الصلاحية' };
+  }
+}
+
+export async function revokePasswordResetByTeacherAction(requestId: string, studentId: string, reason?: string) {
+  try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return { success: false, message: 'صلاحية حصرية للمعلم فقط.' };
+    }
+
+    const cleanStudentId = (studentId || '').trim();
+    const { data: logs } = await supabaseAdmin
+      .from('audit_logs')
+      .select('id, details')
+      .eq('target_entity', 'password_reset')
+      .eq('target_id', cleanStudentId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    const nowIso = new Date().toISOString();
+    for (const row of logs || []) {
+      const d = row.details || {};
+      if ((d.requestId === requestId || row.id === requestId) || (!requestId && (d.status === 'pending' || d.status === 'approved'))) {
+        await supabaseAdmin
+          .from('audit_logs')
+          .update({
+            action_type: 'PASSWORD_RESET_REJECTED',
+            details: {
+              ...d,
+              status: 'rejected',
+              rejectedAt: nowIso,
+              rejectedBy: teacher.fullName,
+              reason: reason || 'تم إلغاء الإذن من إدارة المنصة',
+            },
+          })
+          .eq('id', row.id);
+      }
+    }
+
+    return { success: true, message: 'تم إلغاء / رفض إذن تغيير كلمة المرور لهذا الحساب.' };
+  } catch (err: any) {
+    return { success: false, message: err.message || 'حدث خطأ أثناء الإلغاء' };
+  }
+}

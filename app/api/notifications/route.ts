@@ -617,6 +617,41 @@ export async function GET(req: NextRequest) {
       } catch (err) {
         console.warn('Teacher secAlerts fetch error:', err);
       }
+
+      // 2.7 Pending Student Password Reset Requests (Teacher-only exclusive authorization)
+      try {
+        const { data: resetLogs } = await supabaseAdmin
+          .from('audit_logs')
+          .select('id, actor_name, target_id, details, created_at')
+          .eq('target_entity', 'password_reset')
+          .order('created_at', { ascending: false })
+          .limit(30);
+
+        if (resetLogs && resetLogs.length > 0) {
+          resetLogs
+            .filter((r: any) => r.details?.status === 'pending')
+            .forEach((r: any) => {
+              const d = r.details || {};
+              const sName = d.studentName || r.actor_name || 'طالب';
+              const sEmail = d.studentEmail || '';
+              const sPhone = d.studentPhone || '';
+              notifs.push({
+                id: `notif_teacher_pwd_reset_${r.id}`,
+                type: 'password_reset_request',
+                title: `طلب استعادة كلمة مرور من ${sName} 🔐`,
+                message: `يطلب الطالب السماح له بإنشاء كلمة مرور جديدة (${sEmail || sPhone}).`,
+                fullMessage: `طلب استعادة كلمة مرور (نظام التشفير الآمن):\n\n• اسم الطالب: ${sName}\n• البريد الإلكتروني: ${sEmail}\n• رقم الهاتف: ${sPhone}\n• الجهاز: ${d.deviceMatch ? 'مطابق للجهاز المسجل الموثوق ✓' : 'جهاز جديد / غير متطابق'}\n\nاضغط أدناه للانتقال إلى تبويب طلبات استعادة كلمة المرور ومنح الصلاحية.`,
+                timestamp: d.requestedAt || r.created_at,
+                link: '/teacher/students?tab=password_resets',
+                isRead: false,
+                category: 'admin',
+                badgeLabel: 'استعادة كلمة مرور',
+              });
+            });
+        }
+      } catch (err) {
+        console.warn('Teacher password reset requests fetch error:', err);
+      }
     }
 
     // -----------------------------------------------------------------

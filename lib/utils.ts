@@ -84,3 +84,94 @@ export function validateArabicName(name: string): boolean {
 
   return true;
 }
+
+export function maskEmail(email?: string | null): string {
+  const clean = (email || '').trim();
+  const atIndex = clean.indexOf('@');
+  if (atIndex <= 0) return '••••••••@•••.com';
+  const local = clean.slice(0, atIndex);
+  const domain = clean.slice(atIndex + 1);
+  const visibleLocal = local.length <= 2 ? local.slice(0, 1) : `${local.slice(0, 2)}***${local.slice(-1)}`;
+  const dotIdx = domain.lastIndexOf('.');
+  if (dotIdx <= 1) return `${visibleLocal}@${domain}`;
+  const domainName = domain.slice(0, dotIdx);
+  const tld = domain.slice(dotIdx);
+  return `${visibleLocal}@${domainName.slice(0, 2)}***${tld}`;
+}
+
+export interface PasswordScriptAnalysis {
+  length: number;
+  minLengthOk: boolean;
+  hasArabicLetters: boolean;
+  hasArabicDigits: boolean;
+  hasEnglishLower: boolean;
+  hasEnglishUpper: boolean;
+  hasEnglishDigits: boolean;
+  hasSymbols: boolean;
+  hasSpaces: boolean;
+  scriptMode: 'empty' | 'english' | 'arabic' | 'mixed' | 'digits_symbols';
+  strength: 'weak' | 'medium' | 'strong';
+  strengthLabel: string;
+}
+
+export function analyzePasswordScript(password: string): PasswordScriptAnalysis {
+  const val = password || '';
+  const length = val.length;
+  const minLengthOk = length >= 8;
+  const hasArabicLetters = /[\u0621-\u064A\u0671-\u06D3]/.test(val);
+  const hasArabicDigits = /[\u0660-\u0669\u06F0-\u06F9]/.test(val);
+  const hasEnglishLower = /[a-z]/.test(val);
+  const hasEnglishUpper = /[A-Z]/.test(val);
+  const hasEnglishDigits = /[0-9]/.test(val);
+  const hasSpaces = /\s/.test(val);
+  const hasSymbols = /[^a-zA-Z0-9\u0621-\u064A\u0671-\u06D3\u0660-\u0669\u06F0-\u06F9\s]/.test(val);
+
+  const hasEnglishLetters = hasEnglishLower || hasEnglishUpper;
+  const hasAnyArabic = hasArabicLetters || hasArabicDigits;
+
+  let scriptMode: PasswordScriptAnalysis['scriptMode'] = 'empty';
+  if (length === 0) {
+    scriptMode = 'empty';
+  } else if (hasAnyArabic && (hasEnglishLetters || hasEnglishDigits)) {
+    scriptMode = 'mixed';
+  } else if (hasAnyArabic) {
+    scriptMode = 'arabic';
+  } else if (hasEnglishLetters) {
+    scriptMode = 'english';
+  } else {
+    scriptMode = 'digits_symbols';
+  }
+
+  let varietyScore = 0;
+  if (hasEnglishLower || hasArabicLetters) varietyScore++;
+  if (hasEnglishUpper) varietyScore++;
+  if (hasEnglishDigits || hasArabicDigits) varietyScore++;
+  if (hasSymbols) varietyScore++;
+  if (length >= 10) varietyScore++;
+
+  let strength: PasswordScriptAnalysis['strength'] = 'weak';
+  let strengthLabel = 'ضعيفة';
+  if (minLengthOk && varietyScore >= 3) {
+    strength = 'strong';
+    strengthLabel = 'قوية ومحمية';
+  } else if (minLengthOk && varietyScore >= 2) {
+    strength = 'medium';
+    strengthLabel = 'متوسطة';
+  }
+
+  return {
+    length,
+    minLengthOk,
+    hasArabicLetters,
+    hasArabicDigits,
+    hasEnglishLower,
+    hasEnglishUpper,
+    hasEnglishDigits,
+    hasSymbols,
+    hasSpaces,
+    scriptMode,
+    strength,
+    strengthLabel,
+  };
+}
+

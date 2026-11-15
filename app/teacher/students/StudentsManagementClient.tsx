@@ -5,13 +5,25 @@ import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Search, Users, UserCheck, UserX, ShieldBan, Shield, ShieldCheck,
-  Key, MoreVertical, Check, MessageCircle, Phone, 
+  Key, KeyRound, MoreVertical, Check, MessageCircle, Phone, 
   Mail, MonitorSmartphone, Eye, EyeOff, Lock, Loader2,
   Trash2, AlertTriangle, Send, BookOpen, Award, CheckCircle2,
   RotateCcw, X, MessageSquare, AlertCircle, RefreshCw, ChevronDown,
-  Sparkles, ExternalLink, Plus
+  Sparkles, ExternalLink, Plus, Clock
 } from 'lucide-react';
-import { fetchStudents, updateStudentStatus, deleteStudent, resetStudentDeviceLock, createStudentByTeacher, StudentProfile } from '@/lib/studentService';
+import {
+  fetchStudents,
+  updateStudentStatus,
+  deleteStudent,
+  resetStudentDeviceLock,
+  createStudentByTeacher,
+  fetchPasswordResetRequests,
+  authorizeStudentPasswordResetByTeacher,
+  revokePasswordResetByTeacher,
+  StudentProfile,
+  PasswordResetRequestItem,
+} from '@/lib/studentService';
+import { useAuth } from '@/context/AuthContext';
 import { sendMessage } from '@/lib/messagingService';
 import { 
   fetchAllCourses, 
@@ -37,12 +49,18 @@ export type ManagedStudentProfile = StudentProfile & {
 };
 
 export default function StudentsManagementClient() {
+  const { currentRole } = useAuth();
+  const isTeacherUser = currentRole === 'teacher' || currentRole === 'super_admin';
+
   const [students, setStudents] = useState<ManagedStudentProfile[]>([]);
+  const [resetRequests, setResetRequests] = useState<PasswordResetRequestItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'banned'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'banned' | 'password_resets'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  
+  const [resetActionId, setResetActionId] = useState<string | null>(null);
+  const [resetFeedback, setResetFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
   // Delete Target & Modal State
   const [deleteTarget, setDeleteTarget] = useState<{
     ids: string[];
@@ -51,7 +69,7 @@ export default function StudentsManagementClient() {
   } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Master Key State
+  // Master Key State (Contact Email Unmasking Only — Passwords are Never Stored or Revealed)
   const [masterKey, setMasterKey] = useState('');
   const [isMasterKeyUnlocked, setIsMasterKeyUnlocked] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -93,12 +111,6 @@ export default function StudentsManagementClient() {
   const [isResettingDevice, setIsResettingDevice] = useState(false);
   const [resetSuccessMessage, setResetSuccessMessage] = useState('');
 
-  // Edit Student Password Modal State
-  const [editPasswordStudent, setEditPasswordStudent] = useState<ManagedStudentProfile | null>(null);
-  const [newPasswordInput, setNewPasswordInput] = useState('');
-  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
-  const [passwordUpdateMsg, setPasswordUpdateMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-
   // Add Student Modal State
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
   const [newStudentForm, setNewStudentForm] = useState({
@@ -121,11 +133,33 @@ export default function StudentsManagementClient() {
     setMasterKeyError('');
   };
 
+  const loadResetRequests = async () => {
+    if (!isTeacherUser) return;
+    const res = await fetchPasswordResetRequests();
+    if (res.success) {
+      setResetRequests(res.requests);
+    }
+  };
+
   const loadStudents = async () => {
     const data = await fetchStudents();
     setStudents(data);
+    if (isTeacherUser) {
+      await loadResetRequests();
+    }
     setIsLoading(false);
   };
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const tabParam = new URLSearchParams(window.location.search).get('tab');
+      if (tabParam === 'active' || tabParam === 'banned' || tabParam === 'pending') {
+        setActiveTab(tabParam);
+      } else if (tabParam === 'password_resets' && isTeacherUser) {
+        setActiveTab('password_resets');
+      }
+    }
+  }, [isTeacherUser]);
 
   useEffect(() => {
     let mounted = true;
@@ -135,8 +169,15 @@ export default function StudentsManagementClient() {
         setIsLoading(false);
       }
     });
+    if (isTeacherUser) {
+      fetchPasswordResetRequests().then(res => {
+        if (mounted && res.success) {
+          setResetRequests(res.requests);
+        }
+      });
+    }
     return () => { mounted = false; };
-  }, []);
+  }, [isTeacherUser]);
 
   // Load Academic Records when detailsTargetStudent changes
   useEffect(() => {
@@ -169,9 +210,23 @@ export default function StudentsManagementClient() {
   }, [detailsTargetStudent]);
 
   // Derived Data
-  const pendingStudents = students.filter(s => s.status === 'pending_review' && s.fullName?.includes(searchQuery));
-  const activeStudents = students.filter(s => s.status === 'active' && s.fullName?.includes(searchQuery));
-  const bannedStudents = students.filter(s => s.status === 'banned' && s.fullName?.includes(searchQuery));
+  const cleanSearch = searchQuery.trim().toLowerCase();
+  const matchesQuery = (s: ManagedStudentProfile) =>
+    !cleanSearch ||
+    s.fullName?.toLowerCase().includes(cleanSearch) ||
+    s.phone?.includes(cleanSearch) ||
+    s.email?.toLowerCase().includes(cleanSearch);
+
+  const pendingStudents = students.filter(s => s.status === 'pending_review' && matchesQuery(s));
+  const activeStudents = students.filter(s => s.status === 'active' && matchesQuery(s));
+  const bannedStudents = students.filter(s => s.status === 'banned' && matchesQuery(s));
+  const filteredResetRequests = resetRequests.filter(r =>
+    !cleanSearch ||
+    r.studentName?.toLowerCase().includes(cleanSearch) ||
+    r.studentEmail?.toLowerCase().includes(cleanSearch) ||
+    r.studentPhone?.includes(cleanSearch)
+  );
+  const pendingResetCount = resetRequests.filter(r => r.status === 'pending').length;
 
   // --- ACTIONS ---
   const toggleSelection = (id: string) => {
@@ -293,14 +348,14 @@ export default function StudentsManagementClient() {
     try {
       const { revealStudentPasswordsAction } = await import('@/app/actions/studentActions');
       const res = await revealStudentPasswordsAction(cleanKey);
-      if (!res.success || !res.vaultMap) {
+      if (!res.success || !res.emailMap) {
         setMasterKeyError(res.message || 'كلمة المرور الرئيسية غير صحيحة! يرجى إدخال المفتاح السري المعتمد.');
         return;
       }
 
       setStudents(prev => prev.map(s => ({
         ...s,
-        passwordVault: res.vaultMap[s.id] || s.passwordVault,
+        email: res.emailMap[s.id] || s.email,
       })));
 
       setIsMasterKeyUnlocked(true);
@@ -316,34 +371,40 @@ export default function StudentsManagementClient() {
     }
   };
 
-  const handleSaveNewPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editPasswordStudent || !newPasswordInput.trim()) return;
-    setIsUpdatingPassword(true);
-    setPasswordUpdateMsg(null);
+  const handleAuthorizePasswordReset = async (studentId: string, requestId?: string) => {
+    const actionKey = requestId || studentId;
+    setResetActionId(actionKey);
+    setResetFeedback(null);
     try {
-      const { updateStudentPasswordByTeacherAction } = await import('@/app/actions/studentActions');
-      const res = await updateStudentPasswordByTeacherAction(editPasswordStudent.id, newPasswordInput.trim());
+      const res = await authorizeStudentPasswordResetByTeacher(studentId, requestId);
       if (res.success) {
-        setPasswordUpdateMsg({ type: 'success', text: res.message || 'تم تحديث كلمة المرور بنجاح!' });
-        // Update local students list
-        setStudents(prev => prev.map(s => s.id === editPasswordStudent.id ? { 
-          ...s, 
-          passwordVault: newPasswordInput.trim(), 
-          passwordHash: newPasswordInput.trim() 
-        } : s));
-        setTimeout(() => {
-          setEditPasswordStudent(null);
-          setNewPasswordInput('');
-          setPasswordUpdateMsg(null);
-        }, 1500);
+        setResetFeedback({ type: 'success', text: res.message || 'تم منح الصلاحية للطالب بنجاح!' });
+        await loadResetRequests();
       } else {
-        setPasswordUpdateMsg({ type: 'error', text: res.message || 'حدث خطأ أثناء تحديث كلمة المرور' });
+        setResetFeedback({ type: 'error', text: res.message || 'تعذر منح الصلاحية' });
       }
     } catch (err: any) {
-      setPasswordUpdateMsg({ type: 'error', text: err.message || 'فشل التحديث' });
+      setResetFeedback({ type: 'error', text: err?.message || 'حدث خطأ غير متوقع' });
     } finally {
-      setIsUpdatingPassword(false);
+      setResetActionId(null);
+    }
+  };
+
+  const handleRevokePasswordReset = async (requestId: string, studentId: string) => {
+    setResetActionId(requestId);
+    setResetFeedback(null);
+    try {
+      const res = await revokePasswordResetByTeacher(requestId, studentId);
+      if (res.success) {
+        setResetFeedback({ type: 'success', text: res.message || 'تم إلغاء الإذن بنجاح' });
+        await loadResetRequests();
+      } else {
+        setResetFeedback({ type: 'error', text: res.message || 'تعذر تنفيذ العملية' });
+      }
+    } catch (err: any) {
+      setResetFeedback({ type: 'error', text: err?.message || 'حدث خطأ غير متوقع' });
+    } finally {
+      setResetActionId(null);
     }
   };
 
@@ -532,52 +593,23 @@ export default function StudentsManagementClient() {
           </div>
         </div>
 
-        {/* Sensitive Information Display */}
+        {/* Zero-Knowledge Security & Contact Box */}
         <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl flex flex-col justify-center gap-2 min-w-[240px] border border-slate-100 dark:border-slate-800">
           <div className="text-xs font-bold text-slate-400">البريد الإلكتروني:</div>
-          <div className="text-sm font-black text-slate-800 dark:text-slate-200 truncate">
-            {isMasterKeyUnlocked ? student.email : '••••••••••@•••.com'}
+          <div className="text-sm font-black text-slate-800 dark:text-slate-200 truncate" dir="ltr">
+            {isTeacherUser && isMasterKeyUnlocked ? student.email : '••••••••••@•••.com'}
           </div>
-          <div className="flex items-center justify-between text-xs font-bold text-slate-400 mt-2">
-            <span>كلمة المرور:</span>
-            {isMasterKeyUnlocked && (
-              <button 
-                onClick={() => {
-                  setEditPasswordStudent(student);
-                  setNewPasswordInput(student.passwordVault || '');
-                  setPasswordUpdateMsg(null);
-                }}
-                className="text-[10px] text-violet-600 dark:text-violet-400 font-bold hover:underline"
-              >
-                تعديل كلمة المرور
-              </button>
-            )}
+          <div className="text-xs font-bold text-slate-400 mt-2">أمان كلمة المرور:</div>
+          <div className="inline-flex items-center gap-1.5 text-xs font-black text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800/50">
+            <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
+            <span>مشفرة أحادياً (لا يمكن كشفها)</span>
           </div>
-          <div className="text-sm font-black text-slate-800 dark:text-slate-200 truncate">
-            {isMasterKeyUnlocked ? (
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-mono bg-white dark:bg-slate-900 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 text-xs">{student.passwordVault || '••••••'}</span>
-                <button 
-                  onClick={() => {
-                    setEditPasswordStudent(student);
-                    setNewPasswordInput(student.passwordVault || '');
-                    setPasswordUpdateMsg(null);
-                  }}
-                  className="px-2 py-0.5 bg-violet-600 hover:bg-violet-700 text-white rounded text-xs font-bold"
-                >
-                  تعديل
-                </button>
-              </div>
-            ) : (
-              '••••••••••'
-            )}
-          </div>
-          {!isMasterKeyUnlocked && (
+          {isTeacherUser && !isMasterKeyUnlocked && (
             <button 
               onClick={() => { refreshCaptcha(); setShowMasterKeyModal(true); }}
               className="mt-2 text-xs font-bold text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1"
             >
-              <Key className="w-3.5 h-3.5" /> كشف البيانات (Master Key)
+              <Key className="w-3.5 h-3.5" /> كشف البريد الإلكتروني (Master Key)
             </button>
           )}
         </div>
@@ -692,32 +724,17 @@ export default function StudentsManagementClient() {
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="font-bold text-slate-500">البريد الإلكتروني:</span>
-          {isMasterKeyUnlocked ? (
-            <span className="font-bold text-slate-900 dark:text-white">{student.email}</span>
+          {isTeacherUser && isMasterKeyUnlocked ? (
+            <span className="font-bold text-slate-900 dark:text-white truncate max-w-[200px]" dir="ltr">{student.email}</span>
           ) : (
-            <span className="text-slate-400">••••••••••@•••.com</span>
+            <span className="text-slate-400 font-mono text-xs" dir="ltr">{student.email}</span>
           )}
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="font-bold text-slate-500">كلمة المرور:</span>
-          {isMasterKeyUnlocked ? (
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-900 dark:text-white tracking-wider font-mono bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-xs" dir="ltr">{student.passwordVault || '••••••'}</span>
-              <button 
-                onClick={() => {
-                  setEditPasswordStudent(student);
-                  setNewPasswordInput(student.passwordVault || '');
-                  setPasswordUpdateMsg(null);
-                }}
-                className="px-2 py-1 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-xs font-bold transition-colors"
-                title="تعديل كلمة المرور"
-              >
-                تعديل
-              </button>
-            </div>
-          ) : (
-            <span className="text-slate-400">••••••••••</span>
-          )}
+          <span className="inline-flex items-center gap-1 text-xs font-black text-emerald-700 dark:text-emerald-400">
+            <ShieldCheck className="w-3.5 h-3.5" /> مشفرة أحادياً (سرية)
+          </span>
         </div>
 
         <div className="flex items-center justify-between text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -742,24 +759,25 @@ export default function StudentsManagementClient() {
           </div>
         )}
       </div>
-      
-      {!isMasterKeyUnlocked ? (
+
+      {isTeacherUser && !isMasterKeyUnlocked && (
         <button 
           onClick={() => { refreshCaptcha(); setShowMasterKeyModal(true); }} 
-          className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl font-bold text-sm transition-colors"
+          className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl font-bold text-xs transition-colors"
         >
-          <Lock className="w-4 h-4" /> كشف البيانات الحساسة (Master Key)
+          <Lock className="w-3.5 h-3.5" /> كشف البريد الإلكتروني الكامل (Master Key)
         </button>
-      ) : (
-        <button 
-          onClick={() => {
-            setEditPasswordStudent(student);
-            setNewPasswordInput(student.passwordVault || '');
-            setPasswordUpdateMsg(null);
-          }}
-          className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded-xl font-bold text-xs transition-colors"
+      )}
+
+      {isTeacherUser && (
+        <button
+          type="button"
+          onClick={() => handleAuthorizePasswordReset(student.id)}
+          disabled={resetActionId === student.id}
+          className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 border border-amber-200/70 dark:border-amber-800/50 rounded-xl font-bold text-xs transition-colors disabled:opacity-60"
         >
-          <Key className="w-3.5 h-3.5" /> تعديل كلمة المرور للطالب
+          {resetActionId === student.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
+          <span>السماح للطالب بإنشاء كلمة مرور جديدة</span>
         </button>
       )}
 
@@ -892,6 +910,27 @@ export default function StudentsManagementClient() {
         </div>
       </div>
 
+      {/* Feedback Toast Banner for Teacher Password Reset Actions */}
+      {resetFeedback && (
+        <div className={`p-4 rounded-2xl border text-xs sm:text-sm font-bold flex items-center justify-between gap-3 ${
+          resetFeedback.type === 'success'
+            ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300'
+            : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300'
+        }`}>
+          <div className="flex items-center gap-2">
+            {resetFeedback.type === 'success' ? <CheckCircle2 className="w-5 h-5 shrink-0" /> : <AlertTriangle className="w-5 h-5 shrink-0" />}
+            <span>{resetFeedback.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setResetFeedback(null)}
+            className="p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/10"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="flex p-1 bg-slate-200/50 dark:bg-slate-800/50 rounded-2xl w-fit flex-wrap gap-1">
         <button 
@@ -908,6 +947,22 @@ export default function StudentsManagementClient() {
           المقيدين بالفعل
           <span className="mr-2 inline-flex items-center justify-center bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400 text-xs px-2 py-0.5 rounded-full">{students.filter(s => s.status === 'active').length}</span>
         </button>
+        {isTeacherUser && (
+          <button 
+            onClick={() => { setActiveTab('password_resets'); setSelectedIds([]); loadResetRequests(); }}
+            className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all flex items-center gap-1.5 ${activeTab === 'password_resets' ? 'bg-white dark:bg-slate-700 text-amber-600 dark:text-amber-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+          >
+            <KeyRound className="w-4 h-4" />
+            <span>طلبات استعادة كلمة المرور</span>
+            <span className={`mr-1 inline-flex items-center justify-center text-xs px-2 py-0.5 rounded-full ${
+              pendingResetCount > 0
+                ? 'bg-amber-500 text-white font-black'
+                : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+            }`}>
+              {pendingResetCount}
+            </span>
+          </button>
+        )}
         <button 
           onClick={() => { setActiveTab('banned'); setSelectedIds([]); }}
           className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all ${activeTab === 'banned' ? 'bg-white dark:bg-slate-700 text-rose-600 dark:text-rose-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
@@ -989,6 +1044,183 @@ export default function StudentsManagementClient() {
               </div>
             )}
           </div>
+        ) : activeTab === 'password_resets' && isTeacherUser ? (
+          <div className="space-y-4">
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 dark:text-white text-sm">تصاريح استعادة كلمة المرور (حصرية للمعلم فقط)</h3>
+                  <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-0.5">
+                    كلمات مرور الطلاب مشفرة أحادياً؛ موافقتك هنا تمنح الطالب تصريحاً لمرة واحدة لإنشاء كلمة مرور جديدة وحذف القديمة نهائياً.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={loadResetRequests}
+                className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>تحديث القائمة</span>
+              </button>
+            </div>
+
+            {filteredResetRequests.length > 0 ? (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                {filteredResetRequests.map((req) => {
+                  const cleanWaPhone = (req.studentPhone || '').replace(/^0/, '');
+                  const waConfirmText = encodeURIComponent(
+                    `مرحباً ${req.studentName}، تمت موافقة مستر محمد رضوان على طلبك! يمكنك الآن الدخول إلى صفحة تسجيل الدخول على المنصة واختيار "نسيت كلمة المرور؟" ثم إدخال حسابك لإنشاء كلمة المرور الجديدة بنفسك.`
+                  );
+                  return (
+                    <motion.div
+                      layout
+                      key={req.id}
+                      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm flex flex-col justify-between gap-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Image
+                            width={48}
+                            height={48}
+                            src={req.avatarUrl || 'https://i.pravatar.cc/150'}
+                            alt={req.studentName}
+                            unoptimized
+                            className="w-12 h-12 rounded-2xl object-cover border border-slate-100 dark:border-slate-800 shrink-0"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="min-w-0">
+                            <h4 className="font-black text-slate-900 dark:text-white text-base truncate">{req.studentName}</h4>
+                            <p className="text-xs font-bold text-slate-400 mt-0.5">
+                              {req.stage === 'middle' ? 'الإعدادية' : 'الثانوية'} · الصف {req.grade}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Status with explicit icon + label */}
+                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-black shrink-0 ${
+                          req.status === 'pending'
+                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                            : req.status === 'approved'
+                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                            : req.status === 'completed'
+                            ? 'bg-violet-100 text-violet-800 dark:bg-violet-950/60 dark:text-violet-300'
+                            : 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                        }`}>
+                          {req.status === 'pending' && <Clock className="w-3.5 h-3.5" />}
+                          {req.status === 'approved' && <KeyRound className="w-3.5 h-3.5" />}
+                          {req.status === 'completed' && <CheckCircle2 className="w-3.5 h-3.5" />}
+                          {(req.status === 'rejected' || req.status === 'expired') && <X className="w-3.5 h-3.5" />}
+                          <span>
+                            {req.status === 'pending' && 'بانتظار السماح'}
+                            {req.status === 'approved' && 'مسموح بالتغيير الآن'}
+                            {req.status === 'completed' && 'تم التغيير وحذف القديمة'}
+                            {req.status === 'expired' && 'انتهت الصلاحية'}
+                            {req.status === 'rejected' && 'تم الإلغاء / الرفض'}
+                          </span>
+                        </span>
+                      </div>
+
+                      <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800 space-y-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-slate-500">البريد المستهدف:</span>
+                          <span className="font-mono font-black text-slate-900 dark:text-white select-all truncate" dir="ltr">
+                            {req.studentEmail}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-slate-500">رقم الهاتف:</span>
+                          <span className="font-mono font-bold text-slate-800 dark:text-slate-200" dir="ltr">{req.studentPhone}</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-slate-500">تطابق الجهاز:</span>
+                          <span className={`font-black inline-flex items-center gap-1 ${req.deviceMatch ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                            {req.deviceMatch ? <ShieldCheck className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                            {req.deviceMatch ? 'نفس الجهاز المسجل ✓' : 'طلب من جهاز مختلف / جديد'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400 font-bold">
+                          <span>تاريخ الطلب:</span>
+                          <span>{new Date(req.requestedAt).toLocaleString('ar-EG')}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {req.status === 'pending' && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleAuthorizePasswordReset(req.studentId, req.requestId)}
+                              disabled={resetActionId === req.requestId}
+                              className="flex-1 min-h-[42px] px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors disabled:opacity-60"
+                            >
+                              {resetActionId === req.requestId ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
+                              <span>السماح لهذا الإيميل بتغيير كلمة المرور</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRevokePasswordReset(req.requestId, req.studentId)}
+                              disabled={resetActionId === req.requestId}
+                              className="min-h-[42px] px-3.5 py-2.5 bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400 hover:bg-rose-100 rounded-xl font-bold text-xs transition-colors"
+                            >
+                              رفض
+                            </button>
+                          </>
+                        )}
+
+                        {req.status === 'approved' && (
+                          <button
+                            type="button"
+                            onClick={() => handleRevokePasswordReset(req.requestId, req.studentId)}
+                            disabled={resetActionId === req.requestId}
+                            className="flex-1 min-h-[42px] px-4 py-2.5 bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 hover:bg-rose-100 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                            <span>إلغاء الإذن قبل التنفيذ</span>
+                          </button>
+                        )}
+
+                        {(req.status === 'completed' || req.status === 'expired' || req.status === 'rejected') && (
+                          <button
+                            type="button"
+                            onClick={() => handleAuthorizePasswordReset(req.studentId)}
+                            disabled={resetActionId === req.studentId}
+                            className="flex-1 min-h-[42px] px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <KeyRound className="w-4 h-4" />
+                            <span>منح إذن تغيير جديد</span>
+                          </button>
+                        )}
+
+                        {cleanWaPhone && (
+                          <a
+                            href={`https://wa.me/20${cleanWaPhone}?text=${waConfirmText}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="min-h-[42px] px-3.5 py-2.5 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 hover:bg-emerald-100 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors"
+                          >
+                            <MessageCircle className="w-4 h-4" />
+                            <span>إبلاغ الطالب واتساب</span>
+                          </a>
+                        )}
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-center py-20 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800">
+                <KeyRound className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-4" />
+                <h3 className="text-lg font-black text-slate-500 dark:text-slate-400">لا توجد طلبات استعادة كلمة مرور حالياً</h3>
+                <p className="text-xs text-slate-400 font-bold mt-1">
+                  عندما يطلب أي طالب استعادة كلمة المرور عبر صفحة الدخول سيظهر طلبه هنا فوراً لمنحه الإذن.
+                </p>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
             {bannedStudents.length > 0 ? (
@@ -1019,7 +1251,7 @@ export default function StudentsManagementClient() {
               </div>
               <h2 className="text-2xl font-black text-center text-slate-900 dark:text-white mb-2">كلمة المرور الأمنية (Master Key)</h2>
               <p className="text-center text-slate-500 dark:text-slate-400 text-xs font-bold mb-6">
-                أدخل المفتاح السري المعتمد واجتز اختبار كتابة الرقم للتأكد من هوية المعلم وحماية خصوصية الطلاب.
+                أدخل المفتاح السري المعتمد واجتز اختبار كتابة الرقم لكشف البريد الإلكتروني الكامل للطلاب (تظل كلمات المرور مشفرة أحادياً ولا تظهر لأحد).
               </p>
               
               <form onSubmit={handleUnlockMasterKey} className="space-y-4">
@@ -1734,7 +1966,7 @@ export default function StudentsManagementClient() {
                     <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-emerald-300 dark:border-emerald-800/80 space-y-1.5 font-mono text-xs">
                       <div><span className="font-sans text-slate-500">الاسم:</span> <span className="font-bold text-slate-900 dark:text-white">{createdStudentSuccess.full_name}</span></div>
                       <div><span className="font-sans text-slate-500">البريد:</span> <span className="font-bold text-slate-900 dark:text-white" dir="ltr">{createdStudentSuccess.email}</span></div>
-                      <div><span className="font-sans text-slate-500">كلمة المرور:</span> <span className="font-bold text-slate-900 dark:text-white" dir="ltr">{createdStudentSuccess.encrypted_password_vault}</span></div>
+                      <div><span className="font-sans text-slate-500">كلمة المرور:</span> <span className="font-bold text-emerald-600 dark:text-emerald-400">مشفرة أحادياً بنجاح ✓ (سلمها للطالب كما أدخلتها)</span></div>
                       <div><span className="font-sans text-slate-500">الهاتف:</span> <span className="font-bold text-slate-900 dark:text-white" dir="ltr">{createdStudentSuccess.phone}</span></div>
                     </div>
                   </div>
@@ -1877,101 +2109,6 @@ export default function StudentsManagementClient() {
                   </div>
                 </form>
               )}
-            </motion.div>
-          </div>
-        )}
-
-        {/* Edit Student Password Modal */}
-        {editPasswordStudent && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm" dir="rtl">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl relative"
-            >
-              <button
-                onClick={() => setEditPasswordStudent(null)}
-                className="absolute top-5 left-5 p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl"
-              >
-                <X className="w-5 h-5" />
-              </button>
-
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-500/20">
-                  <Key className="w-6 h-6" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-black text-slate-900 dark:text-white">تعديل كلمة مرور الطالب</h2>
-                  <p className="text-xs text-slate-400 font-bold">{editPasswordStudent.fullName}</p>
-                </div>
-              </div>
-
-              <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200/60 dark:border-slate-700/60 mb-6 text-xs space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-bold">الهاتف:</span>
-                  <span className="font-mono font-bold text-slate-900 dark:text-white" dir="ltr">{editPasswordStudent.phone}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-bold">البريد:</span>
-                  <span className="font-mono font-bold text-slate-900 dark:text-white truncate max-w-[200px]" dir="ltr">{editPasswordStudent.email}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-bold">كلمة المرور الحالية:</span>
-                  <span className="font-mono font-black text-violet-600 dark:text-violet-400" dir="ltr">{editPasswordStudent.passwordVault || 'غير مسجلة'}</span>
-                </div>
-              </div>
-
-              <form onSubmit={handleSaveNewPassword} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
-                    كلمة المرور الجديدة للطالب:
-                  </label>
-                  <input
-                    type="text"
-                    dir="ltr"
-                    value={newPasswordInput}
-                    onChange={(e) => setNewPasswordInput(e.target.value)}
-                    placeholder="أدخل كلمة المرور الجديدة (مثال: 12345678)"
-                    className="w-full px-4 py-3 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-violet-500 text-left"
-                    required
-                  />
-                </div>
-
-                {passwordUpdateMsg && (
-                  <div className={`p-3 rounded-xl text-xs font-bold text-center ${
-                    passwordUpdateMsg.type === 'success' 
-                      ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
-                      : 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400 border border-rose-200 dark:border-rose-800'
-                  }`}>
-                    {passwordUpdateMsg.text}
-                  </div>
-                )}
-
-                <div className="flex items-center gap-3 pt-2">
-                  <button
-                    type="submit"
-                    disabled={isUpdatingPassword || !newPasswordInput.trim()}
-                    className="flex-1 py-3 bg-violet-600 hover:bg-violet-700 text-white rounded-2xl font-black text-sm transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    {isUpdatingPassword ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <>
-                        <Check className="w-4 h-4" />
-                        <span>حفظ وتحديث فوراً</span>
-                      </>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditPasswordStudent(null)}
-                    className="px-5 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-2xl font-bold text-sm transition-colors"
-                  >
-                    إلغاء
-                  </button>
-                </div>
-              </form>
             </motion.div>
           </div>
         )}
