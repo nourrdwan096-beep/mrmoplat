@@ -51,6 +51,7 @@ export default function LoginPage() {
   const [resetChecking, setResetChecking] = useState(false);
   const [resetError, setResetError] = useState('');
   const [resetNotice, setResetNotice] = useState('');
+  const [bgImageError, setBgImageError] = useState(false);
 
   // Check URL ?mode=forgot cleanly on client mount
   useEffect(() => {
@@ -244,6 +245,8 @@ export default function LoginPage() {
       setResetInfo(prev => ({ ...prev, email: res.email || prev?.email }));
       setNewPassword('');
       setConfirmPassword('');
+      setResetError('');
+      setResetNotice('');
       setForgotStep('completed');
     } catch (err: any) {
       setResetError(err?.message || 'حدث خطأ غير متوقع أثناء التحديث');
@@ -1011,18 +1014,18 @@ export default function LoginPage() {
 
       {/* Left Side: Fixed Image Area */}
       <div className="hidden lg:block lg:w-1/2 relative bg-[#0b1021] border-r border-slate-200 dark:border-slate-800 overflow-hidden">
-        <Image
-          src="/login-image.png?v=1"
-          alt="Login Background"
-          fill
-          sizes="50vw"
-          className="object-cover object-center"
-          priority
-          unoptimized
-          onError={(e) => {
-            e.currentTarget.style.display = 'none';
-          }}
-        />
+        {!bgImageError && (
+          <Image
+            src="/login-image.png?v=1"
+            alt="Login Background"
+            fill
+            sizes="50vw"
+            className="object-cover object-center"
+            priority
+            unoptimized
+            onError={() => setBgImageError(true)}
+          />
+        )}
         <div className="absolute inset-0 bg-gradient-to-br from-[#0f172a] to-[#1e1b4b] -z-10 flex flex-col items-center justify-center p-12 text-center">
           <div className="w-24 h-24 bg-white/5 rounded-full flex items-center justify-center mb-6">
             <LogIn className="w-12 h-12 text-white/20" />

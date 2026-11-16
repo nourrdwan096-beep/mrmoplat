@@ -20,6 +20,8 @@ import {
   fetchPasswordResetRequests,
   authorizeStudentPasswordResetByTeacher,
   revokePasswordResetByTeacher,
+  bulkAuthorizePasswordResetByTeacher,
+  bulkRevokePasswordResetByTeacher,
   StudentProfile,
   PasswordResetRequestItem,
 } from '@/lib/studentService';
@@ -58,6 +60,10 @@ export default function StudentsManagementClient() {
   const [activeTab, setActiveTab] = useState<'pending' | 'active' | 'banned' | 'password_resets'>('pending');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isBulkStudentLoading, setIsBulkStudentLoading] = useState(false);
+  const [selectedResetIds, setSelectedResetIds] = useState<string[]>([]);
+  const [isBulkResetProcessing, setIsBulkResetProcessing] = useState(false);
+  const [resetFilter, setResetFilter] = useState<'all' | 'pending' | 'approved' | 'history'>('all');
   const [resetActionId, setResetActionId] = useState<string | null>(null);
   const [resetFeedback, setResetFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -71,15 +77,10 @@ export default function StudentsManagementClient() {
 
   // Master Key State (Contact Email Unmasking Only — Passwords are Never Stored or Revealed)
   const [masterKey, setMasterKey] = useState('');
-  const [isMasterKeyUnlocked, setIsMasterKeyUnlocked] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return sessionStorage.getItem('mr_radwan_master_unlocked') === 'true';
-    }
-    return false;
-  });
+  const [isMasterKeyUnlocked, setIsMasterKeyUnlocked] = useState(false);
   const [showMasterKeyModal, setShowMasterKeyModal] = useState(false);
   const [masterKeyError, setMasterKeyError] = useState('');
-  const [captchaCode, setCaptchaCode] = useState(() => Math.floor(1000 + Math.random() * 9000).toString());
+  const [captchaCode, setCaptchaCode] = useState('1000');
   const [enteredCaptcha, setEnteredCaptcha] = useState('');
 
   // Quick Messaging State
@@ -152,6 +153,10 @@ export default function StudentsManagementClient() {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
+      if (sessionStorage.getItem('mr_radwan_master_unlocked') === 'true') {
+        setIsMasterKeyUnlocked(true);
+      }
+      setCaptchaCode(Math.floor(1000 + Math.random() * 9000).toString());
       const tabParam = new URLSearchParams(window.location.search).get('tab');
       if (tabParam === 'active' || tabParam === 'banned' || tabParam === 'pending') {
         setActiveTab(tabParam);
@@ -220,13 +225,21 @@ export default function StudentsManagementClient() {
   const pendingStudents = students.filter(s => s.status === 'pending_review' && matchesQuery(s));
   const activeStudents = students.filter(s => s.status === 'active' && matchesQuery(s));
   const bannedStudents = students.filter(s => s.status === 'banned' && matchesQuery(s));
-  const filteredResetRequests = resetRequests.filter(r =>
-    !cleanSearch ||
-    r.studentName?.toLowerCase().includes(cleanSearch) ||
-    r.studentEmail?.toLowerCase().includes(cleanSearch) ||
-    r.studentPhone?.includes(cleanSearch)
-  );
-  const pendingResetCount = resetRequests.filter(r => r.status === 'pending').length;
+  const filteredResetRequests = resetRequests.filter(r => {
+    const matchesText =
+      !cleanSearch ||
+      r.studentName?.toLowerCase().includes(cleanSearch) ||
+      r.studentEmail?.toLowerCase().includes(cleanSearch) ||
+      r.studentPhone?.includes(cleanSearch);
+    if (!matchesText) return false;
+    if (resetFilter === 'pending') return r.status === 'pending';
+    if (resetFilter === 'approved') return r.status === 'approved';
+    if (resetFilter === 'history') return r.status === 'completed' || r.status === 'expired' || r.status === 'rejected';
+    return true;
+  });
+  const pendingResetRequests = resetRequests.filter(r => r.status === 'pending');
+  const pendingResetCount = pendingResetRequests.length;
+  const approvedResetCount = resetRequests.filter(r => r.status === 'approved').length;
 
   // --- ACTIONS ---
   const toggleSelection = (id: string) => {
@@ -241,23 +254,64 @@ export default function StudentsManagementClient() {
     }
   };
 
-  const handleAction = async (ids: string[], action: 'accept' | 'accept_otp' | 'reject' | 'ban', otpValue?: string, reason?: string) => {
-    for (const id of ids) {
-      if (action === 'accept') {
-        await updateStudentStatus(id, 'active');
-      } else if (action === 'accept_otp') {
-        const otp = otpValue || Math.floor(1000 + Math.random() * 9000).toString();
-        await updateStudentStatus(id, 'pending_review', otp);
-      } else if (action === 'reject') {
-        await updateStudentStatus(id, 'rejected');
-      } else if (action === 'ban') {
-        await updateStudentStatus(id, 'banned', undefined, reason || 'حظر من قبل المعلم');
-      }
-    }
+  const toggleResetSelection = (id: string) => {
+    setSelectedResetIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
 
-    // Refresh after actions
-    await loadStudents();
-    setSelectedIds([]);
+  const selectAllVisibleResets = () => {
+    if (filteredResetRequests.length === 0) return;
+    if (selectedResetIds.length === filteredResetRequests.length) {
+      setSelectedResetIds([]);
+    } else {
+      setSelectedResetIds(filteredResetRequests.map(r => r.id));
+    }
+  };
+
+  const selectAllPendingResets = () => {
+    const visiblePending = filteredResetRequests.filter(r => r.status === 'pending');
+    if (visiblePending.length === 0) return;
+    const allPendingSelected = visiblePending.every(r => selectedResetIds.includes(r.id));
+    if (allPendingSelected) {
+      setSelectedResetIds([]);
+    } else {
+      setSelectedResetIds(visiblePending.map(r => r.id));
+    }
+  };
+
+  const handleAction = async (ids: string[], action: 'accept' | 'accept_otp' | 'reject' | 'ban', otpValue?: string, reason?: string) => {
+    if (ids.length === 0 || isBulkStudentLoading) return;
+    setIsBulkStudentLoading(true);
+    try {
+      for (const id of ids) {
+        if (action === 'accept') {
+          await updateStudentStatus(id, 'active');
+        } else if (action === 'accept_otp') {
+          const otp = otpValue || Math.floor(1000 + Math.random() * 9000).toString();
+          await updateStudentStatus(id, 'pending_review', otp);
+        } else if (action === 'reject') {
+          await updateStudentStatus(id, 'rejected');
+        } else if (action === 'ban') {
+          await updateStudentStatus(id, 'banned', undefined, reason || 'حظر من قبل المعلم');
+        }
+      }
+
+      // Refresh after actions
+      await loadStudents();
+      setSelectedIds([]);
+      if (ids.length > 1) {
+        setResetFeedback({
+          type: 'success',
+          text:
+            action === 'accept'
+              ? `تمت الموافقة الجماعية وتفعيل حسابات (${ids.length}) طالب بنجاح.`
+              : action === 'reject'
+              ? `تم رفض (${ids.length}) طلب بنجاح.`
+              : `تم تنفيذ الإجراء لـ (${ids.length}) طالب بنجاح.`,
+        });
+      }
+    } finally {
+      setIsBulkStudentLoading(false);
+    }
   };
 
   const confirmDeleteSingle = (id: string, name: string) => {
@@ -379,6 +433,12 @@ export default function StudentsManagementClient() {
       const res = await authorizeStudentPasswordResetByTeacher(studentId, requestId);
       if (res.success) {
         setResetFeedback({ type: 'success', text: res.message || 'تم منح الصلاحية للطالب بنجاح!' });
+        setSelectedResetIds(prev =>
+          prev.filter(id => {
+            const matched = resetRequests.find(r => r.id === id);
+            return matched ? matched.studentId !== studentId : id !== requestId;
+          })
+        );
         await loadResetRequests();
       } else {
         setResetFeedback({ type: 'error', text: res.message || 'تعذر منح الصلاحية' });
@@ -397,6 +457,12 @@ export default function StudentsManagementClient() {
       const res = await revokePasswordResetByTeacher(requestId, studentId);
       if (res.success) {
         setResetFeedback({ type: 'success', text: res.message || 'تم إلغاء الإذن بنجاح' });
+        setSelectedResetIds(prev =>
+          prev.filter(id => {
+            const matched = resetRequests.find(r => r.id === id);
+            return matched ? matched.studentId !== studentId : id !== requestId;
+          })
+        );
         await loadResetRequests();
       } else {
         setResetFeedback({ type: 'error', text: res.message || 'تعذر تنفيذ العملية' });
@@ -405,6 +471,66 @@ export default function StudentsManagementClient() {
       setResetFeedback({ type: 'error', text: err?.message || 'حدث خطأ غير متوقع' });
     } finally {
       setResetActionId(null);
+    }
+  };
+
+  const handleBulkAuthorizeResets = async (itemsToApprove?: PasswordResetRequestItem[]) => {
+    const sourceItems =
+      itemsToApprove ||
+      resetRequests.filter(r => selectedResetIds.includes(r.id));
+
+    if (sourceItems.length === 0) return;
+
+    setIsBulkResetProcessing(true);
+    setResetFeedback(null);
+    try {
+      const targets = sourceItems.map(r => ({
+        studentId: r.studentId,
+        requestId: r.status === 'pending' ? r.requestId : undefined,
+      }));
+      const res = await bulkAuthorizePasswordResetByTeacher(targets);
+      if (res.success) {
+        setResetFeedback({ type: 'success', text: res.message });
+        setSelectedResetIds([]);
+        await loadResetRequests();
+      } else {
+        setResetFeedback({ type: 'error', text: res.message });
+      }
+    } catch (err: any) {
+      setResetFeedback({ type: 'error', text: err?.message || 'حدث خطأ أثناء التنفيذ الجماعي' });
+    } finally {
+      setIsBulkResetProcessing(false);
+    }
+  };
+
+  const handleBulkRevokeResets = async () => {
+    const selectedItems = resetRequests.filter(
+      r => selectedResetIds.includes(r.id) && (r.status === 'pending' || r.status === 'approved')
+    );
+    if (selectedItems.length === 0) {
+      setResetFeedback({ type: 'error', text: 'الطلبات المحددة مكتملة أو منتهية بالفعل ولا تتطلب إلغاء.' });
+      return;
+    }
+
+    setIsBulkResetProcessing(true);
+    setResetFeedback(null);
+    try {
+      const targets = selectedItems.map(r => ({
+        studentId: r.studentId,
+        requestId: r.requestId,
+      }));
+      const res = await bulkRevokePasswordResetByTeacher(targets);
+      if (res.success) {
+        setResetFeedback({ type: 'success', text: res.message });
+        setSelectedResetIds([]);
+        await loadResetRequests();
+      } else {
+        setResetFeedback({ type: 'error', text: res.message });
+      }
+    } catch (err: any) {
+      setResetFeedback({ type: 'error', text: err?.message || 'حدث خطأ أثناء الإلغاء الجماعي' });
+    } finally {
+      setIsBulkResetProcessing(false);
     }
   };
 
@@ -995,16 +1121,33 @@ export default function StudentsManagementClient() {
                   <span className="font-bold text-slate-900 dark:text-white text-sm">طالب تم تحديدهم</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={() => handleAction(selectedIds, 'accept')} className="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-colors">
-                    موافقة جماعية
+                  <button
+                    disabled={isBulkStudentLoading}
+                    onClick={() => handleAction(selectedIds, 'accept')}
+                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-colors disabled:opacity-60 flex items-center gap-1"
+                  >
+                    {isBulkStudentLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    <span>موافقة جماعية</span>
                   </button>
-                  <button onClick={() => handleAction(selectedIds, 'accept_otp')} className="px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-bold hover:bg-violet-700 transition-colors">
+                  <button
+                    disabled={isBulkStudentLoading}
+                    onClick={() => handleAction(selectedIds, 'accept_otp')}
+                    className="px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-bold hover:bg-violet-700 transition-colors disabled:opacity-60"
+                  >
                     تأكيد برقم سري موحد
                   </button>
-                  <button onClick={() => handleAction(selectedIds, 'reject')} className="px-3 py-1.5 bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 rounded-xl text-xs font-bold hover:bg-rose-200 transition-colors">
+                  <button
+                    disabled={isBulkStudentLoading}
+                    onClick={() => handleAction(selectedIds, 'reject')}
+                    className="px-3 py-1.5 bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 rounded-xl text-xs font-bold hover:bg-rose-200 transition-colors disabled:opacity-60"
+                  >
                     رفض المحدد
                   </button>
-                  <button onClick={() => confirmDeleteBulk(selectedIds)} className="px-3 py-1.5 bg-rose-600 text-white rounded-xl text-xs font-bold hover:bg-rose-700 transition-colors flex items-center gap-1">
+                  <button
+                    disabled={isBulkStudentLoading}
+                    onClick={() => confirmDeleteBulk(selectedIds)}
+                    className="px-3 py-1.5 bg-rose-600 text-white rounded-xl text-xs font-bold hover:bg-rose-700 transition-colors flex items-center gap-1 disabled:opacity-60"
+                  >
                     <Trash2 className="w-3.5 h-3.5" /> حذف وفك قيد
                   </button>
                 </div>
@@ -1054,19 +1197,141 @@ export default function StudentsManagementClient() {
                 <div>
                   <h3 className="font-black text-slate-900 dark:text-white text-sm">تصاريح استعادة كلمة المرور (حصرية للمعلم فقط)</h3>
                   <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-0.5">
-                    كلمات مرور الطلاب مشفرة أحادياً؛ موافقتك هنا تمنح الطالب تصريحاً لمرة واحدة لإنشاء كلمة مرور جديدة وحذف القديمة نهائياً.
+                    كلمات مرور الطلاب مشفرة أحادياً؛ يمكنك قبول طلب واحد بعينه، أو تحديد مجموعة معينة، أو تحديد الكل دفعة واحدة.
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={loadResetRequests}
-                className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>تحديث القائمة</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                {pendingResetCount > 0 && (
+                  <button
+                    type="button"
+                    disabled={isBulkResetProcessing}
+                    onClick={() => handleBulkAuthorizeResets(pendingResetRequests)}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-60"
+                  >
+                    {isBulkResetProcessing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                    <span>موافقة على كل المنتظرين ({pendingResetCount})</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={loadResetRequests}
+                  className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>تحديث القائمة</span>
+                </button>
+              </div>
             </div>
+
+            {/* Filter Pills & Bulk Selection Bar */}
+            {resetRequests.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 px-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setResetFilter('all'); setSelectedResetIds([]); }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-colors ${resetFilter === 'all' ? 'bg-violet-600 text-white' : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300'}`}
+                  >
+                    الكل ({resetRequests.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setResetFilter('pending'); setSelectedResetIds([]); }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-colors ${resetFilter === 'pending' ? 'bg-amber-600 text-white' : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300'}`}
+                  >
+                    بانتظار السماح ({pendingResetCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setResetFilter('approved'); setSelectedResetIds([]); }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-colors ${resetFilter === 'approved' ? 'bg-emerald-600 text-white' : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300'}`}
+                  >
+                    مسموح حالياً ({approvedResetCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setResetFilter('history'); setSelectedResetIds([]); }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-colors ${resetFilter === 'history' ? 'bg-slate-700 text-white' : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300'}`}
+                  >
+                    السجل السابق
+                  </button>
+                </div>
+
+                {filteredResetRequests.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    {filteredResetRequests.some(r => r.status === 'pending') && (
+                      <button
+                        type="button"
+                        onClick={selectAllPendingResets}
+                        className="px-3 py-1.5 rounded-xl text-xs font-black bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60 hover:bg-amber-100 transition-colors"
+                      >
+                        {filteredResetRequests.filter(r => r.status === 'pending').every(r => selectedResetIds.includes(r.id))
+                          ? 'إلغاء تحديد المنتظرين'
+                          : `تحديد كل المنتظرين (${filteredResetRequests.filter(r => r.status === 'pending').length})`}
+                      </button>
+                    )}
+
+                    <label className="inline-flex items-center gap-2 cursor-pointer select-none px-2 py-1">
+                      <input
+                        type="checkbox"
+                        checked={selectedResetIds.length === filteredResetRequests.length && filteredResetRequests.length > 0}
+                        onChange={selectAllVisibleResets}
+                        className="w-5 h-5 rounded-md border-slate-300 text-violet-600 focus:ring-violet-500"
+                      />
+                      <span className="font-bold text-slate-600 dark:text-slate-300 text-xs sm:text-sm">
+                        تحديد الكل ({filteredResetRequests.length})
+                      </span>
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Floating / Sticky Bulk Action Bar for Selected Password Reset Requests */}
+            {selectedResetIds.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-violet-50 dark:bg-violet-950/40 border border-violet-200 dark:border-violet-800/60 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-4"
+              >
+                <div className="flex items-center gap-2.5">
+                  <span className="w-7 h-7 rounded-full bg-violet-600 text-white flex items-center justify-center text-xs font-black">
+                    {selectedResetIds.length}
+                  </span>
+                  <span className="font-black text-slate-900 dark:text-white text-sm">
+                    طلب محدد (جاهز للتنفيذ الجماعي)
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isBulkResetProcessing}
+                    onClick={() => handleBulkAuthorizeResets()}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-60"
+                  >
+                    {isBulkResetProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                    <span>موافقة على المحددين ({selectedResetIds.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBulkResetProcessing}
+                    onClick={handleBulkRevokeResets}
+                    className="px-3.5 py-2 bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 hover:bg-rose-200 rounded-xl text-xs font-bold transition-colors disabled:opacity-60"
+                  >
+                    رفض / إلغاء المحددين
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isBulkResetProcessing}
+                    onClick={() => setSelectedResetIds([])}
+                    className="px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-50 transition-colors"
+                  >
+                    إلغاء التحديد
+                  </button>
+                </div>
+              </motion.div>
+            )}
 
             {filteredResetRequests.length > 0 ? (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -1075,14 +1340,26 @@ export default function StudentsManagementClient() {
                   const waConfirmText = encodeURIComponent(
                     `مرحباً ${req.studentName}، تمت موافقة مستر محمد رضوان على طلبك! يمكنك الآن الدخول إلى صفحة تسجيل الدخول على المنصة واختيار "نسيت كلمة المرور؟" ثم إدخال حسابك لإنشاء كلمة المرور الجديدة بنفسك.`
                   );
+                  const isSelected = selectedResetIds.includes(req.id);
                   return (
                     <motion.div
                       layout
                       key={req.id}
-                      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm flex flex-col justify-between gap-4"
+                      className={`bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm flex flex-col justify-between gap-4 border transition-all ${
+                        isSelected
+                          ? 'border-violet-500 ring-2 ring-violet-500/20'
+                          : 'border-slate-200 dark:border-slate-800'
+                      }`}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-3 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleResetSelection(req.id)}
+                            aria-label={`تحديد طلب ${req.studentName}`}
+                            className="w-5 h-5 rounded-md border-slate-300 text-violet-600 focus:ring-violet-500 shrink-0 cursor-pointer"
+                          />
                           <Image
                             width={48}
                             height={48}
@@ -1154,7 +1431,7 @@ export default function StudentsManagementClient() {
                             <button
                               type="button"
                               onClick={() => handleAuthorizePasswordReset(req.studentId, req.requestId)}
-                              disabled={resetActionId === req.requestId}
+                              disabled={resetActionId === req.requestId || isBulkResetProcessing}
                               className="flex-1 min-h-[42px] px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow-sm transition-colors disabled:opacity-60"
                             >
                               {resetActionId === req.requestId ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
@@ -1163,7 +1440,7 @@ export default function StudentsManagementClient() {
                             <button
                               type="button"
                               onClick={() => handleRevokePasswordReset(req.requestId, req.studentId)}
-                              disabled={resetActionId === req.requestId}
+                              disabled={resetActionId === req.requestId || isBulkResetProcessing}
                               className="min-h-[42px] px-3.5 py-2.5 bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400 hover:bg-rose-100 rounded-xl font-bold text-xs transition-colors"
                             >
                               رفض
@@ -1175,7 +1452,7 @@ export default function StudentsManagementClient() {
                           <button
                             type="button"
                             onClick={() => handleRevokePasswordReset(req.requestId, req.studentId)}
-                            disabled={resetActionId === req.requestId}
+                            disabled={resetActionId === req.requestId || isBulkResetProcessing}
                             className="flex-1 min-h-[42px] px-4 py-2.5 bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 hover:bg-rose-100 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
                           >
                             <X className="w-4 h-4" />
@@ -1187,7 +1464,7 @@ export default function StudentsManagementClient() {
                           <button
                             type="button"
                             onClick={() => handleAuthorizePasswordReset(req.studentId)}
-                            disabled={resetActionId === req.studentId}
+                            disabled={resetActionId === req.studentId || isBulkResetProcessing}
                             className="flex-1 min-h-[42px] px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors"
                           >
                             <KeyRound className="w-4 h-4" />

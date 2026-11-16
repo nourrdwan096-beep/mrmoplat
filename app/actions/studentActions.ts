@@ -2101,7 +2101,7 @@ export async function requestOrCheckPasswordResetAction(params: {
       .eq('target_entity', 'password_reset')
       .eq('target_id', student.id)
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(50);
 
     const nowMs = Date.now();
     const activeApproved = (logs || []).find((row: any) => {
@@ -2301,7 +2301,7 @@ export async function completeStudentPasswordResetAction(params: {
       .eq('target_entity', 'password_reset')
       .eq('target_id', student.id)
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(50);
 
     const nowMs = Date.now();
     const approvedRow = (logs || []).find((row: any) => {
@@ -2319,6 +2319,14 @@ export async function completeStudentPasswordResetAction(params: {
     }
 
     const hashedPassword = await hashPasswordSecure(cleanPass);
+    const verifiedSelfCheck = await verifyPasswordSecure(cleanPass, hashedPassword);
+    if (!verifiedSelfCheck) {
+      return {
+        success: false,
+        message: 'تعذر التحقق من تشفير كلمة المرور الجديدة. يرجى إعادة المحاولة.',
+      };
+    }
+
     const nowIso = new Date().toISOString();
 
     const { error: updateErr } = await supabaseAdmin
@@ -2429,7 +2437,7 @@ export async function fetchPasswordResetRequestsAction(): Promise<{
       .select('id, actor_id, actor_name, action_type, target_id, details, created_at')
       .eq('target_entity', 'password_reset')
       .order('created_at', { ascending: false })
-      .limit(120);
+      .limit(250);
 
     if (error) {
       return { success: false, requests: [], message: error.message };
@@ -2651,7 +2659,7 @@ export async function revokePasswordResetByTeacherAction(requestId: string, stud
       .eq('target_entity', 'password_reset')
       .eq('target_id', cleanStudentId)
       .order('created_at', { ascending: false })
-      .limit(20);
+      .limit(50);
 
     const nowIso = new Date().toISOString();
     for (const row of logs || []) {
@@ -2676,5 +2684,118 @@ export async function revokePasswordResetByTeacherAction(requestId: string, stud
     return { success: true, message: 'تم إلغاء / رفض إذن تغيير كلمة المرور لهذا الحساب.' };
   } catch (err: any) {
     return { success: false, message: err.message || 'حدث خطأ أثناء الإلغاء' };
+  }
+}
+
+export async function bulkAuthorizePasswordResetByTeacherAction(
+  targets: Array<{ studentId: string; requestId?: string }>
+): Promise<{
+  success: boolean;
+  approvedCount: number;
+  failedCount: number;
+  message: string;
+}> {
+  try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return {
+        success: false,
+        approvedCount: 0,
+        failedCount: targets.length,
+        message: 'هذه الصلاحية الحساسة حصرية للمعلم (مستر محمد رضوان) فقط.',
+      };
+    }
+
+    const uniqueTargetsMap = new Map<string, { studentId: string; requestId?: string }>();
+    for (const t of targets || []) {
+      const sid = (t?.studentId || '').trim();
+      if (sid && !uniqueTargetsMap.has(sid)) {
+        uniqueTargetsMap.set(sid, { studentId: sid, requestId: t.requestId });
+      }
+    }
+
+    const uniqueTargets = Array.from(uniqueTargetsMap.values());
+    if (uniqueTargets.length === 0) {
+      return {
+        success: false,
+        approvedCount: 0,
+        failedCount: 0,
+        message: 'لم يتم تحديد أي طلبات صالحة.',
+      };
+    }
+
+    let approvedCount = 0;
+    let failedCount = 0;
+
+    for (const target of uniqueTargets) {
+      const res = await authorizeStudentPasswordResetByTeacherAction(target.studentId, target.requestId);
+      if (res.success) {
+        approvedCount += 1;
+      } else {
+        failedCount += 1;
+      }
+    }
+
+    if (approvedCount === 0) {
+      return {
+        success: false,
+        approvedCount: 0,
+        failedCount,
+        message: 'تعذر السماح للطلبات المحددة. يرجى التأكد من حالة حسابات الطلاب.',
+      };
+    }
+
+    return {
+      success: true,
+      approvedCount,
+      failedCount,
+      message:
+        failedCount > 0
+          ? `تمت الموافقة والسماح لـ (${approvedCount}) طالب بتغيير كلمة المرور، وتعذر تنفيذ (${failedCount}).`
+          : `تمت الموافقة الجماعية بنجاح لـ (${approvedCount}) طالب! يمكنهم الآن إنشاء كلمة المرور الجديدة وحذف القديمة.`,
+    };
+  } catch (err: any) {
+    console.error('bulkAuthorizePasswordResetByTeacherAction error:', err);
+    return {
+      success: false,
+      approvedCount: 0,
+      failedCount: targets.length,
+      message: err?.message || 'حدث خطأ أثناء التنفيذ الجماعي',
+    };
+  }
+}
+
+export async function bulkRevokePasswordResetByTeacherAction(
+  targets: Array<{ studentId: string; requestId: string }>,
+  reason?: string
+): Promise<{
+  success: boolean;
+  revokedCount: number;
+  message: string;
+}> {
+  try {
+    const teacher = await requireTeacherSession();
+    if (!teacher) {
+      return { success: false, revokedCount: 0, message: 'صلاحية حصرية للمعلم فقط.' };
+    }
+
+    const uniqueTargets = (targets || []).filter(t => t?.studentId && t?.requestId);
+    if (uniqueTargets.length === 0) {
+      return { success: false, revokedCount: 0, message: 'لم يتم تحديد أي طلبات.' };
+    }
+
+    let revokedCount = 0;
+    for (const t of uniqueTargets) {
+      const res = await revokePasswordResetByTeacherAction(t.requestId, t.studentId, reason);
+      if (res.success) revokedCount += 1;
+    }
+
+    return {
+      success: true,
+      revokedCount,
+      message: `تم رفض / إلغاء (${revokedCount}) طلب استعادة كلمة مرور.`,
+    };
+  } catch (err: any) {
+    return { success: false, revokedCount: 0, message: err?.message || 'حدث خطأ أثناء الإلغاء الجماعي' };
   }
 }

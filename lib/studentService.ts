@@ -10,6 +10,8 @@ import {
   fetchPasswordResetRequestsAction,
   authorizeStudentPasswordResetByTeacherAction,
   revokePasswordResetByTeacherAction,
+  bulkAuthorizePasswordResetByTeacherAction,
+  bulkRevokePasswordResetByTeacherAction,
   PasswordResetRequestItem,
 } from '@/app/actions/studentActions';
 
@@ -110,6 +112,19 @@ export async function authorizeStudentPasswordResetByTeacher(studentId: string, 
 
 export async function revokePasswordResetByTeacher(requestId: string, studentId: string, reason?: string) {
   return await revokePasswordResetByTeacherAction(requestId, studentId, reason);
+}
+
+export async function bulkAuthorizePasswordResetByTeacher(
+  targets: Array<{ studentId: string; requestId?: string }>
+) {
+  return await bulkAuthorizePasswordResetByTeacherAction(targets);
+}
+
+export async function bulkRevokePasswordResetByTeacher(
+  targets: Array<{ studentId: string; requestId: string }>,
+  reason?: string
+) {
+  return await bulkRevokePasswordResetByTeacherAction(targets, reason);
 }
 
 

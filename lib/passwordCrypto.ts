@@ -5,7 +5,7 @@
  */
 
 const HASH_PREFIX = 'pbkdf2_sha256';
-const PBKDF2_ITERATIONS = 120_000;
+const PBKDF2_ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const DERIVED_KEY_BITS = 256;
 
