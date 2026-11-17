@@ -10,7 +10,7 @@ import {
   Copy, Key, Users, Settings, Sparkles, CheckCircle2, 
   X, AlertCircle, RefreshCw, Lock, ShieldCheck, Play, Download,
   ExternalLink, ChevronDown, ChevronUp, Printer, Send,
-  Search, Filter, Smartphone, Building2, Share2, CreditCard,
+  Search, Filter, Smartphone, Building2, Share2, CreditCard, Laptop,
   MessageCircle, UserCheck, Check, Phone, Award, RotateCcw,
   ThumbsUp, AlertTriangle, CheckCircle, Clock, FileQuestion,
   MessageSquare, PhoneCall, HelpCircle, ShieldAlert, Calendar
@@ -1188,7 +1188,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
                   توليد وطباعة كروت وأكواد شحن الكورس
                 </h2>
                 <p className="text-xs text-slate-500 font-bold mt-1">
-                  توليد كروت شحن فاخرة معتمدة تحمل لوجو المنصة، صالحة للتفعيل لمرة واحدة على (جهازين فقط) وفقاً للسياسة الأمنية.
+                  توليد كروت شحن فاخرة معتمدة تحمل لوجو المنصة، صالحة للتفعيل لمرة واحدة وبحد أقصى ({(course.maxDevices ?? 3) >= 1000 ? 'غير محدود من الأجهزة' : `${course.maxDevices ?? 3} أجهزة`}) وفقاً لإعدادات هذا الكورس.
                 </p>
               </div>
 
@@ -1652,7 +1652,7 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
                   الطلاب المشتركون في هذا الكورس
                 </h2>
                 <p className="text-xs text-slate-500 font-bold mt-1">
-                  متابعة جميع الطلاب المشتركين، أرقام هواتفهم، طريقة الدفع، ونسبة تقدمهم مع الالتزام الصارم بسياسة (جهازين فقط لكل طالب).
+                  متابعة جميع الطلاب المشتركين، أرقام هواتفهم، طريقة الدفع، ونسبة تقدمهم مع تطبيق حد الأجهزة المخصص لهذا الكورس ({(course.maxDevices ?? 3) >= 1000 ? 'غير محدود' : `${course.maxDevices ?? 3} أجهزة لكل طالب`}).
                 </p>
               </div>
 
@@ -1917,7 +1917,11 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
 
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-teal-50 dark:bg-teal-950/50 text-teal-700 dark:text-teal-300 text-xs font-black border border-teal-200 dark:border-teal-800">
                               <ShieldCheck className="w-3 h-3 text-teal-500" />
-                              <span>جهازين مصرحين: {st.activeDevicesCount || 1} نشط</span>
+                              <span>
+                                {(course.maxDevices ?? 3) >= 1000
+                                  ? `الأجهزة المرتبطة بالكورس: ${st.activeDevicesCount ?? 0} (مفتوح)`
+                                  : `أجهزة الكورس: ${st.activeDevicesCount ?? 0} / ${course.maxDevices ?? 3}`}
+                              </span>
                             </span>
                           </div>
                         </div>
@@ -2431,6 +2435,67 @@ export default function TeacherCourseDetailPage({ params }: PageProps) {
                   </div>
                 </label>
               </div>
+            </div>
+
+            {/* Per-Course Allowed Devices Policy */}
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-black text-slate-900 dark:text-white text-sm flex items-center gap-2">
+                    <Laptop className="w-4 h-4 text-emerald-600" />
+                    <span>عدد الأجهزة المسموحة للطالب لمشاهدة هذا الكورس</span>
+                  </h3>
+                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mt-1">
+                    جهاز التفعيل الأول يُقفل كجهاز أساسي لا يحذفه الطالب، وتُحتسب المتصفحات على نفس الجهاز كجهاز واحد.
+                  </p>
+                </div>
+                <span className="inline-flex items-center px-3 py-1 rounded-xl bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-xs font-black border border-emerald-200 dark:border-emerald-500/30 self-start">
+                  {(course.maxDevices ?? 3) >= 1000
+                    ? 'غير محدود (مفتوح)'
+                    : `${course.maxDevices ?? 3} ${(course.maxDevices ?? 3) === 1 ? 'جهاز' : (course.maxDevices ?? 3) === 2 ? 'جهازان' : 'أجهزة'}`}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { val: 1, label: 'جهاز واحد (1)' },
+                  { val: 2, label: 'جهازان (2)' },
+                  { val: 3, label: '3 أجهزة (الافتراضي)' },
+                  { val: 4, label: '4 أجهزة' },
+                  { val: 5, label: '5 أجهزة' },
+                  { val: 1000, label: 'غير محدود (∞)' },
+                ].map((opt) => (
+                  <button
+                    key={opt.val}
+                    type="button"
+                    onClick={() => setCourse({ ...course, maxDevices: opt.val })}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black border transition-all ${
+                      (course.maxDevices ?? 3) === opt.val
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                        : 'bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-emerald-400'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {(course.maxDevices ?? 3) < 1000 && (
+                <div className="flex items-center gap-3 max-w-xs">
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400 shrink-0">أو عدد مخصص:</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={999}
+                    value={course.maxDevices ?? 3}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      setCourse({ ...course, maxDevices: !Number.isNaN(n) && n >= 1 ? Math.min(999, n) : 1 });
+                    }}
+                    className="w-24 px-3 py-2 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl font-black text-center text-sm text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              )}
             </div>
 
             {/* Course Scheduling & Freeze Settings */}

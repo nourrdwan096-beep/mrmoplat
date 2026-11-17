@@ -9,13 +9,14 @@ import {
   Mail, MonitorSmartphone, Eye, EyeOff, Lock, Loader2,
   Trash2, AlertTriangle, Send, BookOpen, Award, CheckCircle2,
   RotateCcw, X, MessageSquare, AlertCircle, RefreshCw, ChevronDown,
-  Sparkles, ExternalLink, Plus, Clock
+  Sparkles, ExternalLink, Plus, Clock, Laptop, Smartphone, Tablet, Globe
 } from 'lucide-react';
 import {
   fetchStudents,
   updateStudentStatus,
   deleteStudent,
   resetStudentDeviceLock,
+  fetchStudentDevicesDetails,
   createStudentByTeacher,
   fetchPasswordResetRequests,
   authorizeStudentPasswordResetByTeacher,
@@ -95,6 +96,8 @@ export default function StudentsManagementClient() {
   const [studentCourses, setStudentCourses] = useState<CourseData[]>([]);
   const [loadingAcademic, setLoadingAcademic] = useState(false);
   const [studentProgressMap, setStudentProgressMap] = useState<Record<string, Record<string, StudentItemProgressData>>>({});
+  const [studentDeviceDetails, setStudentDeviceDetails] = useState<{ courseGroups: any[]; loginDevices: any[] }>({ courseGroups: [], loginDevices: [] });
+  const [loadingDeviceDetails, setLoadingDeviceDetails] = useState(false);
   const [adviceText, setAdviceText] = useState('');
   const [sendingAdvice, setSendingAdvice] = useState(false);
   const [adviceSuccess, setAdviceSuccess] = useState(false);
@@ -109,6 +112,8 @@ export default function StudentsManagementClient() {
 
   // Reset Device Modal State
   const [resetDeviceTarget, setResetDeviceTarget] = useState<ManagedStudentProfile | null>(null);
+  const [resetDeviceCourseGroups, setResetDeviceCourseGroups] = useState<any[]>([]);
+  const [selectedResetCourseId, setSelectedResetCourseId] = useState<string>('ALL');
   const [isResettingDevice, setIsResettingDevice] = useState(false);
   const [resetSuccessMessage, setResetSuccessMessage] = useState('');
 
@@ -184,22 +189,34 @@ export default function StudentsManagementClient() {
     return () => { mounted = false; };
   }, [isTeacherUser]);
 
-  // Load Academic Records when detailsTargetStudent changes
+  // Load Academic Records & Physical Hardware Devices when detailsTargetStudent changes
   useEffect(() => {
     if (!detailsTargetStudent) {
       setStudentCourses([]);
+      setStudentDeviceDetails({ courseGroups: [], loginDevices: [] });
       return;
     }
     setLoadingAcademic(true);
+    setLoadingDeviceDetails(true);
     setAdviceText('');
     setAdviceSuccess(false);
 
     (async () => {
       try {
-        const enrolledIds = await fetchStudentEnrolledCourseIds(detailsTargetStudent.id, detailsTargetStudent.email);
-        const all = await fetchAllCourses();
+        const [enrolledIds, all, devRes] = await Promise.all([
+          fetchStudentEnrolledCourseIds(detailsTargetStudent.id, detailsTargetStudent.email),
+          fetchAllCourses(),
+          fetchStudentDevicesDetails(detailsTargetStudent.id),
+        ]);
         const enrolled = all.filter(c => enrolledIds.includes(c.id));
         setStudentCourses(enrolled);
+        if (devRes?.success) {
+          setStudentDeviceDetails({
+            courseGroups: devRes.courseGroups || [],
+            loginDevices: devRes.loginDevices || [],
+          });
+        }
+        setLoadingDeviceDetails(false);
 
         const progMaps: Record<string, Record<string, StudentItemProgressData>> = {};
         for (const c of enrolled) {
@@ -210,9 +227,27 @@ export default function StudentsManagementClient() {
         console.warn('Error loading academic details:', err);
       } finally {
         setLoadingAcademic(false);
+        setLoadingDeviceDetails(false);
       }
     })();
   }, [detailsTargetStudent]);
+
+  // Load course device bindings when resetDeviceTarget opens
+  useEffect(() => {
+    if (!resetDeviceTarget) {
+      setResetDeviceCourseGroups([]);
+      setSelectedResetCourseId('ALL');
+      return;
+    }
+    setSelectedResetCourseId('ALL');
+    fetchStudentDevicesDetails(resetDeviceTarget.id)
+      .then((res) => {
+        if (res?.success) {
+          setResetDeviceCourseGroups(res.courseGroups || []);
+        }
+      })
+      .catch(() => {});
+  }, [resetDeviceTarget]);
 
   // Derived Data
   const cleanSearch = searchQuery.trim().toLowerCase();
@@ -345,9 +380,13 @@ export default function StudentsManagementClient() {
     if (!resetDeviceTarget) return;
     setIsResettingDevice(true);
     try {
-      const res = await resetStudentDeviceLock(resetDeviceTarget.id);
+      const targetCourse = selectedResetCourseId && selectedResetCourseId !== 'ALL' ? selectedResetCourseId : undefined;
+      const res = await resetStudentDeviceLock(resetDeviceTarget.id, targetCourse);
       if (res.success) {
-        setResetSuccessMessage(`تم فك قيد أجهزة الطالب (${resetDeviceTarget.fullName}) بنجاح! يمكنه الآن الدخول من جهازه دون عوائق.`);
+        setResetSuccessMessage(
+          res.message ||
+            `تم فك قيد أجهزة الطالب (${resetDeviceTarget.fullName}) بنجاح! يمكنه الآن الربط من جديد.`
+        );
         await loadStudents();
       } else {
         alert(res.message || 'حدث خطأ أثناء فك قيد الجهاز');
@@ -356,6 +395,22 @@ export default function StudentsManagementClient() {
       alert(err.message || 'حدث خطأ غير متوقع أثناء فك قيد الجهاز');
     } finally {
       setIsResettingDevice(false);
+    }
+  };
+
+  const handleResetCourseDevicesInline = async (studentId: string, courseId: string, courseTitle: string) => {
+    const res = await resetStudentDeviceLock(studentId, courseId);
+    if (res.success) {
+      const updated = await fetchStudentDevicesDetails(studentId);
+      if (updated?.success) {
+        setStudentDeviceDetails({
+          courseGroups: updated.courseGroups || [],
+          loginDevices: updated.loginDevices || [],
+        });
+      }
+      alert(`تم فك قيد الأجهزة في كورس (${courseTitle}) بنجاح.`);
+    } else {
+      alert(res.message || 'تعذر فك القيد');
     }
   };
 
@@ -1799,6 +1854,137 @@ export default function StudentsManagementClient() {
                 )}
               </div>
 
+              {/* Detailed Hardware & Per-Course Devices Inspector */}
+              <div className="mb-6 p-4 sm:p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-4">
+                <div className="flex items-center justify-between flex-wrap gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <h4 className="font-black text-slate-900 dark:text-white text-sm flex items-center gap-2">
+                    <Laptop className="w-4 h-4 text-emerald-600" />
+                    <span>تقرير الأجهزة التفصيلي (الدخول والكورسات)</span>
+                  </h4>
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                    أجهزة الدخول المسجلة: {studentDeviceDetails.loginDevices.length}
+                  </span>
+                </div>
+
+                {loadingDeviceDetails ? (
+                  <div className="py-6 text-center text-xs font-bold text-slate-400">جاري فحص سجل الأجهزة...</div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Passive Login Physical Devices */}
+                    {studentDeviceDetails.loginDevices.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="text-xs font-black text-slate-500 dark:text-slate-400">
+                          الأجهزة المادية التي سجّل الطالب الدخول منها للحساب:
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          {studentDeviceDetails.loginDevices.map((dev: any) => (
+                            <div key={dev.id} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 space-y-1.5 text-xs">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+                                  {dev.deviceType === 'mobile' ? (
+                                    <Smartphone className="w-3.5 h-3.5 text-emerald-500" />
+                                  ) : dev.deviceType === 'tablet' ? (
+                                    <Tablet className="w-3.5 h-3.5 text-teal-500" />
+                                  ) : (
+                                    <Laptop className="w-3.5 h-3.5 text-indigo-500" />
+                                  )}
+                                  <span>{dev.name}</span>
+                                </span>
+                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-500">
+                                  {dev.os || 'OS'}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-1">
+                                {(dev.browsersSeen || [dev.browser]).filter(Boolean).map((br: string) => (
+                                  <span key={br} className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-800/40 inline-flex items-center gap-1">
+                                    <Globe className="w-2.5 h-2.5" />
+                                    {br}
+                                  </span>
+                                ))}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono flex items-center justify-between pt-1">
+                                <span>{dev.hardwareCoreId || dev.fingerprint}</span>
+                                <span className="font-sans">
+                                  آخر دخول: {dev.lastActive ? new Date(dev.lastActive).toLocaleDateString('ar-EG') : 'حديثاً'}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Per-Course Bound Devices */}
+                    <div className="space-y-2.5">
+                      <div className="text-xs font-black text-slate-500 dark:text-slate-400">
+                        أجهزة المشاهدة المرتبطة بكل كورس (مع حد الكورس وجهاز التفعيل الأساسي):
+                      </div>
+                      {studentDeviceDetails.courseGroups.length === 0 ? (
+                        <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 text-xs font-bold text-slate-400">
+                          لا توجد أجهزة مقيدة لكورسات هذا الطالب حتى الآن.
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {studentDeviceDetails.courseGroups.map((grp: any) => (
+                            <div key={grp.courseId} className="p-3.5 rounded-xl bg-slate-50/70 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 space-y-2.5">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <BookOpen className="w-4 h-4 text-emerald-600" />
+                                  <span className="font-black text-xs text-slate-900 dark:text-white">{grp.courseTitle}</span>
+                                  <span className="px-2 py-0.5 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[10px] font-black">
+                                    {grp.isUnlimited
+                                      ? `${grp.activeCount} نشط (مفتوح)`
+                                      : `${grp.activeCount} / ${grp.maxDevices} أجهزة`}
+                                  </span>
+                                </div>
+                                {grp.activeCount > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleResetCourseDevicesInline(detailsTargetStudent.id, grp.courseId, grp.courseTitle)}
+                                    className="px-2.5 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 dark:bg-amber-950/50 dark:hover:bg-amber-900/60 text-amber-800 dark:text-amber-300 text-[11px] font-black flex items-center gap-1 transition-colors"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    <span>فك قيد هذا الكورس</span>
+                                  </button>
+                                )}
+                              </div>
+
+                              {grp.devices.length === 0 ? (
+                                <p className="text-[11px] text-slate-400 font-bold">لم يتم فتح محتوى هذا الكورس من أي جهاز بعد.</p>
+                              ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {grp.devices.map((cd: any) => (
+                                    <div key={cd.id} className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-[11px] space-y-1">
+                                      <div className="flex items-center justify-between gap-1">
+                                        <span className="font-black text-slate-800 dark:text-slate-200">{cd.name}</span>
+                                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-black ${
+                                          cd.isPrimary
+                                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                            : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                                        }`}>
+                                          {cd.isPrimary ? 'الأساسي (التفعيل)' : 'جهاز إضافي'}
+                                        </span>
+                                      </div>
+                                      <div className="flex flex-wrap gap-1">
+                                        {(cd.browsersSeen || [cd.browser]).filter(Boolean).map((br: string) => (
+                                          <span key={br} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold">
+                                            {br}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Advice Input Section */}
               <div className="mb-6 p-5 rounded-2xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 space-y-3">
                 <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400 font-black text-sm">
@@ -2176,6 +2362,24 @@ export default function StudentsManagementClient() {
                     </div>
                   </div>
 
+                  <div className="space-y-2">
+                    <label className="block text-xs font-black text-slate-700 dark:text-slate-300">
+                      نطاق فك قيد الأجهزة:
+                    </label>
+                    <select
+                      value={selectedResetCourseId}
+                      onChange={(e) => setSelectedResetCourseId(e.target.value)}
+                      className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
+                    >
+                      <option value="ALL">فك قيد جميع الأجهزة وكل الكورسات بالكامل</option>
+                      {resetDeviceCourseGroups.map((g: any) => (
+                        <option key={g.courseId} value={g.courseId}>
+                          فك قيد كورس فقط: {g.courseTitle} ({g.activeCount} جهاز مرتبط)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
                   <div className="flex gap-2 pt-2">
                     <button
                       type="button"
@@ -2184,7 +2388,7 @@ export default function StudentsManagementClient() {
                       className="flex-1 py-3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-md shadow-amber-600/20 disabled:opacity-50"
                     >
                       {isResettingDevice ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
-                      <span>تأكيد فك قيد الجهاز</span>
+                      <span>{selectedResetCourseId === 'ALL' ? 'فك القيد بالكامل' : 'فك قيد الكورس المحدد'}</span>
                     </button>
                     <button
                       type="button"

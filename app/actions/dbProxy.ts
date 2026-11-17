@@ -168,6 +168,7 @@ function parseCourseFromRow(row: any): any {
   let hasDiscount = false;
   let enforceUnitProgression = true;
   let enforceItemProgression = true;
+  let maxDevices = typeof row.max_devices === 'number' && row.max_devices > 0 ? row.max_devices : 3;
 
   // Extract meta block if present
   const metaMatch = description.match(/\n\n<!--meta:([\s\S]*?)-->$/);
@@ -178,6 +179,12 @@ function parseCourseFromRow(row: any): any {
       if (parsed.hasDiscount !== undefined) hasDiscount = parsed.hasDiscount;
       if (parsed.enforceUnitProgression !== undefined) enforceUnitProgression = parsed.enforceUnitProgression;
       if (parsed.enforceItemProgression !== undefined) enforceItemProgression = parsed.enforceItemProgression;
+      if (parsed.maxDevices !== undefined) {
+        const parsedMax = Number(parsed.maxDevices);
+        if (!Number.isNaN(parsedMax) && parsedMax >= 1) {
+          maxDevices = Math.floor(parsedMax);
+        }
+      }
       description = description.replace(metaMatch[0], '');
     } catch {
       // ignore
@@ -204,6 +211,7 @@ function parseCourseFromRow(row: any): any {
     expiryDate: row.expiry_date,
     enforceUnitProgression,
     enforceItemProgression,
+    maxDevices,
     createdAt: row.created_at || new Date().toISOString(),
     updatedAt: row.updated_at || new Date().toISOString(),
   };
@@ -240,11 +248,14 @@ export async function saveCourseServer(course: any): Promise<any> {
   const courseId = course.id && course.id.length === 36 ? course.id : crypto.randomUUID();
 
   // Embed extra metadata cleanly into the description field so non-existent columns are avoided
+  const parsedMaxDevices = Number(course.maxDevices);
+  const resolvedMaxDevices = !Number.isNaN(parsedMaxDevices) && parsedMaxDevices >= 1 ? Math.floor(parsedMaxDevices) : 3;
   const meta = {
     originalPrice: course.originalPrice,
     hasDiscount: course.hasDiscount,
     enforceUnitProgression: course.enforceUnitProgression ?? true,
     enforceItemProgression: course.enforceItemProgression ?? true,
+    maxDevices: resolvedMaxDevices,
   };
   const rawDesc = (course.description || '').replace(/\n\n<!--meta:[\s\S]*?-->$/, '');
   const storedDescription = `${rawDesc}\n\n<!--meta:${JSON.stringify(meta)}-->`;
@@ -1733,7 +1744,7 @@ export async function fetchCourseEnrolledStudentsDataServer(courseId: string) {
   try {
     const staff = await requireStaffSession();
     if (!staff) {
-      return { success: false, enrollments: [], progress: [] };
+      return { success: false, enrollments: [], progress: [], deviceCountsByStudent: {} as Record<string, number> };
     }
     const { data: dbEnrollments } = await supabaseAdmin
       .from('course_enrollments')
@@ -1747,17 +1758,37 @@ export async function fetchCourseEnrolledStudentsDataServer(courseId: string) {
       .select('id, student_id, course_id, item_id, attempts_count, status, highest_score, last_score, is_passed, completed_at, updated_at, unit_items(id, title, max_exam_attempts, item_type, total_marks, passing_score_percentage)')
       .eq('course_id', courseId);
 
+    const deviceCountsByStudent: Record<string, number> = {};
+    try {
+      const { data: bindingLogs } = await supabaseAdmin
+        .from('audit_logs')
+        .select('actor_id, details')
+        .eq('target_entity', 'course_device_bindings')
+        .eq('target_id', courseId)
+        .limit(1000);
+
+      (bindingLogs || []).forEach((log: any) => {
+        const sid = log.actor_id || log.details?.studentId;
+        const devs = Array.isArray(log.details?.devices) ? log.details.devices : [];
+        if (sid) {
+          deviceCountsByStudent[sid] = devs.length;
+        }
+      });
+    } catch {}
+
     return {
       success: true,
       enrollments: dbEnrollments || [],
-      progress: progressData || []
+      progress: progressData || [],
+      deviceCountsByStudent,
     };
   } catch (err: any) {
     console.error('fetchCourseEnrolledStudentsDataServer exception:', err);
     return {
       success: false,
       enrollments: [],
-      progress: []
+      progress: [],
+      deviceCountsByStudent: {} as Record<string, number>,
     };
   }
 }

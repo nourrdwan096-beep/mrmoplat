@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import { requireStudentOrStaffSession } from '@/lib/serverAuth';
+import { bindCoursePrimaryDeviceServer } from '@/app/actions/studentActions';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -12,6 +13,7 @@ export async function POST(req: NextRequest) {
     const studentId = body?.studentId;
     const targetCourseId = body?.targetCourseId;
     const studentInfo = body?.studentInfo || {};
+    const deviceContext = body?.deviceContext || undefined;
 
     const session = await requireStudentOrStaffSession(studentId);
     if (!session) {
@@ -103,11 +105,14 @@ export async function POST(req: NextRequest) {
             });
         }
 
+        const devMeta = await bindCoursePrimaryDeviceServer(cleanStudentId, codeCourseId, deviceContext, 'activation_code').catch(() => ({ maxDevices: 3, isUnlimited: false }));
+
         return NextResponse.json({
           success: true,
           alreadyEnrolled: true,
           courseId: codeCourseId,
           courseTitle,
+          courseMaxDevices: devMeta.maxDevices,
           message: `هذا الكود مفعل بالفعل ومسجل على حسابك في (${courseTitle}). جميع المحاضرات مفتوحة لك.`
         });
       }
@@ -220,10 +225,14 @@ export async function POST(req: NextRequest) {
       console.warn('Notification insert non-fatal error:', notifErr);
     }
 
+    // 9. Lock activation device as Device #1 (Primary - undeletable) for this course
+    const devMeta = await bindCoursePrimaryDeviceServer(cleanStudentId, codeCourseId, deviceContext, 'activation_code').catch(() => ({ maxDevices: 3, isUnlimited: false }));
+
     return NextResponse.json({
       success: true,
       courseId: codeCourseId,
       courseTitle,
+      courseMaxDevices: devMeta.maxDevices,
       message: `تم تفعيل كورس (${courseTitle}) بنجاح! جميع المحاضرات والملازم متاحة لك الآن.`
     });
 

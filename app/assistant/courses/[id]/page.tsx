@@ -109,6 +109,10 @@ export default function AssistantCourseDetailPage({ params }: PageProps) {
   // Codes Generator
   const [codesCount, setCodesCount] = useState<number>(10);
   const [codesBatchName, setCodesBatchName] = useState('دفعة المساعد');
+  const [codeGenerationMode, setCodeGenerationMode] = useState<'general' | 'assigned_student'>('general');
+  const [targetStudentName, setTargetStudentName] = useState('');
+  const [targetStudentBirthDate, setTargetStudentBirthDate] = useState('');
+  const [centerOrGroupName, setCenterOrGroupName] = useState('');
   const [isGeneratingCodes, setIsGeneratingCodes] = useState(false);
 
   // Delete Target Modal
@@ -436,15 +440,38 @@ export default function AssistantCourseDetailPage({ params }: PageProps) {
   // Generate Codes Handler
   const handleGenerateCodes = async () => {
     if (!course) return;
+
+    // Strict guard: Codes are only for PAID courses
+    if (course.isFree || (course.price ?? 0) <= 0) {
+      alert('هذا الكورس مجاني ومتاح لجميع الطلاب بدون أكواد. توليد الأكواد متاح حصرياً للكورسات المدفوعة فقط.');
+      return;
+    }
+
     setIsGeneratingCodes(true);
     try {
+      const isPersonalized = codeGenerationMode === 'assigned_student' && targetStudentName.trim().length > 0;
+      const count = isPersonalized ? 1 : codesCount;
+      const batchLabel = centerOrGroupName.trim() || codesBatchName.trim() || 'دفعة المساعد';
+
       const newCodes = await generateActivationCodes(
         course.id,
-        codesCount,
-        codesBatchName
+        count,
+        batchLabel,
+        {
+          assignedStudentName: isPersonalized ? targetStudentName.trim() : undefined,
+          studentBirthDate: isPersonalized && targetStudentBirthDate ? targetStudentBirthDate.trim() : undefined,
+          assignedStudentBirthDate: isPersonalized && targetStudentBirthDate ? targetStudentBirthDate.trim() : undefined,
+          centerOrGroup: centerOrGroupName.trim() || undefined,
+          price: course.price,
+          courseTitle: course.title,
+        }
       );
       setCodes((prev) => [...newCodes, ...prev]);
-      showToast(`تم توليد ${codesCount} كود تفعيل بنجاح ✨`);
+      if (isPersonalized) {
+        setTargetStudentName('');
+        setTargetStudentBirthDate('');
+      }
+      showToast(isPersonalized ? `تم توليد كود الطالب (${targetStudentName.trim()}) بنجاح ✨` : `تم توليد ${count} كود تفعيل بنجاح ✨`);
     } catch (err) {
       console.error(err);
       alert('حدث خطأ أثناء توليد الأكواد');
@@ -920,52 +947,138 @@ export default function AssistantCourseDetailPage({ params }: PageProps) {
       {activeTab === 'codes' && (
         <div className="space-y-6">
           {/* Generate Codes Widget */}
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 border border-slate-200 dark:border-slate-800 shadow-sm">
-            <h3 className="text-lg font-black text-slate-900 dark:text-white mb-2">
-              توليد أكواد تفعيل جديدة للكورس 🔑
-            </h3>
-            <p className="text-xs text-slate-500 font-semibold mb-6">
-              يمكنك توليد أكواد تفعيل وتوزيعها على الطلاب لفتح هذا الكورس مباشرة دون الحاجة لشحن المحفظة.
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  عدد الأكواد المطلوبة
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={codesCount}
-                  onChange={(e) => setCodesCount(Number(e.target.value))}
-                  className="w-full h-11 px-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-bold focus:ring-2 focus:ring-blue-500"
-                />
+          {course?.isFree || (course?.price ?? 0) <= 0 ? (
+            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 border border-slate-200 dark:border-slate-800 shadow-sm text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto shadow-xs">
+                <Sparkles className="w-6 h-6" />
               </div>
-
-              <div className="md:col-span-2">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  اسم الدفعة / السنتر
-                </label>
-                <input
-                  type="text"
-                  value={codesBatchName}
-                  onChange={(e) => setCodesBatchName(e.target.value)}
-                  placeholder="مثال: دفعة سنتر المستقبل أسبوع 1"
-                  className="w-full h-11 px-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-bold focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
+              <h3 className="text-base sm:text-lg font-black text-slate-900 dark:text-white">
+                هذا الكورس مجاني ومتاح لجميع الطلاب بدون أكواد
+              </h3>
+              <p className="text-xs text-slate-500 font-bold max-w-lg mx-auto leading-relaxed">
+                توليد كروت وأكواد الشحن مخصص حصرياً للكورسات المدفوعة. هذا الكورس مفتوح لجميع الطلاب المسجلين بالمنصة مباشرة دون الحاجة لأي كود تفعيل.
+              </p>
             </div>
+          ) : (
+            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900 dark:text-white mb-1">
+                    توليد أكواد تفعيل جديدة للكورس 🔑
+                  </h3>
+                  <p className="text-xs text-slate-500 font-semibold">
+                    يمكنك توليد كروت وأكواد تفعيل صالحة حتى ({(course?.maxDevices ?? 3) >= 1000 ? 'عدد غير محدود من الأجهزة' : `${course?.maxDevices ?? 3} أجهزة`}) وفقاً لإعدادات هذا الكورس.
+                  </p>
+                </div>
 
-            <button
-              onClick={handleGenerateCodes}
-              disabled={isGeneratingCodes}
-              className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-lg shadow-blue-600/20 disabled:opacity-50 transition-all flex items-center gap-2"
-            >
-              <Key className="w-4 h-4" />
-              <span>{isGeneratingCodes ? 'جاري التوليد...' : 'توليد الأكواد الآن'}</span>
-            </button>
-          </div>
+                {/* Mode Selector Toggle */}
+                <div className="inline-flex p-1 rounded-2xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setCodeGenerationMode('general')}
+                    className={`px-3.5 py-1.5 rounded-xl transition-all ${
+                      codeGenerationMode === 'general'
+                        ? 'bg-blue-600 text-white shadow-xs font-black'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    دفعة عامة
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCodeGenerationMode('assigned_student')}
+                    className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1 ${
+                      codeGenerationMode === 'assigned_student'
+                        ? 'bg-amber-500 text-slate-950 shadow-xs font-black'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    <span>⭐ مخصص لطالب</span>
+                  </button>
+                </div>
+              </div>
+
+              {codeGenerationMode === 'assigned_student' ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      اسم الطالب المخصص له الكود <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={targetStudentName}
+                      onChange={(e) => setTargetStudentName(e.target.value)}
+                      placeholder="مثال: أحمد محمود"
+                      className="w-full h-11 px-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-amber-300 dark:border-amber-700/60 text-xs font-bold focus:ring-2 focus:ring-amber-500 text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      🎂 تاريخ ميلاد الطالب (مدمج بالكود)
+                    </label>
+                    <input
+                      type="date"
+                      value={targetStudentBirthDate}
+                      onChange={(e) => setTargetStudentBirthDate(e.target.value)}
+                      className="w-full h-11 px-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-teal-300 dark:border-teal-700/60 text-xs font-bold focus:ring-2 focus:ring-teal-500 text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      السنتر / المجموعة (اختياري)
+                    </label>
+                    <input
+                      type="text"
+                      value={centerOrGroupName}
+                      onChange={(e) => setCenterOrGroupName(e.target.value)}
+                      placeholder="مثال: سنتر الأهرام"
+                      className="w-full h-11 px-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-bold focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      عدد الأكواد المطلوبة
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={codesCount}
+                      onChange={(e) => setCodesCount(Number(e.target.value))}
+                      className="w-full h-11 px-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-bold focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      اسم الدفعة / السنتر
+                    </label>
+                    <input
+                      type="text"
+                      value={codesBatchName}
+                      onChange={(e) => setCodesBatchName(e.target.value)}
+                      placeholder="مثال: دفعة سنتر المستقبل أسبوع 1"
+                      className="w-full h-11 px-4 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-bold focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={handleGenerateCodes}
+                disabled={isGeneratingCodes || (codeGenerationMode === 'assigned_student' && !targetStudentName.trim())}
+                className="px-6 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-lg shadow-blue-600/20 disabled:opacity-50 transition-all flex items-center gap-2"
+              >
+                <Key className="w-4 h-4" />
+                <span>{isGeneratingCodes ? 'جاري التوليد...' : codeGenerationMode === 'assigned_student' ? 'توليد كارت الطالب' : 'توليد الأكواد الآن'}</span>
+              </button>
+            </div>
+          )}
 
           {/* Codes List */}
           <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 md:p-8 border border-slate-200 dark:border-slate-800 shadow-sm">
@@ -1298,25 +1411,33 @@ export default function AssistantCourseDetailPage({ params }: PageProps) {
               {isLoadingQuestions ? (
                 <div className="py-12 text-center text-slate-400 font-bold">جاري تحميل الأسئلة...</div>
               ) : (
-                questionsList.map((q, qIdx) => (
-                  <div
-                    key={q.id}
-                    className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-4"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-black text-blue-600 dark:text-blue-400">
-                        السؤال ({qIdx + 1})
-                      </span>
-                      {questionsList.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => setQuestionsList((prev) => prev.filter((item) => item.id !== q.id))}
-                          className="text-xs text-rose-500 font-bold hover:underline"
-                        >
-                          حذف السؤال
-                        </button>
-                      )}
-                    </div>
+                questionsList.map((q, qIdx) => {
+                  const isPassage = q.questionType === 'passage';
+                  const displayIndex = isPassage ? <BookOpen className="w-3.5 h-3.5 inline-block" /> : questionsList.slice(0, qIdx).filter(x => x.questionType !== 'passage').length + 1;
+                  
+                  return (
+                    <div
+                      key={q.id}
+                      className={`p-5 rounded-2xl border space-y-4 ${
+                        isPassage 
+                          ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800' 
+                          : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`text-xs font-black ${isPassage ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                          {isPassage ? 'قطعة فهم' : `السؤال (${displayIndex})`}
+                        </span>
+                        {questionsList.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setQuestionsList((prev) => prev.filter((item) => item.id !== q.id))}
+                            className="text-xs text-rose-500 font-bold hover:underline"
+                          >
+                            حذف {isPassage ? 'القطعة' : 'السؤال'}
+                          </button>
+                        )}
+                      </div>
 
                     <div>
                       <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
@@ -1407,7 +1528,8 @@ export default function AssistantCourseDetailPage({ params }: PageProps) {
                       />
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
 
               <button
@@ -1422,7 +1544,7 @@ export default function AssistantCourseDetailPage({ params }: PageProps) {
 
             <div className="flex justify-between items-center border-t border-slate-100 dark:border-slate-800 pt-4">
               <span className="text-xs font-bold text-slate-500">
-                إجمالي الأسئلة: {questionsList.length}
+                إجمالي الأسئلة: {questionsList.filter(q => q.questionType !== 'passage').length}
               </span>
               <div className="flex gap-3">
                 <button

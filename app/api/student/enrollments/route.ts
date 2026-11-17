@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import { requireStudentOrStaffSession } from '@/lib/serverAuth';
+import { bindCoursePrimaryDeviceServer } from '@/app/actions/studentActions';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -41,7 +42,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { studentId, courseId, paymentMethod = 'free', amountPaid = 0 } = body;
+    const { studentId, courseId, paymentMethod = 'free', amountPaid = 0, deviceContext } = body;
 
     if (!courseId) {
       return NextResponse.json({ success: false, message: 'Missing courseId' }, { status: 400 });
@@ -104,7 +105,18 @@ export async function POST(req: NextRequest) {
         });
     }
 
-    return NextResponse.json({ success: true, courseId: cleanCourseId });
+    const devMeta = await bindCoursePrimaryDeviceServer(
+      cleanStudentId,
+      cleanCourseId,
+      deviceContext,
+      finalMethod
+    ).catch(() => ({ maxDevices: 3, isUnlimited: false }));
+
+    return NextResponse.json({
+      success: true,
+      courseId: cleanCourseId,
+      courseMaxDevices: devMeta.maxDevices,
+    });
   } catch (err: any) {
     console.error('API /api/student/enrollments POST exception:', err);
     return NextResponse.json({ success: false, message: err?.message }, { status: 500 });

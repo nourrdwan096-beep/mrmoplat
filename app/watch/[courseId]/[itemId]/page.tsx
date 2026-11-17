@@ -73,7 +73,11 @@ export default function WatchLessonPage() {
   const [studentProgress, setStudentProgress] = useState<Record<string, StudentItemProgressData>>({});
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(false);
-  const [deviceBlockedError, setDeviceBlockedError] = useState<string | null>(null);
+  const [blockedDeviceInfo, setBlockedDeviceInfo] = useState<{
+    message: string;
+    maxDevices: number;
+    activeCount: number;
+  } | null>(null);
   const [isNotEnrolled, setIsNotEnrolled] = useState<boolean>(false);
   const [quickCode, setQuickCode] = useState('');
   const [quickRedeeming, setQuickRedeeming] = useState(false);
@@ -86,7 +90,7 @@ export default function WatchLessonPage() {
     async function loadData() {
       if (!courseId) return;
       setIsLoading(true);
-      setDeviceBlockedError(null);
+      setBlockedDeviceInfo(null);
       setIsNotEnrolled(false);
 
       try {
@@ -94,26 +98,40 @@ export default function WatchLessonPage() {
         if (!isMounted) return;
         setCourse(foundCourse);
 
-        // Check Auth First
+        // Check Auth First — strictly stop before fetching protected curriculum items
         if (!currentUser) {
           if (!isMounted) return;
           setIsNotEnrolled(true);
-        } else if (currentUser?.id && currentRole === 'student') {
-          // Check Device Limits and Enrollment for students
-          const devCheck = await registerOrVerifyStudentCourseDevice(currentUser.id, courseId);
-          if (!devCheck.allowed) {
-            if (!isMounted) return;
-            setDeviceBlockedError(devCheck.message || 'تم استكفاء عدد الأجهزة المسموحة (جهازين فقط).');
-            setIsLoading(false);
-            return;
-          }
+          setIsLoading(false);
+          return;
+        }
 
+        if (currentUser?.id && currentRole === 'student') {
           if (foundCourse) {
             const enrolled = await isStudentEnrolledInCourse(currentUser.id, courseId);
             if (!enrolled) {
               if (!isMounted) return;
               setIsNotEnrolled(true);
+              setIsLoading(false);
+              return;
             }
+          }
+
+          // Check Per-Course Device Limits for enrolled students
+          const devCheck = await registerOrVerifyStudentCourseDevice(currentUser.id, courseId);
+          if (!devCheck.allowed) {
+            if (!isMounted) return;
+            const maxDev = Number(devCheck.maxDevices ?? foundCourse?.maxDevices ?? 3);
+            const activeCnt = Number(devCheck.activeCount ?? maxDev);
+            setBlockedDeviceInfo({
+              message:
+                devCheck.message ||
+                `تم استكفاء الحد الأقصى للأجهزة المسموح بها لمشاهدة هذا الكورس (${maxDev === 1 ? 'جهاز واحد' : maxDev === 2 ? 'جهازان' : `${maxDev} أجهزة`}).`,
+              maxDevices: maxDev,
+              activeCount: activeCnt,
+            });
+            setIsLoading(false);
+            return;
           }
         }
 
@@ -138,11 +156,13 @@ export default function WatchLessonPage() {
         if (!isMounted) return;
         setUnitItemsMap(itemsMap);
 
-        // Fetch Student Progress
-        const studentId = currentUser?.id || 'demo_student';
-        const progressMap = await fetchStudentProgress(studentId, courseId);
-        if (!isMounted) return;
-        setStudentProgress(progressMap);
+        // Fetch Student Progress (only for authenticated students)
+        let progressMap: Record<string, StudentItemProgressData> = {};
+        if (currentUser?.id && currentRole === 'student') {
+          progressMap = await fetchStudentProgress(currentUser.id, courseId);
+          if (!isMounted) return;
+          setStudentProgress(progressMap);
+        }
 
         // If specific item not found, pick first video or item
         if (!targetItem && loadedUnits.length > 0) {
@@ -163,11 +183,16 @@ export default function WatchLessonPage() {
         setCurrentItem(targetItem);
         setCurrentUnit(targetUnit);
 
-        // Auto mark video / concept sheet as completed when opened
-        if (targetItem && (targetItem.itemType === 'video' || targetItem.itemType === 'concept_sheet' || targetItem.itemType === 'summary_pdf')) {
+        // Auto mark video / concept sheet as completed when opened by an authenticated student
+        if (
+          currentUser?.id &&
+          currentRole === 'student' &&
+          targetItem &&
+          (targetItem.itemType === 'video' || targetItem.itemType === 'concept_sheet' || targetItem.itemType === 'summary_pdf')
+        ) {
           if (!progressMap[targetItem.id]?.isPassed) {
-            recordStudentItemProgress(studentId, courseId, targetItem.id, 100, true).then(() => {
-              fetchStudentProgress(studentId, courseId).then(refreshed => {
+            recordStudentItemProgress(currentUser.id, courseId, targetItem.id, 100, true).then(() => {
+              fetchStudentProgress(currentUser.id, courseId).then(refreshed => {
                 if (isMounted) setStudentProgress(refreshed);
               });
             });
@@ -284,8 +309,15 @@ export default function WatchLessonPage() {
     );
   }
 
-  // If student device limit exceeded (3rd device)
-  if (deviceBlockedError) {
+  // If student device limit exceeded for this specific course
+  if (blockedDeviceInfo) {
+    const limitTxt =
+      blockedDeviceInfo.maxDevices === 1
+        ? 'جهاز واحد فقط'
+        : blockedDeviceInfo.maxDevices === 2
+        ? 'جهازين فقط'
+        : `${blockedDeviceInfo.maxDevices} أجهزة`;
+
     return (
       <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 text-center" dir="rtl">
         <div className="max-w-md w-full bg-slate-900 border border-rose-500/30 rounded-3xl p-8 space-y-6 shadow-2xl shadow-rose-500/10">
@@ -293,22 +325,30 @@ export default function WatchLessonPage() {
             <Lock className="w-10 h-10" />
           </div>
           <div className="space-y-2">
-            <h2 className="text-2xl font-black text-white">تم استكفاء عدد الأجهزة (جهازين فقط)</h2>
+            <h2 className="text-2xl font-black text-white">
+              تم استكفاء أجهزة هذا الكورس ({limitTxt})
+            </h2>
             <p className="text-sm font-bold text-slate-300 leading-relaxed">
-              {deviceBlockedError}
+              {blockedDeviceInfo.message}
             </p>
           </div>
-          <div className="p-4 rounded-2xl bg-slate-800/60 border border-slate-700 text-xs font-bold text-slate-400 leading-relaxed text-right">
-            • يُسمح لكل طالب بفتح الحساب وتشغيل الكورسات على <strong>جهازين فقط</strong>.
-            <br />
-            • الجهاز الأول (الأساسي) مثبت دائماً، ويمكنك تبديل الجهاز الثاني من خلال صفحة أجهزتك.
+          <div className="p-4 rounded-2xl bg-slate-800/60 border border-slate-700 text-xs font-bold text-slate-300 leading-relaxed text-right space-y-1.5">
+            <div>
+              • الحد المعتمد لهذا الكورس: <strong>{limitTxt}</strong> (المستخدم حالياً: {blockedDeviceInfo.activeCount}).
+            </div>
+            <div>
+              • الجهاز الأول (جهاز التفعيل الأساسي) مثبت للأمان ولا يمكن حذفه، ويمكنك استبدال أي جهاز إضافي من صفحة الأجهزة.
+            </div>
+            <div className="text-slate-400">
+              • فتح الكورس من متصفحات مختلفة على نفس جهازك يُحتسب كجهاز واحد فقط.
+            </div>
           </div>
           <div className="flex flex-col gap-3 pt-2">
             <Link
-              href="/student/devices"
+              href={`/student/devices?courseId=${encodeURIComponent(courseId)}`}
               className="w-full py-3.5 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm transition-all shadow-lg shadow-emerald-600/30"
             >
-              إدارة أجهزتي المسجلة وتبديل الجهاز الثاني
+              إدارة أجهزة هذا الكورس وتبديل جهاز إضافي
             </Link>
             <Link
               href="/"

@@ -45,6 +45,7 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
   const [activationSuccessData, setActivationSuccessData] = useState<{
     courseTitle: string;
     deviceMessage: string;
+    maxDevices: number;
   } | null>(null);
 
   // Active unit accordion collapses (all open by default)
@@ -162,10 +163,20 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
       await new Promise(r => setTimeout(r, 500));
 
       if (res.success) {
+        const courseLimit = Number(res.courseMaxDevices ?? course?.maxDevices ?? 3);
+        const limitLabel =
+          courseLimit >= 1000
+            ? 'بمرونة كاملة لهذا الكورس'
+            : courseLimit === 1
+            ? 'على هذا الجهاز فقط (جهاز واحد بحد أقصى لهذا الكورس)'
+            : courseLimit === 2
+            ? 'بحد أقصى جهازين لهذا الكورس'
+            : `بحد أقصى ${courseLimit} أجهزة لهذا الكورس`;
         setIsEnrolled(true);
         setActivationSuccessData({
           courseTitle: res.courseTitle || course?.title || 'كورس مستر محمد رضوان',
-          deviceMessage: 'سيتم اعتماد هذا الجهاز كأول جهاز أساسي لك (مثبت للأمان)، ولك صلاحية استخدام جهاز واحد آخر إضافي على نفس الإيميل وكلمة المرور (حد أقصى جهازين فقط).'
+          maxDevices: courseLimit,
+          deviceMessage: `تم اعتماد هذا الجهاز كجهاز التفعيل الأساسي لك لهذا الكورس (مثبت للأمان)، ويُسمح لك بمتابعة الكورس ${limitLabel} مع احتساب المتصفحات على نفس الجهاز كجهاز واحد.`,
         });
         setActivationCode('');
         setShowSuccessModal(true);
@@ -217,9 +228,11 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
           parentPhone: currentUser.parentPhone,
         }
       );
+      const courseLimit = Number(course?.maxDevices ?? 3);
       setActivationSuccessData({
         courseTitle: course?.title || 'كورس مجاني',
-        deviceMessage: 'تم انضمامك للكورس بنجاح. يمكنك الآن بدء التعلم بحرية تامة!',
+        maxDevices: courseLimit,
+        deviceMessage: 'تم انضمامك للكورس وتوثيق جهاز التفعيل الأساسي بنجاح. يمكنك الآن بدء التعلم بحرية تامة!',
       });
       setShowSuccessModal(true);
     } catch (err: any) {
@@ -599,7 +612,15 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
-                    <span>الأجهزة المسموحة: 2 كحد أقصى</span>
+                    <span>
+                      {activationSuccessData.maxDevices >= 1000
+                        ? 'أجهزة الكورس: مفتوح'
+                        : activationSuccessData.maxDevices === 1
+                        ? 'أجهزة الكورس: جهاز واحد فقط'
+                        : activationSuccessData.maxDevices === 2
+                        ? 'أجهزة الكورس: جهازان كحد أقصى'
+                        : `أجهزة الكورس: ${activationSuccessData.maxDevices} أجهزة كحد أقصى`}
+                    </span>
                   </div>
                 </div>
               </div>

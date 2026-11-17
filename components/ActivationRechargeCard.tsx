@@ -13,7 +13,8 @@ import {
   Building2, 
   Sparkles,
   Smartphone,
-  QrCode
+  QrCode,
+  Calendar
 } from 'lucide-react';
 import { ActivationCodeData, CourseData } from '@/lib/academicService';
 
@@ -49,18 +50,20 @@ export default function ActivationRechargeCard({
 
   const handleShareWhatsApp = (e: React.MouseEvent) => {
     e.stopPropagation();
+    const dob = code.studentBirthDate || code.assignedStudentBirthDate;
     const message = encodeURIComponent(
       `مرحباً بك في منصة مستر محمد رضوان التعليمية 🌟\n\n` +
       `🎓 كارت اشتراك وتفعيل الكورس:\n` +
       `📌 الكورس: ${courseTitle}\n` +
       (code.assignedStudentName ? `👤 الطالب المخصص له: ${code.assignedStudentName}\n` : '') +
+      (dob ? `🎂 تاريخ ميلاد الطالب: ${dob}\n` : '') +
       (code.centerOrGroup ? `🏢 السنتر / المجموعة: ${code.centerOrGroup}\n` : '') +
       `🔑 كود التفعيل: ${code.code}\n\n` +
       `📱 خطوات التفعيل:\n` +
       `1. سجل دخولك على المنصة.\n` +
       `2. افتح صفحة الكورس واختر (كود سنتر).\n` +
       `3. الصق الكود أعلاه واضغط (تفعيل الكود).\n` +
-      `⚠️ ملاحظة أمنية: الكود يعمل بحد أقصى على جهازين فقط وفقاً لسياسة المنصة.`
+      `⚠️ ملاحظة أمنية: هذا الكود مخصص لحسابك ويعمل وفقاً للحد المعتمد للكورس (${(course?.maxDevices ?? 3) >= 1000 ? 'مفتوح بدون قيود' : (course?.maxDevices ?? 3) === 1 ? 'جهاز واحد فقط' : (course?.maxDevices ?? 3) === 2 ? 'جهازين بحد أقصى' : `${course?.maxDevices ?? 3} أجهزة بحد أقصى`})، وتُحتسب المتصفحات على نفس الجهاز كجهاز واحد.`
     );
     window.open(`https://wa.me/?text=${message}`, '_blank');
   };
@@ -156,7 +159,7 @@ export default function ActivationRechargeCard({
       </div>
 
       {/* Personalized Student & Center Badges */}
-      {(code.assignedStudentName || code.centerOrGroup) && (
+      {(code.assignedStudentName || code.studentBirthDate || code.assignedStudentBirthDate || code.centerOrGroup) && (
         <div className="mb-4 p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200/70 dark:border-slate-800 space-y-1.5 text-xs">
           {code.assignedStudentName && (
             <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 font-black">
@@ -164,6 +167,15 @@ export default function ActivationRechargeCard({
               <span>كود مخصص للطالب:</span>
               <span className="text-slate-900 dark:text-white underline decoration-amber-500 font-black">
                 {code.assignedStudentName}
+              </span>
+            </div>
+          )}
+          {(code.studentBirthDate || code.assignedStudentBirthDate) && (
+            <div className="flex items-center gap-2 text-teal-600 dark:text-teal-400 font-bold text-[11px]">
+              <Calendar className="w-3.5 h-3.5 shrink-0" />
+              <span>تاريخ ميلاد الطالب:</span>
+              <span className="font-mono font-black text-slate-800 dark:text-slate-200 bg-teal-50 dark:bg-teal-950/60 px-1.5 py-0.5 rounded-md border border-teal-200 dark:border-teal-800">
+                {code.studentBirthDate || code.assignedStudentBirthDate}
               </span>
             </div>
           )}
@@ -197,10 +209,14 @@ export default function ActivationRechargeCard({
         </div>
       </div>
 
-      {/* Security & 2-Device Policy Notice */}
+      {/* Security & Per-Course Device Policy Notice */}
       <div className="flex items-center gap-2 text-[10px] font-bold text-slate-500 dark:text-slate-400 bg-slate-100/70 dark:bg-slate-900/40 p-2 rounded-xl mb-4">
         <Smartphone className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-        <span>حماية مشددة: مسموح بالتفعيل على (جهازين فقط) كحد أقصى.</span>
+        <span>
+          {(course?.maxDevices ?? 3) >= 1000
+            ? 'حماية الكورس: تفعيل مرن مع توحيد المتصفحات على نفس الجهاز.'
+            : `حماية الكورس: يعمل التفعيل حتى (${(course?.maxDevices ?? 3) === 1 ? 'جهاز واحد فقط' : (course?.maxDevices ?? 3) === 2 ? 'جهازين فقط' : `${course?.maxDevices ?? 3} أجهزة`}) بحد أقصى.`}
+        </span>
       </div>
 
       {/* Screen Interactive Actions (Hidden in Print Mode) */}

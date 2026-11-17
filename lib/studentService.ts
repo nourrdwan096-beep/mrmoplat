@@ -12,6 +12,7 @@ import {
   revokePasswordResetByTeacherAction,
   bulkAuthorizePasswordResetByTeacherAction,
   bulkRevokePasswordResetByTeacherAction,
+  getStudentRegisteredDevicesAction,
   PasswordResetRequestItem,
 } from '@/app/actions/studentActions';
 
@@ -64,8 +65,12 @@ export async function deleteStudent(studentId: string) {
   return await deleteStudentAction(studentId);
 }
 
-export async function resetStudentDeviceLock(studentId: string) {
-  return await resetStudentDeviceLockAction(studentId);
+export async function resetStudentDeviceLock(studentId: string, courseId?: string) {
+  return await resetStudentDeviceLockAction(studentId, courseId);
+}
+
+export async function fetchStudentDevicesDetails(studentId: string, courseId?: string) {
+  return await getStudentRegisteredDevicesAction(studentId, courseId);
 }
 
 export async function createStudentByTeacher(data: {

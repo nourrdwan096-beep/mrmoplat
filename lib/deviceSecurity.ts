@@ -1,19 +1,17 @@
 'use client';
 
 /**
- * MR. MOHAMED RADWAN EDUCATION PLATFORM - ULTRA-SECURE DEVICE FINGERPRINTING
- * 
- * Hardware-level cryptographic fingerprinting engine combining:
- * 1. 2D Canvas rendering & subpixel font antialiasing
- * 2. WebGL vendor, unmasked renderer, and shader precision profile
- * 3. Web AudioContext oscillator & dynamics compressor response
- * 4. Hardware specs (cores, device memory, screen geometry, pixel ratio, touch points)
- * 5. Multi-Storage Persistence (LocalStorage, SessionStorage, IndexedDB, Persistent Cookie)
- * 
- * Prevents device spoofing, private window bypass, and clearing of standard storage.
+ * MR. MOHAMED RADWAN EDUCATION PLATFORM - CROSS-BROWSER HARDWARE & DEVICE SECURITY
+ *
+ * Physical Hardware Unification:
+ * - Browsers are NOT devices: Chrome, Edge, Firefox, Safari, Samsung Internet, and Incognito
+ *   on the exact same physical machine compute the exact same `hardwareCoreId` (`MR_PHY_<hash>`).
+ * - Per-course device quotas and Primary Activation locking are verified server-side.
+ * - Cross-student collisions are impossible because physical core matching only coalesces devices
+ *   belonging to the SAME authenticated student account.
  */
 
-// Simple fast 64-bit hash (djb2-like + fnv-1a variant)
+// Fast 64-bit deterministic hash (djb2 + fnv-1a variant)
 function hashString(str: string): string {
   let h1 = 0xdeadbeef ^ 0;
   let h2 = 0x41c64e6d ^ 0;
@@ -28,7 +26,7 @@ function hashString(str: string): string {
   return hash.toString(16).padStart(12, '0');
 }
 
-// 1. Canvas Fingerprinting
+// 1. Canvas Fingerprinting (auxiliary forensic signal)
 function getCanvasFingerprint(): string {
   try {
     const canvas = document.createElement('canvas');
@@ -48,7 +46,6 @@ function getCanvasFingerprint(): string {
     ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
     ctx.fillText('MR-RADWAN-EDU-2030 🛡️🚀', 4, 17);
 
-    // Geometric curves with anti-aliasing
     ctx.beginPath();
     ctx.arc(50, 45, 15, 0, Math.PI * 2, true);
     ctx.closePath();
@@ -58,6 +55,57 @@ function getCanvasFingerprint(): string {
     return hashString(canvas.toDataURL());
   } catch {
     return 'canvas-err';
+  }
+}
+
+/**
+ * Normalizes GPU vendor + renderer string so Chrome (ANGLE / Direct3D), Firefox,
+ * Edge, and Safari on the SAME physical hardware collapse into a stable GPU core token.
+ */
+function extractNormalizedGpuInfo(): { gpuCore: string; maxTexBucket: number } {
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')) as WebGLRenderingContext | null;
+    if (!gl) return { gpuCore: 'no-webgl', maxTexBucket: 0 };
+
+    const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+    const rawVendor = String(debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR) || '');
+    const rawRenderer = String(debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER) || '');
+    const maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0);
+
+    // Strip browser wrappers while keeping silicon architecture tokens (NVIDIA RTX/GTX, AMD Radeon, Intel UHD/Iris, Apple M1/GPU, Adreno, Mali, PowerVR, etc.)
+    const cleanStr = (s: string) =>
+      s
+        .toUpperCase()
+        .replace(/ANGLE\s*\(/g, ' ')
+        .replace(/GOOGLE INC\.?\s*\(?/g, ' ')
+        .replace(/DIRECT3D\d*\s*(VS_\d+_\d+\s*PS_\d+_\d+)?/g, ' ')
+        .replace(/D3D\d+|OPENGL ENGINE|METAL/g, ' ')
+        .replace(/\(\s*0X[0-9A-F]+\s*\)/g, ' ')
+        .replace(/0X[0-9A-F]+/g, ' ')
+        .replace(/[^A-Z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const vendorClean = cleanStr(rawVendor);
+    const rendererClean = cleanStr(rawRenderer);
+
+    // Extract canonical GPU family / model signature invariant across browsers
+    const combined = `${vendorClean} ${rendererClean}`.trim();
+    const knownMatch = combined.match(
+      /(APPLE M\d+(?:\s*(?:PRO|MAX|ULTRA))?|APPLE GPU|ADRENO\s*(?:\(TM\)\s*)?\d+|MALI-[A-Z0-9]+|POWERVR\s*[A-Z0-9]+|GEFORCE\s*[A-Z]*\s*\d+[A-Z]*|RTX\s*\d+[A-Z]*|GTX\s*\d+[A-Z]*|RADEON\s*(?:RX\s*)?[A-Z0-9]+|IRIS\s*[A-Z0-9\s]*|UHD GRAPHICS\s*\d*|HD GRAPHICS\s*\d*|INTEL\s*[A-Z0-9]+|SWIFTSHADER|LLVMPipe)/i
+    );
+
+    const gpuCore = knownMatch
+      ? knownMatch[1].replace(/\s+/g, '_')
+      : (rendererClean || vendorClean || 'GENERIC_GPU').slice(0, 48).replace(/\s+/g, '_');
+
+    return {
+      gpuCore,
+      maxTexBucket: maxTextureSize > 0 ? Math.round(Math.log2(maxTextureSize)) : 0,
+    };
+  } catch {
+    return { gpuCore: 'webgl-err', maxTexBucket: 0 };
   }
 }
 
@@ -71,12 +119,9 @@ function getWebGLFingerprint(): string {
     const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
     const vendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
     const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
-    const version = gl.getParameter(gl.VERSION);
-    const shadingLangVersion = gl.getParameter(gl.SHADING_LANGUAGE_VERSION);
     const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
 
-    const raw = `${vendor}~${renderer}~${version}~${shadingLangVersion}~${maxTextureSize}`;
-    return hashString(raw);
+    return hashString(`${vendor}~${renderer}~${maxTextureSize}`);
   } catch {
     return 'webgl-err';
   }
@@ -106,7 +151,7 @@ async function getAudioFingerprint(): Promise<string> {
 
     const renderedBuffer = await context.startRendering();
     const channelData = renderedBuffer.getChannelData(0);
-    
+
     let sum = 0;
     for (let i = 4500; i < 5000; i++) {
       sum += Math.abs(channelData[i] || 0);
@@ -117,24 +162,48 @@ async function getAudioFingerprint(): Promise<string> {
   }
 }
 
+/**
+ * Zoom-independent and orientation-independent physical screen geometry.
+ * Chrome, Edge, Firefox, Safari, and Incognito yield identical physical pixel dimensions
+ * when multiplying logical screen dimensions by DPR and normalizing orientation.
+ */
+function getZoomCompensatedPhysicalScreen(): {
+  physMax: number;
+  physMin: number;
+  logicalSummary: string;
+} {
+  if (typeof window === 'undefined') {
+    return { physMax: 0, physMin: 0, logicalSummary: 'server' };
+  }
+  const sw = window.screen?.width || 0;
+  const sh = window.screen?.height || 0;
+  const dpr = window.devicePixelRatio || 1;
+  const pw = Math.round((sw * dpr) / 4) * 4;
+  const ph = Math.round((sh * dpr) / 4) * 4;
+  const physMax = Math.max(pw, ph);
+  const physMin = Math.min(pw, ph);
+  const maxDim = Math.max(sw, sh);
+  const minDim = Math.min(sw, sh);
+  const roundedDpr = Math.round(dpr * 10) / 10;
+  return {
+    physMax,
+    physMin,
+    logicalSummary: `${maxDim}x${minDim}@${roundedDpr}`,
+  };
+}
+
 // 4. Hardware & Screen Profile
 function getHardwareProfile(): string {
   if (typeof window === 'undefined') return 'server';
-
-  const sw = window.screen?.width || 0;
-  const sh = window.screen?.height || 0;
-  const maxDim = Math.max(sw, sh);
-  const minDim = Math.min(sw, sh);
-  const pixelRatio = Math.round((window.devicePixelRatio || 1) * 10) / 10;
-
   const nav = navigator as any;
+  const { physMax, physMin } = getZoomCompensatedPhysicalScreen();
   const hardware = [
     nav.hardwareConcurrency || 4,
-    nav.maxTouchPoints || 0,
+    (nav.maxTouchPoints || 0) > 0 ? 'T' : 'N',
     nav.platform || 'platform',
   ].join('|');
 
-  return `${maxDim}x${minDim}@${pixelRatio};${hardware}`;
+  return `${physMax}x${physMin};${hardware}`;
 }
 
 export interface PhysicalHardwareProfile {
@@ -143,15 +212,18 @@ export interface PhysicalHardwareProfile {
   os: 'Android' | 'iOS' | 'Windows' | 'macOS' | 'Linux' | 'Other';
   osArabic: string;
   screenSummary: string;
+  gpuSummary: string;
+  timezone: string;
+  hardwareCoreId: string;
   hardwareFingerprint: string;
   displayName: string;
   browserName: string;
 }
 
 /**
- * Accurately classifies the physical device category, operating system, and hardware signature.
- * This signature is invariant across all browsers (Chrome, Firefox, Safari, Samsung Internet, Edge),
- * tabs, and private windows on the exact same physical device.
+ * Accurately classifies physical hardware, OS, and computes `hardwareCoreId` (`MR_PHY_<hash>`).
+ * `hardwareCoreId` stays invariant across Chrome, Firefox, Edge, Safari, Samsung Internet,
+ * tabs, and Incognito / Private windows on the same physical machine.
  */
 export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
   if (typeof window === 'undefined') {
@@ -161,6 +233,9 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
       os: 'Other',
       osArabic: 'نظام تشغيل',
       screenSummary: 'server',
+      gpuSummary: 'SERVER',
+      timezone: 'UTC',
+      hardwareCoreId: 'MR_PHY_SERVER',
       hardwareFingerprint: 'DEV-SERVER',
       displayName: 'بيئة السيرفر',
       browserName: 'Server',
@@ -170,14 +245,14 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
   const nav = navigator as any;
   const ua = nav.userAgent || '';
 
-  // 1. Detect OS accurately across all browsers
+  // 1. Detect OS accurately across all browsers (handles iPadOS desktop-mode UA)
   let os: 'Android' | 'iOS' | 'Windows' | 'macOS' | 'Linux' | 'Other' = 'Other';
   let osArabic = 'نظام تشغيل';
 
   if (/Android/i.test(ua)) {
     os = 'Android';
     osArabic = 'أندرويد (Android)';
-  } else if (/iPhone|iPad|iPod/i.test(ua) || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1)) {
+  } else if (/iPhone|iPad|iPod/i.test(ua) || (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1)) {
     os = 'iOS';
     osArabic = 'أبل (iOS / iPadOS)';
   } else if (/Windows/i.test(ua)) {
@@ -195,8 +270,11 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
   let deviceType: 'mobile' | 'tablet' | 'desktop' = 'desktop';
   let deviceTypeArabic = 'كمبيوتر / لابتوب';
 
-  const isTablet = /iPad|tablet|(android(?!.*mobile))/i.test(ua) || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1);
-  const isMobile = !isTablet && (/Mobile|iPhone|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua) || (window.screen?.width < 600 && (nav.maxTouchPoints || 0) > 0));
+  const isTablet = /iPad|tablet|(android(?!.*mobile))/i.test(ua) || (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1);
+  const isMobile =
+    !isTablet &&
+    (/Mobile|iPhone|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua) ||
+      ((window.screen?.width || 999) < 600 && (nav.maxTouchPoints || 0) > 0));
 
   if (isTablet) {
     deviceType = 'tablet';
@@ -209,27 +287,39 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
     deviceTypeArabic = 'كمبيوتر / لابتوب';
   }
 
-  // 3. Browser Info (informational only - does NOT fragment the physical device!)
+  // 3. Browser Info (informational tag appended to `browsersSeen` — never fragments physical device)
   let browserName = 'متصفح ويب';
-  if (/Edg/i.test(ua)) browserName = 'Microsoft Edge';
+  if (/Edg\//i.test(ua)) browserName = 'Microsoft Edge';
   else if (/SamsungBrowser/i.test(ua)) browserName = 'Samsung Internet';
-  else if (/Chrome/i.test(ua) && !/Edg/i.test(ua) && !/OPR/i.test(ua)) browserName = 'Google Chrome';
-  else if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) browserName = 'Apple Safari';
-  else if (/Firefox/i.test(ua)) browserName = 'Mozilla Firefox';
   else if (/OPR|Opera/i.test(ua)) browserName = 'Opera';
+  else if (/Firefox|FxiOS/i.test(ua)) browserName = 'Mozilla Firefox';
+  else if (/CriOS|Chrome/i.test(ua) && !/Edg/i.test(ua)) browserName = 'Google Chrome';
+  else if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) browserName = 'Apple Safari';
 
-  // 4. Physical Screen Specs - Rotation & Browser UI Independent
-  const sw = window.screen?.width || 0;
-  const sh = window.screen?.height || 0;
-  const maxDim = Math.max(sw, sh);
-  const minDim = Math.min(sw, sh);
-  const pixelRatio = Math.round((window.devicePixelRatio || 1) * 10) / 10;
-  const cores = nav.hardwareConcurrency || 4;
-  const touchPoints = (nav.maxTouchPoints && nav.maxTouchPoints > 0) ? 'TOUCH' : 'NOTOUCH';
+  // 4. Cross-browser physical silicon & display core
+  const { physMax, physMin, logicalSummary } = getZoomCompensatedPhysicalScreen();
+  const { gpuCore, maxTexBucket } = extractNormalizedGpuInfo();
+  const coresBucket = Math.min(32, Math.max(1, Number(nav.hardwareConcurrency || 4)));
+  const touchCap = (nav.maxTouchPoints || 0) > 0 ? 'TOUCH' : 'NOTOUCH';
+  let timezone = 'UTC';
+  try {
+    timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {}
 
-  const screenSummary = `${maxDim}x${minDim}@${pixelRatio}`;
+  const coreSeed = [
+    os,
+    deviceType,
+    gpuCore,
+    `${physMax}x${physMin}`,
+    `C${coresBucket}`,
+    touchCap,
+    `T${maxTexBucket}`,
+    timezone,
+  ].join('::');
 
-  // 5. Unforgeable Unique Device Hardware Token (0% collision across physical devices)
+  const hardwareCoreId = `MR_PHY_${hashString(coreSeed).toUpperCase()}`;
+
+  // 5. Persistent browser installation token (for multi-layer recovery & hardware ban defense)
   const hardwareFingerprint = getPersistentUniqueDeviceToken();
   const displayName = `${deviceTypeArabic} (${osArabic})`;
 
@@ -238,7 +328,10 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
     deviceTypeArabic,
     os,
     osArabic,
-    screenSummary,
+    screenSummary: `${physMax}x${physMin} (${logicalSummary})`,
+    gpuSummary: gpuCore,
+    timezone,
+    hardwareCoreId,
     hardwareFingerprint,
     displayName,
     browserName,
@@ -258,18 +351,11 @@ function generateSecureUuid(): string {
   });
 }
 
-/**
- * Checks if a token is a legacy generic screen resolution string
- */
 export function isLegacyGenericFingerprint(token: string | null | undefined): boolean {
   if (!token) return false;
   return /^DEV-(MOBILE|DESKTOP|TABLET)-(ANDROID|WINDOWS|IOS|LINUX|OTHER)-\d+X\d+/i.test(token);
 }
 
-/**
- * Generates or retrieves an unforgeable unique device installation token
- * that guarantees absolute zero collision across different physical devices.
- */
 export function getPersistentUniqueDeviceToken(): string {
   if (typeof window === 'undefined') return 'SERVER_ENVIRONMENT';
 
@@ -300,7 +386,6 @@ export function getPersistentUniqueDeviceToken(): string {
     }
   }
 
-  // Purge any legacy generic screen resolution fingerprints from all storage
   try {
     const oldFp1 = localStorage.getItem('mr_hw_device_fp');
     if (isLegacyGenericFingerprint(oldFp1)) localStorage.removeItem('mr_hw_device_fp');
@@ -330,10 +415,6 @@ export function getPersistentUniqueDeviceToken(): string {
   return token;
 }
 
-/**
- * Computes an auxiliary cross-browser physical hardware signature using Canvas, WebGL, AudioContext, and device geometry.
- * Used alongside the persistent MR_DEV token to strengthen telemetry without false-positive cross-student collisions.
- */
 export async function computeHardwareSignature(): Promise<string> {
   if (typeof window === 'undefined') return 'MR_HW_SERVER';
   try {
@@ -480,11 +561,6 @@ async function saveCacheToken(dataObj: any): Promise<void> {
   }
 }
 
-/**
- * Gather and synchronize the persistent device token across ALL 5 storage layers
- * (localStorage, sessionStorage, Cookie, IndexedDB, Cache API).
- * If any layer was cleared by the user, the surviving layer re-hydrates all others.
- */
 export async function getStrictDeviceFingerprint(): Promise<string> {
   if (typeof window === 'undefined') return 'SERVER_ENVIRONMENT';
 
@@ -521,7 +597,6 @@ export async function getStrictDeviceFingerprint(): Promise<string> {
     }
   }
 
-  // Crucial recovery check: inspect IndexedDB and Cache Storage before generating a new ID!
   if (!recoveredToken) {
     try {
       const idbToken = await getIndexedDBToken();
@@ -540,10 +615,8 @@ export async function getStrictDeviceFingerprint(): Promise<string> {
     } catch {}
   }
 
-  // Only create a brand new UUID if ALL 5 storage layers were empty
   const finalFp = recoveredToken || getPersistentUniqueDeviceToken();
 
-  // Re-anchor across all 5 persistence layers synchronously & asynchronously
   try {
     localStorage.setItem(UNIQUE_DEVICE_STORAGE_KEY, finalFp);
     localStorage.setItem('mr_hw_device_fp', finalFp);
@@ -562,8 +635,24 @@ export async function getStrictDeviceFingerprint(): Promise<string> {
   return finalFp;
 }
 
+export interface DeviceContextPayload {
+  primaryFingerprint: string;
+  hardwareCoreId: string;
+  candidateFingerprints: string[];
+  name: string;
+  browser: string;
+  os: 'Android' | 'iOS' | 'Windows' | 'macOS' | 'Linux' | 'Other';
+  osArabic: string;
+  deviceType: 'mobile' | 'tablet' | 'desktop';
+  deviceTypeArabic: string;
+  gpuSummary: string;
+  screenSummary: string;
+  timezone: string;
+}
+
 export interface StrictDeviceIdentity {
   primaryFingerprint: string;
+  hardwareCoreId: string;
   candidateFingerprints: string[];
   hardwareSignature?: string;
   isLocallyLocked: boolean;
@@ -577,13 +666,11 @@ export interface StrictDeviceIdentity {
   } | null;
 }
 
-/**
- * Gather complete identity with all historical fingerprints, hardware signature, and lock status
- */
 export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
   if (typeof window === 'undefined') {
     return {
       primaryFingerprint: 'SERVER',
+      hardwareCoreId: 'MR_PHY_SERVER',
       candidateFingerprints: [],
       hardwareSignature: 'MR_HW_SERVER',
       isLocallyLocked: false,
@@ -591,6 +678,7 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
     };
   }
 
+  const profile = getPhysicalHardwareProfile();
   const [primaryFp, hardwareSignature, idbData, cacheData] = await Promise.all([
     getStrictDeviceFingerprint(),
     computeHardwareSignature(),
@@ -602,8 +690,10 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
   if (primaryFp && !isLegacyGenericFingerprint(primaryFp)) {
     candidateSet.add(primaryFp);
   }
+  if (profile.hardwareCoreId) {
+    candidateSet.add(profile.hardwareCoreId);
+  }
 
-  // Collect candidate legitimate tokens across all 5 stores, strictly ignoring legacy screen dimensions
   try {
     const k1 = localStorage.getItem(UNIQUE_DEVICE_STORAGE_KEY);
     const k2 = localStorage.getItem('mr_device_fingerprint');
@@ -626,7 +716,6 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
     if (tok && !isLegacyGenericFingerprint(tok)) candidateSet.add(tok);
   });
 
-  // Check Local Lock and Stored Student Profile
   let isLocallyLocked = false;
   let studentId: string | undefined = undefined;
   let storedStudent: StrictDeviceIdentity['storedStudent'] = null;
@@ -672,6 +761,7 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
 
   return {
     primaryFingerprint: primaryFp,
+    hardwareCoreId: profile.hardwareCoreId,
     candidateFingerprints: Array.from(candidateSet).filter(Boolean),
     hardwareSignature,
     isLocallyLocked,
@@ -681,8 +771,43 @@ export async function getStrictDeviceIdentity(): Promise<StrictDeviceIdentity> {
 }
 
 /**
- * Clear the local device lock to allow re-registration if the server confirms the student is deleted
+ * Full unified hardware + browser payload sent to server for logins, enrollments, and course checks.
  */
+export async function getDeviceContextPayload(): Promise<DeviceContextPayload> {
+  if (typeof window === 'undefined') {
+    return {
+      primaryFingerprint: 'SERVER',
+      hardwareCoreId: 'MR_PHY_SERVER',
+      candidateFingerprints: [],
+      name: 'بيئة السيرفر',
+      browser: 'Server',
+      os: 'Other',
+      osArabic: 'نظام تشغيل',
+      deviceType: 'desktop',
+      deviceTypeArabic: 'كمبيوتر / سيرفر',
+      gpuSummary: 'SERVER',
+      screenSummary: 'server',
+      timezone: 'UTC',
+    };
+  }
+  const profile = getPhysicalHardwareProfile();
+  const identity = await getStrictDeviceIdentity();
+  return {
+    primaryFingerprint: identity.primaryFingerprint,
+    hardwareCoreId: profile.hardwareCoreId,
+    candidateFingerprints: identity.candidateFingerprints,
+    name: profile.displayName,
+    browser: profile.browserName,
+    os: profile.os,
+    osArabic: profile.osArabic,
+    deviceType: profile.deviceType,
+    deviceTypeArabic: profile.deviceTypeArabic,
+    gpuSummary: profile.gpuSummary,
+    screenSummary: profile.screenSummary,
+    timezone: profile.timezone,
+  };
+}
+
 export async function clearDeviceLock(): Promise<void> {
   if (typeof window === 'undefined') return;
 
@@ -697,7 +822,7 @@ export async function clearDeviceLock(): Promise<void> {
     localStorage.removeItem('mr_radwan_device_fp');
     localStorage.removeItem('mr_radwan_registered_devices');
     localStorage.removeItem('mr_radwan_current_user');
-    
+
     sessionStorage.removeItem('mr_device_registered');
     sessionStorage.removeItem('mr_device_student_binding');
     sessionStorage.removeItem('mr_registered_student_info');
@@ -705,7 +830,6 @@ export async function clearDeviceLock(): Promise<void> {
     sessionStorage.removeItem('mr_student_email');
     sessionStorage.removeItem('mr_student_phone');
 
-    // Expire all security and binding cookies
     document.cookie = 'mr_device_registered=; path=/; max-age=0';
     document.cookie = 'mr_device_student_binding=; path=/; max-age=0';
     document.cookie = 'mr_student_id=; path=/; max-age=0';
@@ -713,8 +837,7 @@ export async function clearDeviceLock(): Promise<void> {
     document.cookie = 'mr_student_phone=; path=/; max-age=0';
     document.cookie = 'mr_hw_device_fp=; path=/; max-age=0';
     document.cookie = 'mr_radwan_user=; path=/; max-age=0';
-    
-    // Clear IndexedDB cache
+
     try {
       if (window.indexedDB) {
         const req = indexedDB.open(IDB_NAME, 1);
@@ -728,25 +851,21 @@ export async function clearDeviceLock(): Promise<void> {
           }
         };
       }
-    } catch (e) {}
+    } catch {}
 
-    // Clear Cache API
     if ('caches' in window) {
       try {
         const cache = await caches.open(CACHE_NAME);
         await cache.delete(CACHE_KEY_URL);
         await caches.delete(CACHE_NAME);
         await caches.delete('MR_RADWAN_CACHE_V1');
-      } catch (e) {}
+      } catch {}
     }
   } catch (err) {
     console.warn('Error clearing device lock', err);
   }
 }
 
-/**
- * Permanently lock device locally across all 5 layers upon confirmed server registration
- */
 export async function lockDevicePermanently(studentInfo: {
   id?: string;
   fullName?: string;
@@ -762,19 +881,12 @@ export async function lockDevicePermanently(studentInfo: {
     localStorage.setItem('mr_device_registered', 'true');
     localStorage.setItem('mr_device_student_binding', JSON.stringify(studentInfo));
     localStorage.setItem('mr_registered_student_info', JSON.stringify(studentInfo));
-    if (studentInfo.id) {
-      localStorage.setItem('mr_student_id', studentInfo.id);
-    }
-    if (studentInfo.email) {
-      localStorage.setItem('mr_student_email', studentInfo.email);
-    }
-    if (studentInfo.phone) {
-      localStorage.setItem('mr_student_phone', studentInfo.phone);
-    }
+    if (studentInfo.id) localStorage.setItem('mr_student_id', studentInfo.id);
+    if (studentInfo.email) localStorage.setItem('mr_student_email', studentInfo.email);
+    if (studentInfo.phone) localStorage.setItem('mr_student_phone', studentInfo.phone);
     localStorage.setItem('mr_hw_device_fp', fp);
     localStorage.setItem('mr_radwan_device_fp', fp);
-    
-    // Add to registered devices list
+
     const regDevices = JSON.parse(localStorage.getItem('mr_radwan_registered_devices') || '[]');
     if (!regDevices.includes(fp)) {
       regDevices.push(fp);
@@ -789,15 +901,9 @@ export async function lockDevicePermanently(studentInfo: {
 
   setCookie('mr_device_registered', 'true');
   setCookie('mr_device_student_binding', JSON.stringify(studentInfo));
-  if (studentInfo.id) {
-    setCookie('mr_student_id', studentInfo.id);
-  }
-  if (studentInfo.email) {
-    setCookie('mr_student_email', studentInfo.email);
-  }
-  if (studentInfo.phone) {
-    setCookie('mr_student_phone', studentInfo.phone);
-  }
+  if (studentInfo.id) setCookie('mr_student_id', studentInfo.id);
+  if (studentInfo.email) setCookie('mr_student_email', studentInfo.email);
+  if (studentInfo.phone) setCookie('mr_student_phone', studentInfo.phone);
   setCookie('mr_hw_device_fp', fp);
 
   await saveIndexedDBData(fp, studentInfo);
@@ -808,9 +914,6 @@ export async function lockDevicePermanently(studentInfo: {
   });
 }
 
-/**
- * Completely unlock device locally when student is deleted by teacher
- */
 export async function unlockDevicePermanently(): Promise<void> {
   if (typeof window === 'undefined') return;
 
@@ -829,21 +932,18 @@ export async function unlockDevicePermanently(): Promise<void> {
     sessionStorage.removeItem('mr_student_phone');
   } catch {}
 
-  // Expire persistent cookies
   document.cookie = 'mr_device_registered=; path=/; max-age=0';
   document.cookie = 'mr_student_id=; path=/; max-age=0';
   document.cookie = 'mr_student_email=; path=/; max-age=0';
   document.cookie = 'mr_student_phone=; path=/; max-age=0';
   document.cookie = 'mr_device_banned=; path=/; max-age=0';
 
-  // Clear IndexedDB
   try {
     if (window.indexedDB) {
       indexedDB.deleteDatabase(IDB_NAME);
     }
   } catch {}
 
-  // Clear cache token
   try {
     if ('caches' in window) {
       await caches.delete(CACHE_NAME);
@@ -852,166 +952,175 @@ export async function unlockDevicePermanently(): Promise<void> {
   } catch {}
 }
 
-/**
- * Interface for Registered Student Device
- */
 export interface RegisteredDeviceEntry {
   id: string;
   fingerprint: string;
+  hardwareCoreId?: string;
   name: string;
   browser: string;
+  browsersSeen?: string[];
+  deviceType?: 'mobile' | 'tablet' | 'desktop';
+  os?: string;
   isPrimary: boolean;
   registeredAt: string;
   lastActive: string;
   courseId?: string;
+  courseTitle?: string;
+  activatedVia?: string;
+}
+
+export interface CourseDeviceGroup {
+  courseId: string;
+  courseTitle: string;
+  maxDevices: number;
+  isUnlimited: boolean;
+  activeCount: number;
+  remainingSlots: number | null;
+  devices: RegisteredDeviceEntry[];
 }
 
 export interface DeviceVerificationResult {
   allowed: boolean;
   isPrimary: boolean;
-  deviceNumber: 1 | 2 | 3;
+  deviceNumber: number;
+  maxDevices?: number;
+  activeCount?: number;
+  isUnlimited?: boolean;
+  isBanned?: boolean;
   message?: string;
   currentDevice?: RegisteredDeviceEntry;
   allDevices?: RegisteredDeviceEntry[];
 }
 
 /**
- * Register or verify the student's current physical device for course access.
- * Enforces the strict 2-device limit by physical hardware (Mobile, Tablet, Laptop/PC).
- * Opening different browsers or tabs on the same device is recognized as the same device.
+ * Register or verify the student's physical hardware device for accessing a specific course.
+ * Browsers on the same physical machine share `hardwareCoreId` so they NEVER consume extra device slots.
  */
 export async function registerOrVerifyStudentCourseDevice(
   studentId: string,
   courseId?: string
 ): Promise<DeviceVerificationResult> {
   if (typeof window === 'undefined' || !studentId) {
-    return { allowed: true, isPrimary: true, deviceNumber: 1 };
+    return { allowed: true, isPrimary: true, deviceNumber: 1, maxDevices: 3, activeCount: 1 };
   }
 
-  const profile = getPhysicalHardwareProfile();
-  const currentFp = await getStrictDeviceFingerprint();
+  const ctx = await getDeviceContextPayload();
 
   try {
     const { checkAndRegisterStudentDeviceAction } = await import('@/app/actions/studentActions');
-    const res = await checkAndRegisterStudentDeviceAction(studentId, currentFp, {
-      name: profile.displayName,
-      browser: profile.browserName,
-    });
+    const res = await checkAndRegisterStudentDeviceAction(
+      studentId,
+      ctx.primaryFingerprint,
+      {
+        name: ctx.name,
+        browser: ctx.browser,
+        hardwareCoreId: ctx.hardwareCoreId,
+        candidateFingerprints: ctx.candidateFingerprints,
+        os: ctx.os,
+        deviceType: ctx.deviceType,
+        gpuSummary: ctx.gpuSummary,
+        screenSummary: ctx.screenSummary,
+        timezone: ctx.timezone,
+      },
+      courseId
+    );
 
     if (res.allowed) {
       const isPrimary = Boolean((res as any).isPrimary);
+      const maxDevices = Number((res as any).maxDevices ?? 3);
+      const activeCount = Number((res as any).activeCount ?? 1);
+      const isUnlimited = Boolean((res as any).isUnlimited);
       return {
         allowed: true,
         isPrimary,
-        deviceNumber: (isPrimary ? 1 : 2) as 1 | 2,
+        deviceNumber: activeCount || (isPrimary ? 1 : 2),
+        maxDevices,
+        activeCount,
+        isUnlimited,
         currentDevice: {
-          id: 'dev_' + (isPrimary ? 'primary' : 'secondary'),
-          fingerprint: currentFp,
-          name: profile.displayName,
-          browser: profile.browserName,
+          id: (res as any).deviceId || ctx.hardwareCoreId || 'dev_primary',
+          fingerprint: ctx.primaryFingerprint,
+          hardwareCoreId: ctx.hardwareCoreId,
+          name: ctx.name,
+          browser: ctx.browser,
+          browsersSeen: [ctx.browser],
+          deviceType: ctx.deviceType,
+          os: ctx.os,
           isPrimary,
           registeredAt: new Date().toLocaleDateString('ar-EG'),
           lastActive: 'الآن (نشط)',
           courseId,
         },
       };
-    } else {
-      return {
-        allowed: false,
-        isPrimary: false,
-        deviceNumber: 3,
-        message: res.message || 'تم استكفاء عدد الأجهزة المسموحة (جهازين فقط).',
-      };
     }
+
+    return {
+      allowed: false,
+      isPrimary: false,
+      deviceNumber: Number((res as any).activeCount ?? 0) + 1,
+      maxDevices: Number((res as any).maxDevices ?? 3),
+      activeCount: Number((res as any).activeCount ?? 0),
+      isUnlimited: Boolean((res as any).isUnlimited),
+      isBanned: Boolean((res as any).isBanned),
+      message:
+        res.message ||
+        `تم استكفاء الحد الأقصى للأجهزة المصرح بها لهذا الكورس (${Number((res as any).maxDevices ?? 3)} أجهزة).`,
+    };
   } catch (err) {
     console.warn('Server device verification rejected or unavailable:', err);
     return {
       allowed: false,
       isPrimary: false,
-      deviceNumber: 3,
+      deviceNumber: 0,
       message: 'تعذر التحقق من صلاحية الجهاز على الخادم. يرجى تسجيل الدخول والمحاولة مرة أخرى.',
     };
   }
 }
 
-/**
- * Fetch all registered physical devices for a student from database
- */
-export async function getStudentRegisteredDevices(studentId: string): Promise<RegisteredDeviceEntry[]> {
-  if (typeof window === 'undefined' || !studentId) return [];
-  const storageKey = `mr_student_devices_${studentId}`;
+export async function getStudentRegisteredDevices(
+  studentId: string,
+  courseId?: string
+): Promise<{
+  devices: RegisteredDeviceEntry[];
+  courseGroups: CourseDeviceGroup[];
+  loginDevices: RegisteredDeviceEntry[];
+}> {
+  if (typeof window === 'undefined' || !studentId) {
+    return { devices: [], courseGroups: [], loginDevices: [] };
+  }
 
   try {
     const { getStudentRegisteredDevicesAction } = await import('@/app/actions/studentActions');
-    const res = await getStudentRegisteredDevicesAction(studentId);
-    if (res.success && Array.isArray(res.devices) && res.devices.length > 0) {
-      const mapped: RegisteredDeviceEntry[] = res.devices.map((d: any) => ({
-        id: d.id,
-        fingerprint: d.deviceFingerprint,
-        name: d.deviceName,
-        browser: d.browserInfo,
-        isPrimary: d.isPrimary,
-        registeredAt: d.createdAt ? new Date(d.createdAt).toLocaleDateString('ar-EG') : 'مثبت',
-        lastActive: d.lastActive ? new Date(d.lastActive).toLocaleDateString('ar-EG') : 'الآن (نشط)',
-      }));
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(mapped));
-      } catch {}
-      return mapped;
+    const res = await getStudentRegisteredDevicesAction(studentId, courseId);
+    if (res.success) {
+      return {
+        devices: (res.devices || []) as RegisteredDeviceEntry[],
+        courseGroups: (res.courseGroups || []) as CourseDeviceGroup[],
+        loginDevices: (res.loginDevices || []) as RegisteredDeviceEntry[],
+      };
     }
   } catch (e) {
     console.warn('getStudentRegisteredDevices server fetch error:', e);
   }
 
-  // Fallback to local cache
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {}
-
-  const profile = getPhysicalHardwareProfile();
-  const initial: RegisteredDeviceEntry[] = [
-    {
-      id: 'dev_primary_main',
-      fingerprint: profile.hardwareFingerprint,
-      name: profile.displayName + ' - الجهاز الأساسي',
-      browser: profile.browserName,
-      isPrimary: true,
-      registeredAt: new Date().toLocaleDateString('ar-EG'),
-      lastActive: 'الآن (نشط)',
-    }
-  ];
-  return initial;
+  return { devices: [], courseGroups: [], loginDevices: [] };
 }
 
-/**
- * Delete a secondary device for a student (Primary device CANNOT be deleted)
- * Deleting a secondary device frees slot #2 so another device can be used.
- */
-export async function deleteSecondaryStudentDevice(studentId: string, deviceId: string): Promise<boolean> {
-  if (typeof window === 'undefined' || !studentId) return false;
-  const storageKey = `mr_student_devices_${studentId}`;
+export async function deleteSecondaryStudentDevice(
+  studentId: string,
+  deviceId: string,
+  courseId?: string
+): Promise<{ success: boolean; message?: string }> {
+  if (typeof window === 'undefined' || !studentId || !deviceId) {
+    return { success: false, message: 'بيانات غير مكتملة' };
+  }
 
   try {
     const { deleteStudentSecondaryDeviceAction } = await import('@/app/actions/studentActions');
-    const res = await deleteStudentSecondaryDeviceAction(studentId, deviceId);
-    if (res.success) {
-      try {
-        const raw = localStorage.getItem(storageKey);
-        if (raw) {
-          let devices: RegisteredDeviceEntry[] = JSON.parse(raw);
-          devices = devices.filter(d => d.id !== deviceId);
-          localStorage.setItem(storageKey, JSON.stringify(devices));
-        }
-      } catch {}
-      return true;
-    }
-    return false;
-  } catch (err) {
+    const res = await deleteStudentSecondaryDeviceAction(studentId, deviceId, courseId);
+    return { success: Boolean(res.success), message: res.message };
+  } catch (err: any) {
     console.error('deleteSecondaryStudentDevice error:', err);
-    return false;
+    return { success: false, message: err?.message || 'حدث خطأ أثناء حذف الجهاز' };
   }
 }

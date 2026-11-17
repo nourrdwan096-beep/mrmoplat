@@ -18,6 +18,7 @@ export interface Course {
   publishDate: string;
   badge?: string;
   tags: string[];
+  maxDevices?: number;
 }
 
 export interface Unit {

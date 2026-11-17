@@ -486,10 +486,12 @@ export default function CourseDetailModal({
                   <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-emerald-500/30 max-w-md mx-auto text-right space-y-2 text-xs font-bold text-slate-700 dark:text-slate-300">
                     <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400 font-black">
                       <ShieldCheck className="w-4 h-4" />
-                      <span>اعتماد الجهاز والأمان:</span>
+                      <span>اعتماد الجهاز والأمان لهذا الكورس:</span>
                     </div>
                     <p className="leading-relaxed">
-                      سيتم اعتماد هذا الجهاز كأول جهاز أساسي لك، ولك صلاحية استخدام جهاز واحد آخر إضافي على نفس الإيميل وكلمة المرور (حد أقصى جهازين فقط).
+                      {(course.maxDevices ?? 3) >= 1000
+                        ? 'تم اعتماد هذا الجهاز لتشغيل الكورس بنجاح، والكورس متاح للمشاهدة بمرونة كاملة، مع احتساب المتصفحات على نفس الجهاز كجهاز واحد.'
+                        : `تم اعتماد هذا الجهاز كجهاز أساسي لك لهذا الكورس (مثبت للأمان)، ويسمح لك الكورس بالمشاهدة على إجمالي ${(course.maxDevices ?? 3) === 1 ? 'جهاز واحد فقط' : (course.maxDevices ?? 3) === 2 ? 'جهازين' : `${course.maxDevices ?? 3} أجهزة`} مع احتساب المتصفحات على نفس الجهاز كجهاز واحد.`}
                     </p>
                   </div>
 

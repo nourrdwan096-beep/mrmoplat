@@ -115,6 +115,7 @@ export interface CourseData {
   expiryDate?: string;
   enforceUnitProgression?: boolean;
   enforceItemProgression?: boolean;
+  maxDevices?: number;
   createdAt: string;
   updatedAt?: string;
 }
@@ -430,6 +431,7 @@ export async function saveCourse(course: Omit<CourseData, 'id' | 'createdAt'> & 
     expiryDate: course.expiryDate,
     enforceUnitProgression: course.enforceUnitProgression ?? true,
     enforceItemProgression: course.enforceItemProgression ?? true,
+    maxDevices: course.maxDevices !== undefined ? Number(course.maxDevices) : 3,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -501,6 +503,9 @@ export async function duplicateCourse(
     isPublished: false, // Start as draft so teacher can tweak
     publishDate: new Date().toISOString().split('T')[0],
     expiryDate: source.expiryDate,
+    enforceUnitProgression: source.enforceUnitProgression ?? true,
+    enforceItemProgression: source.enforceItemProgression ?? true,
+    maxDevices: source.maxDevices ?? 3,
   });
 
   // Duplicate units
@@ -1784,7 +1789,10 @@ export async function fetchCourseEnrolledStudents(courseId: string): Promise<Enr
               amountPaid: Number(e.amount_paid || existing?.amountPaid || 0),
               enrolledAt: e.enrolled_at || existing?.enrolledAt || new Date().toISOString(),
               progressPercentage: e.progress_percentage || existing?.progressPercentage || 0,
-              activeDevicesCount: e.active_devices_count || existing?.activeDevicesCount || 1,
+              activeDevicesCount:
+                (serverData as any).deviceCountsByStudent && sId in (serverData as any).deviceCountsByStudent
+                  ? (serverData as any).deviceCountsByStudent[sId]
+                  : (e.active_devices_count || existing?.activeDevicesCount || 0),
             });
           }
         });
@@ -2301,8 +2309,15 @@ export async function enrollStudentInCourse(
   allEnrollments.push(newEnrollment);
   setLocal(STORAGE_KEYS.ENROLLMENTS, allEnrollments);
 
-  // Persist to Server Database API (Global across all devices)
+  // Persist to Server Database API (Global across all devices) and lock Primary Activation Device
   try {
+    let deviceContext = undefined;
+    if (typeof window !== 'undefined') {
+      try {
+        const { getDeviceContextPayload } = await import('@/lib/deviceSecurity');
+        deviceContext = await getDeviceContextPayload();
+      } catch {}
+    }
     await fetch('/api/student/enrollments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2311,6 +2326,7 @@ export async function enrollStudentInCourse(
         courseId,
         paymentMethod,
         amountPaid: amount,
+        deviceContext,
       }),
     });
   } catch (apiErr) {
@@ -2350,6 +2366,7 @@ export async function redeemActivationCodeForStudent(
   message: string; 
   courseId?: string; 
   courseTitle?: string;
+  courseMaxDevices?: number;
   isFirstDevice?: boolean;
 }> {
   if (!codeStr || !codeStr.trim()) {
@@ -2393,8 +2410,16 @@ export async function redeemActivationCodeForStudent(
 
   const cleanCode = codeStr.trim().toUpperCase().replace(/\s+/g, '');
 
-  // 1. Primary Global Server-Authoritative API (Bypasses RLS, checks course match, registers in DB)
+  // 1. Primary Global Server-Authoritative API (Bypasses RLS, checks course match, binds Primary Activation device)
   try {
+    let deviceContext = undefined;
+    if (typeof window !== 'undefined') {
+      try {
+        const { getDeviceContextPayload } = await import('@/lib/deviceSecurity');
+        deviceContext = await getDeviceContextPayload();
+      } catch {}
+    }
+
     const res = await fetch('/api/course-codes/redeem', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2402,6 +2427,7 @@ export async function redeemActivationCodeForStudent(
         code: cleanCode,
         studentId: studentId.trim(),
         targetCourseId: targetCourseId?.trim() || undefined,
+        deviceContext,
         studentInfo: {
           fullName: resolvedName,
           phone: resolvedPhone,
@@ -2466,6 +2492,7 @@ export async function redeemActivationCodeForStudent(
         message: data.message || 'تم تفعيل الكورس بنجاح!',
         courseId: activatedCourseId,
         courseTitle: data.courseTitle,
+        courseMaxDevices: data.courseMaxDevices,
         isFirstDevice: true
       };
     } else {

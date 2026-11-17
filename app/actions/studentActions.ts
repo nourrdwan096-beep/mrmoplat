@@ -356,25 +356,12 @@ export async function updateStudentStatusAction(
       return false;
     }
 
-    // Fetch all devices associated with this student
-    const { data: studentDevices } = await supabaseAdmin
-      .from('student_devices')
-      .select('device_fingerprint')
-      .eq('student_id', studentId);
-
-    const allFingerprints = new Set<string>();
-    if (updatedProfile?.primary_device_fingerprint) {
-      allFingerprints.add(updatedProfile.primary_device_fingerprint);
-    }
-    if (studentDevices && studentDevices.length > 0) {
-      studentDevices.forEach((d: any) => {
-        if (d.device_fingerprint) allFingerprints.add(d.device_fingerprint);
-      });
-    }
+    // Collect all fingerprints & hardwareCoreIds across student_devices and course_device_bindings
+    const allFingerprints = await collectStudentAllFingerprints(studentId, updatedProfile?.primary_device_fingerprint);
 
     // If banned, lock all device fingerprints in banned_devices table
-    if (status === 'banned' && allFingerprints.size > 0) {
-      const banRecords = Array.from(allFingerprints).map(fp => ({
+    if (status === 'banned' && allFingerprints.length > 0) {
+      const banRecords = allFingerprints.map(fp => ({
         device_fingerprint: fp,
         reason: banReason || `حظر الطالب: ${updatedProfile.full_name} (${updatedProfile.phone})`,
       }));
@@ -394,18 +381,18 @@ export async function updateStudentStatusAction(
             name: updatedProfile.full_name,
             phone: updatedProfile.phone,
             reason: banReason,
-            lockedDevicesCount: allFingerprints.size,
+            lockedDevicesCount: allFingerprints.length,
           },
         }]);
       } catch {}
     }
 
     // If unbanned or activated, remove all associated devices from banned_devices
-    if (status === 'active' && allFingerprints.size > 0) {
+    if (status === 'active' && allFingerprints.length > 0) {
       await supabaseAdmin
         .from('banned_devices')
         .delete()
-        .in('device_fingerprint', Array.from(allFingerprints));
+        .in('device_fingerprint', allFingerprints);
 
       // Add audit log
       try {
@@ -418,16 +405,20 @@ export async function updateStudentStatusAction(
           details: {
             name: updatedProfile.full_name,
             phone: updatedProfile.phone,
-            unlockedDevicesCount: allFingerprints.size,
+            unlockedDevicesCount: allFingerprints.length,
           },
         }]);
       } catch {}
     }
 
-    // If rejected, unbind primary_device_fingerprint and clear student_devices
-    // so the student can submit a corrected application without hardware conflict
+    // If rejected, unbind primary_device_fingerprint, student_devices, and course bindings
     if (status === 'rejected') {
       await supabaseAdmin.from('student_devices').delete().eq('student_id', studentId);
+      await supabaseAdmin
+        .from('audit_logs')
+        .delete()
+        .eq('target_entity', 'course_device_bindings')
+        .eq('actor_id', studentId);
       await supabaseAdmin
         .from('profiles')
         .update({ primary_device_fingerprint: null })
@@ -462,31 +453,23 @@ export async function deleteStudentAction(studentId: string) {
       return { success: true, message: 'الطالب غير موجود أو تم حذفه بالفعل' };
     }
 
-    // 2. Fetch any registered devices to release any bans on them
-    const { data: registeredDevs } = await supabaseAdmin
-      .from('student_devices')
-      .select('device_fingerprint')
-      .eq('student_id', cleanId);
+    // 2. Collect any registered devices to release any bans on them
+    const fingerprintsToRelease = await collectStudentAllFingerprints(cleanId, student.primary_device_fingerprint);
 
-    const fingerprintsToRelease = new Set<string>();
-    if (student.primary_device_fingerprint) {
-      fingerprintsToRelease.add(student.primary_device_fingerprint);
-    }
-    if (registeredDevs && registeredDevs.length > 0) {
-      registeredDevs.forEach(d => {
-        if (d.device_fingerprint) fingerprintsToRelease.add(d.device_fingerprint);
-      });
-    }
-
-    if (fingerprintsToRelease.size > 0) {
+    if (fingerprintsToRelease.length > 0) {
       await supabaseAdmin
         .from('banned_devices')
         .delete()
-        .in('device_fingerprint', Array.from(fingerprintsToRelease));
+        .in('device_fingerprint', fingerprintsToRelease);
     }
 
     // 3. Delete related records
     await supabaseAdmin.from('student_devices').delete().eq('student_id', cleanId);
+    await supabaseAdmin
+      .from('audit_logs')
+      .delete()
+      .eq('target_entity', 'course_device_bindings')
+      .eq('actor_id', cleanId);
     await supabaseAdmin.from('student_item_progress').delete().eq('student_id', cleanId);
     await supabaseAdmin.from('course_enrollments').delete().eq('student_id', cleanId);
     await supabaseAdmin.from('support_tickets').delete().eq('student_id', cleanId);
@@ -528,10 +511,10 @@ export async function deleteStudentAction(studentId: string) {
 }
 
 /**
- * Reset student hardware device lock allowing student to log in from a new device
- * or re-bind their device without deleting their account or academic progress.
+ * Reset student hardware device lock (globally or for a specific course)
+ * allowing student to re-bind physical devices without deleting account or academic progress.
  */
-export async function resetStudentDeviceLockAction(studentId: string) {
+export async function resetStudentDeviceLockAction(studentId: string, courseId?: string) {
   try {
     const session = await requireStaffSession();
     if (!session || (!session.isTeacher && !session.assistantPermissions?.can_manage_students)) {
@@ -539,9 +522,9 @@ export async function resetStudentDeviceLockAction(studentId: string) {
     }
 
     const cleanId = (studentId || '').trim();
+    const cleanCourseId = (courseId || '').trim();
     if (!cleanId) return { success: false, message: 'معرف الطالب غير صالح' };
 
-    // 1. Fetch student
     const { data: student } = await supabaseAdmin
       .from('profiles')
       .select('id, primary_device_fingerprint, full_name, phone')
@@ -552,58 +535,102 @@ export async function resetStudentDeviceLockAction(studentId: string) {
       return { success: false, message: 'الطالب غير موجود' };
     }
 
-    // 2. Fetch any registered devices to release any bans
-    const { data: registeredDevs } = await supabaseAdmin
-      .from('student_devices')
-      .select('device_fingerprint')
-      .eq('student_id', cleanId);
+    if (cleanCourseId) {
+      // Per-course device reset
+      const { data: courseBindings } = await supabaseAdmin
+        .from('audit_logs')
+        .select('id, details')
+        .eq('target_entity', 'course_device_bindings')
+        .eq('actor_id', cleanId)
+        .eq('target_id', cleanCourseId);
 
-    const fingerprintsToRelease = new Set<string>();
-    if (student.primary_device_fingerprint) {
-      fingerprintsToRelease.add(student.primary_device_fingerprint);
-    }
-    if (registeredDevs && registeredDevs.length > 0) {
-      registeredDevs.forEach(d => {
-        if (d.device_fingerprint) fingerprintsToRelease.add(d.device_fingerprint);
+      const courseFps = new Set<string>();
+      (courseBindings || []).forEach((row: any) => {
+        const devs = Array.isArray(row.details?.devices) ? row.details.devices : [];
+        devs.forEach((d: any) => {
+          if (d?.fingerprint) courseFps.add(d.fingerprint);
+          if (d?.hardwareCoreId) courseFps.add(d.hardwareCoreId);
+          if (Array.isArray(d?.candidateFingerprints)) {
+            d.candidateFingerprints.forEach((f: string) => f && courseFps.add(f));
+          }
+        });
       });
+
+      if (courseFps.size > 0) {
+        await supabaseAdmin
+          .from('banned_devices')
+          .delete()
+          .in('device_fingerprint', Array.from(courseFps));
+      }
+
+      await supabaseAdmin
+        .from('audit_logs')
+        .delete()
+        .eq('target_entity', 'course_device_bindings')
+        .eq('actor_id', cleanId)
+        .eq('target_id', cleanCourseId);
+
+      try {
+        await supabaseAdmin.from('audit_logs').insert([{
+          actor_id: session.id,
+          actor_name: session.fullName || 'إدارة المنصة (المعلم)',
+          actor_role: session.role,
+          action_type: 'STUDENT_COURSE_DEVICE_LOCK_RESET',
+          target_entity: 'profiles',
+          target_id: cleanId,
+          details: {
+            name: student.full_name,
+            phone: student.phone,
+            courseId: cleanCourseId,
+          },
+        }]);
+      } catch {}
+
+      return { success: true, message: 'تم فك قيد أجهزة الطالب في هذا الكورس بنجاح! يمكنه الآن تصفير الأجهزة وإعادة الربط.' };
     }
 
-    if (fingerprintsToRelease.size > 0) {
+    // Full reset across login devices & all enrolled courses
+    const fingerprintsToRelease = await collectStudentAllFingerprints(cleanId, student.primary_device_fingerprint);
+
+    if (fingerprintsToRelease.length > 0) {
       await supabaseAdmin
         .from('banned_devices')
         .delete()
-        .in('device_fingerprint', Array.from(fingerprintsToRelease));
+        .in('device_fingerprint', fingerprintsToRelease);
     }
 
-    // 3. Clear registered devices in student_devices
     await supabaseAdmin.from('student_devices').delete().eq('student_id', cleanId);
+    await supabaseAdmin
+      .from('audit_logs')
+      .delete()
+      .eq('target_entity', 'course_device_bindings')
+      .eq('actor_id', cleanId);
 
-    // 4. Reset primary_device_fingerprint in profiles so device can be re-bound
     await supabaseAdmin
       .from('profiles')
-      .update({ 
+      .update({
         primary_device_fingerprint: null,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
       })
       .eq('id', cleanId);
 
-    // 5. Audit Log
     try {
       await supabaseAdmin.from('audit_logs').insert([{
-        actor_name: 'إدارة المنصة (المعلم)',
-        actor_role: 'teacher',
+        actor_id: session.id,
+        actor_name: session.fullName || 'إدارة المنصة (المعلم)',
+        actor_role: session.role,
         action_type: 'STUDENT_DEVICE_LOCK_RESET',
         target_entity: 'profiles',
         target_id: cleanId,
         details: {
           name: student.full_name,
           phone: student.phone,
-          resetDevicesCount: fingerprintsToRelease.size,
+          resetDevicesCount: fingerprintsToRelease.length,
         },
       }]);
     } catch {}
 
-    return { success: true, message: 'تم فك قيد أجهزة الطالب بنجاح! يمكن للطالب الآن الدخول أو التسجيل مجدداً.' };
+    return { success: true, message: 'تم فك قيد جميع أجهزة الطالب وكورساته بنجاح! يمكن للطالب الآن الدخول والربط من جديد.' };
   } catch (err: any) {
     console.error('Exception resetting student device lock:', err);
     return { success: false, message: err.message || 'حدث خطأ أثناء فك قيد الجهاز' };
@@ -797,163 +824,680 @@ export async function checkStudentContactAction(
   }
 }
 
-function parseDeviceTypeAndOs(fp: string, name?: string, browser?: string): { type: 'mobile' | 'tablet' | 'desktop'; os: string } {
-  const s = `${fp} ${name || ''} ${browser || ''}`.toUpperCase();
-  let type: 'mobile' | 'tablet' | 'desktop' = 'desktop';
-  if (s.includes('MOBILE') || s.includes('PHONE') || s.includes('هاتف') || s.includes('موبايل')) {
-    type = 'mobile';
-  } else if (s.includes('TABLET') || s.includes('IPAD') || s.includes('تابلت') || s.includes('لوحي')) {
-    type = 'tablet';
-  }
-
-  let os = 'UNKNOWN';
-  if (s.includes('ANDROID') || s.includes('أندرويد')) os = 'ANDROID';
-  else if (s.includes('IOS') || s.includes('IPHONE') || s.includes('IPAD') || s.includes('أبل')) os = 'IOS';
-  else if (s.includes('WINDOWS') || s.includes('ويندوز')) os = 'WINDOWS';
-  else if (s.includes('MAC') || s.includes('ماك')) os = 'MACOS';
-  else if (s.includes('LINUX') || s.includes('لينكس')) os = 'LINUX';
-
-  return { type, os };
+interface IncomingHardwareContext {
+  name?: string;
+  browser?: string;
+  hardwareCoreId?: string;
+  candidateFingerprints?: string[];
+  os?: string;
+  deviceType?: 'mobile' | 'tablet' | 'desktop' | string;
+  gpuSummary?: string;
+  screenSummary?: string;
+  timezone?: string;
 }
 
-async function verifyAndEnforceStudentDevice(
-  studentId: string,
-  cleanFp: string,
-  deviceInfo?: { name?: string; browser?: string }
-): Promise<{ allowed: boolean; isPrimary?: boolean; maxDevicesReached?: boolean; isBanned?: boolean; message?: string }> {
-  if (!cleanFp) {
-    return { allowed: true, isPrimary: true };
+interface StoredDeviceMetadata {
+  hardwareCoreId?: string;
+  candidateFingerprints?: string[];
+  os?: string;
+  deviceType?: string;
+  gpuSummary?: string;
+  screenSummary?: string;
+  timezone?: string;
+  browsersSeen: string[];
+}
+
+const LEGACY_DIM_REGEX = /^DEV-(MOBILE|DESKTOP|TABLET)-(ANDROID|WINDOWS|IOS|LINUX|OTHER)-\d+X\d+/i;
+const GENERIC_GPU_TOKENS = new Set(['', 'NO-WEBGL', 'WEBGL-ERR', 'GENERIC_GPU', 'SERVER']);
+
+function filterValidFingerprints(fps: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      fps
+        .map((f) => (f || '').trim())
+        .filter((f) => Boolean(f) && !LEGACY_DIM_REGEX.test(f))
+    )
+  );
+}
+
+function parseStoredDeviceMeta(rawBrowserInfo: string | null | undefined): StoredDeviceMetadata {
+  if (!rawBrowserInfo || typeof rawBrowserInfo !== 'string') {
+    return { browsersSeen: [] };
+  }
+  const trimmed = rawBrowserInfo.trim();
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const browsers: string[] = Array.isArray(parsed.browsersSeen)
+        ? parsed.browsersSeen.filter(Boolean)
+        : parsed.browser
+        ? [parsed.browser]
+        : [];
+      return {
+        hardwareCoreId: parsed.hardwareCoreId || undefined,
+        candidateFingerprints: Array.isArray(parsed.candidateFingerprints) ? parsed.candidateFingerprints.filter(Boolean) : undefined,
+        os: parsed.os || undefined,
+        deviceType: parsed.deviceType || undefined,
+        gpuSummary: parsed.gpuSummary || undefined,
+        screenSummary: parsed.screenSummary || undefined,
+        timezone: parsed.timezone || undefined,
+        browsersSeen: Array.from(new Set(browsers)),
+      };
+    } catch {
+      // fall through to plain browser string
+    }
+  }
+  return { browsersSeen: trimmed ? [trimmed] : [] };
+}
+
+function serializeStoredDeviceMeta(meta: StoredDeviceMetadata): string {
+  return JSON.stringify({
+    hardwareCoreId: meta.hardwareCoreId,
+    candidateFingerprints: (meta.candidateFingerprints || []).slice(0, 10),
+    os: meta.os,
+    deviceType: meta.deviceType,
+    gpuSummary: meta.gpuSummary,
+    screenSummary: meta.screenSummary,
+    timezone: meta.timezone,
+    browsersSeen: Array.from(new Set((meta.browsersSeen || []).filter(Boolean))),
+  });
+}
+
+function mergeBrowsers(existing: string[] | undefined, incomingBrowser?: string): string[] {
+  const list = [...(existing || [])];
+  if (incomingBrowser && incomingBrowser.trim() && !list.includes(incomingBrowser.trim())) {
+    list.push(incomingBrowser.trim());
+  }
+  return list.length > 0 ? list : ['متصفح ويب'];
+}
+
+function matchesPhysicalDevice(
+  stored: {
+    hardwareCoreId?: string;
+    fingerprint?: string;
+    candidateFingerprints?: string[];
+    os?: string;
+    deviceType?: string;
+    gpuSummary?: string;
+    timezone?: string;
+  },
+  incoming: {
+    fp: string;
+    hardwareCoreId?: string;
+    candidateFingerprints?: string[];
+    os?: string;
+    deviceType?: string;
+    gpuSummary?: string;
+    timezone?: string;
+  }
+): boolean {
+  const incomingHardwareCore = (incoming.hardwareCoreId || '').trim();
+  const storedHardwareCore = (stored.hardwareCoreId || '').trim();
+
+  if (incomingHardwareCore && storedHardwareCore && incomingHardwareCore === storedHardwareCore) {
+    return true;
   }
 
-  // 1. Is device banned in banned_devices?
+  const incomingSet = new Set(
+    filterValidFingerprints([incoming.fp, incomingHardwareCore, ...(incoming.candidateFingerprints || [])])
+  );
+  const storedFps = filterValidFingerprints([stored.fingerprint, storedHardwareCore, ...(stored.candidateFingerprints || [])]);
+
+  if (storedFps.some((f) => incomingSet.has(f))) {
+    return true;
+  }
+
+  // Same-student exact silicon fallback for cross-browser recovery
+  const stGpu = (stored.gpuSummary || '').toUpperCase().trim();
+  const inGpu = (incoming.gpuSummary || '').toUpperCase().trim();
+  if (
+    stored.os &&
+    incoming.os &&
+    stored.os === incoming.os &&
+    stored.deviceType &&
+    incoming.deviceType &&
+    stored.deviceType === incoming.deviceType &&
+    stored.timezone &&
+    incoming.timezone &&
+    stored.timezone === incoming.timezone &&
+    !GENERIC_GPU_TOKENS.has(stGpu) &&
+    stGpu === inGpu
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+async function collectStudentAllFingerprints(studentId: string, profilePrimaryFp?: string | null): Promise<string[]> {
+  const fps = new Set<string>();
+  if (profilePrimaryFp) fps.add(profilePrimaryFp);
+
+  const { data: studentDevices } = await supabaseAdmin
+    .from('student_devices')
+    .select('device_fingerprint, browser_info')
+    .eq('student_id', studentId);
+
+  (studentDevices || []).forEach((d: any) => {
+    if (d.device_fingerprint) fps.add(d.device_fingerprint);
+    const meta = parseStoredDeviceMeta(d.browser_info);
+    if (meta.hardwareCoreId) fps.add(meta.hardwareCoreId);
+    (meta.candidateFingerprints || []).forEach((f) => fps.add(f));
+  });
+
+  const { data: courseBindings } = await supabaseAdmin
+    .from('audit_logs')
+    .select('details')
+    .eq('target_entity', 'course_device_bindings')
+    .eq('actor_id', studentId);
+
+  (courseBindings || []).forEach((row: any) => {
+    const devs = Array.isArray(row.details?.devices) ? row.details.devices : [];
+    devs.forEach((d: any) => {
+      if (d?.fingerprint) fps.add(d.fingerprint);
+      if (d?.hardwareCoreId) fps.add(d.hardwareCoreId);
+      if (Array.isArray(d?.candidateFingerprints)) {
+        d.candidateFingerprints.forEach((f: string) => f && fps.add(f));
+      }
+    });
+  });
+
+  return filterValidFingerprints(Array.from(fps));
+}
+
+async function isDeviceBannedServer(fps: string[]): Promise<{ banned: boolean; reason?: string }> {
+  const validFps = filterValidFingerprints(fps);
+  if (validFps.length === 0) return { banned: false };
   const { data: bannedCheck } = await supabaseAdmin
     .from('banned_devices')
     .select('id, reason')
-    .eq('device_fingerprint', cleanFp)
+    .in('device_fingerprint', validFps)
     .limit(1);
 
   if (bannedCheck && bannedCheck.length > 0) {
     return {
+      banned: true,
+      reason: bannedCheck[0].reason || '',
+    };
+  }
+  return { banned: false };
+}
+
+function parseCourseMetaMaxDevices(description: string | null | undefined, rowMaxDevices?: number | null): number {
+  let maxDevices = typeof rowMaxDevices === 'number' && rowMaxDevices > 0 ? rowMaxDevices : 3;
+  if (description) {
+    const metaMatch = description.match(/\n\n<!--meta:([\s\S]*?)-->$/);
+    if (metaMatch) {
+      try {
+        const parsed = JSON.parse(metaMatch[1]);
+        if (parsed.maxDevices !== undefined) {
+          const val = Number(parsed.maxDevices);
+          if (!Number.isNaN(val) && val >= 1) {
+            maxDevices = Math.floor(val);
+          }
+        }
+      } catch {}
+    }
+  }
+  return maxDevices;
+}
+
+async function getCourseMaxDevicesServer(courseId: string): Promise<{
+  courseTitle: string;
+  maxDevices: number;
+  isUnlimited: boolean;
+}> {
+  const { data: courseRow } = await supabaseAdmin
+    .from('courses')
+    .select('id, title, description')
+    .eq('id', courseId)
+    .maybeSingle();
+
+  const maxDevices = parseCourseMetaMaxDevices(courseRow?.description, null);
+  return {
+    courseTitle: courseRow?.title || 'الكورس التعليمي',
+    maxDevices,
+    isUnlimited: maxDevices >= 1000 || maxDevices === 0,
+  };
+}
+
+/**
+ * Silently record physical login devices for analytics & teacher inspection.
+ * NEVER blocks students on login device count and NEVER reveals/hints login limit rules.
+ */
+async function recordStudentLoginDevice(
+  studentId: string,
+  cleanFp: string,
+  deviceInfo?: IncomingHardwareContext
+): Promise<{ allowed: boolean; isBanned?: boolean; message?: string }> {
+  const allIncomingFps = filterValidFingerprints([
+    cleanFp,
+    deviceInfo?.hardwareCoreId,
+    ...(deviceInfo?.candidateFingerprints || []),
+  ]);
+
+  if (allIncomingFps.length === 0) {
+    return { allowed: true };
+  }
+
+  const banRes = await isDeviceBannedServer(allIncomingFps);
+  if (banRes.banned) {
+    return {
       allowed: false,
       isBanned: true,
-      message: 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة. ' + (bannedCheck[0].reason || ''),
+      message: 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة. ' + (banRes.reason || ''),
     };
   }
 
-  // 2. Check student exemption for unlimited devices
-  let hasUnlimitedDevicesExemption = false;
-  try {
-    const { data: profileCheck } = await supabaseAdmin
-      .from('profiles')
-      .select('email, full_name')
-      .eq('id', studentId)
-      .maybeSingle();
-
-    if (profileCheck) {
-      const emailLower = (profileCheck.email || '').toLowerCase();
-      const name = profileCheck.full_name || '';
-      if (
-        emailLower.includes('mariam') || 
-        emailLower.includes('maryam') || 
-        emailLower.includes('lamees') ||
-        name.includes('مريم') ||
-        name.includes('لميس')
-      ) {
-        hasUnlimitedDevicesExemption = true;
-      }
-    }
-  } catch (err) {
-    console.warn('Error checking unlimited devices exemption:', err);
-  }
-
-  // 4. Fetch existing devices for THIS student
   const { data: studentDevices } = await supabaseAdmin
     .from('student_devices')
     .select('*')
     .eq('student_id', studentId)
     .order('is_primary', { ascending: false });
 
-  let existingList = studentDevices || [];
+  const existingList = studentDevices || [];
+  const matchedDevice = existingList.find((d: any) => {
+    const meta = parseStoredDeviceMeta(d.browser_info);
+    return matchesPhysicalDevice(
+      {
+        hardwareCoreId: meta.hardwareCoreId,
+        fingerprint: d.device_fingerprint,
+        candidateFingerprints: meta.candidateFingerprints,
+        os: meta.os,
+        deviceType: meta.deviceType,
+        gpuSummary: meta.gpuSummary,
+        timezone: meta.timezone,
+      },
+      {
+        fp: cleanFp,
+        hardwareCoreId: deviceInfo?.hardwareCoreId,
+        candidateFingerprints: deviceInfo?.candidateFingerprints,
+        os: deviceInfo?.os,
+        deviceType: deviceInfo?.deviceType,
+        gpuSummary: deviceInfo?.gpuSummary,
+        timezone: deviceInfo?.timezone,
+      }
+    );
+  });
 
-  // 5. Check if this exact device fingerprint already exists for this student
-  let matchedDevice = existingList.find((d: any) => d.device_fingerprint === cleanFp);
+  const nowIso = new Date().toISOString();
 
   if (matchedDevice) {
-    // Update last active
+    const prevMeta = parseStoredDeviceMeta(matchedDevice.browser_info);
+    const updatedMeta: StoredDeviceMetadata = {
+      hardwareCoreId: deviceInfo?.hardwareCoreId || prevMeta.hardwareCoreId,
+      candidateFingerprints: filterValidFingerprints([
+        ...(prevMeta.candidateFingerprints || []),
+        cleanFp,
+        ...(deviceInfo?.candidateFingerprints || []),
+      ]),
+      os: deviceInfo?.os || prevMeta.os,
+      deviceType: deviceInfo?.deviceType || prevMeta.deviceType,
+      gpuSummary: deviceInfo?.gpuSummary || prevMeta.gpuSummary,
+      screenSummary: deviceInfo?.screenSummary || prevMeta.screenSummary,
+      timezone: deviceInfo?.timezone || prevMeta.timezone,
+      browsersSeen: mergeBrowsers(prevMeta.browsersSeen, deviceInfo?.browser),
+    };
+
     await supabaseAdmin
       .from('student_devices')
       .update({
         device_name: deviceInfo?.name || matchedDevice.device_name,
-        browser_info: deviceInfo?.browser || matchedDevice.browser_info,
-        last_active: new Date().toISOString(),
+        browser_info: serializeStoredDeviceMeta(updatedMeta),
+        last_active: nowIso,
       })
       .eq('id', matchedDevice.id);
 
+    return { allowed: true };
+  }
+
+  // Record new physical device silently for audit/inspection
+  const isFirstEver = existingList.length === 0;
+  const newMeta: StoredDeviceMetadata = {
+    hardwareCoreId: deviceInfo?.hardwareCoreId,
+    candidateFingerprints: allIncomingFps,
+    os: deviceInfo?.os,
+    deviceType: deviceInfo?.deviceType,
+    gpuSummary: deviceInfo?.gpuSummary,
+    screenSummary: deviceInfo?.screenSummary,
+    timezone: deviceInfo?.timezone,
+    browsersSeen: mergeBrowsers([], deviceInfo?.browser),
+  };
+
+  if (isFirstEver) {
+    await supabaseAdmin
+      .from('profiles')
+      .update({ primary_device_fingerprint: cleanFp })
+      .eq('id', studentId)
+      .is('primary_device_fingerprint', null);
+  }
+
+  await supabaseAdmin.from('student_devices').upsert(
+    [
+      {
+        student_id: studentId,
+        device_fingerprint: cleanFp,
+        device_name: deviceInfo?.name || (isFirstEver ? 'الجهاز الأساسي' : 'جهاز دخول مسجل'),
+        browser_info: serializeStoredDeviceMeta(newMeta),
+        is_primary: isFirstEver,
+        last_active: nowIso,
+      },
+    ],
+    { onConflict: 'student_id,device_fingerprint' }
+  );
+
+  return { allowed: true };
+}
+
+/**
+ * Bind Device #1 (Primary Activation Device - undeletable) when a student enrolls in or activates a course.
+ */
+export async function bindCoursePrimaryDeviceServer(
+  studentId: string,
+  courseId: string,
+  deviceContext?: IncomingHardwareContext & { primaryFingerprint?: string },
+  activatedVia: string = 'activation'
+): Promise<{ maxDevices: number; isUnlimited: boolean }> {
+  const config = await getCourseMaxDevicesServer(courseId);
+  if (!studentId || !courseId || !deviceContext) {
+    return { maxDevices: config.maxDevices, isUnlimited: config.isUnlimited };
+  }
+
+  const fp = (deviceContext.primaryFingerprint || deviceContext.hardwareCoreId || '').trim();
+  if (!fp) {
+    return { maxDevices: config.maxDevices, isUnlimited: config.isUnlimited };
+  }
+
+  const { data: existingRow } = await supabaseAdmin
+    .from('audit_logs')
+    .select('id, details')
+    .eq('target_entity', 'course_device_bindings')
+    .eq('actor_id', studentId)
+    .eq('target_id', courseId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const existingDevices: any[] = Array.isArray(existingRow?.details?.devices)
+    ? [...existingRow.details.devices]
+    : [];
+
+  const nowIso = new Date().toISOString();
+  const matchedIdx = existingDevices.findIndex((d: any) =>
+    matchesPhysicalDevice(d, {
+      fp,
+      hardwareCoreId: deviceContext.hardwareCoreId,
+      candidateFingerprints: deviceContext.candidateFingerprints,
+      os: deviceContext.os,
+      deviceType: deviceContext.deviceType,
+      gpuSummary: deviceContext.gpuSummary,
+      timezone: deviceContext.timezone,
+    })
+  );
+
+  if (matchedIdx >= 0) {
+    const prev = existingDevices[matchedIdx];
+    existingDevices[matchedIdx] = {
+      ...prev,
+      hardwareCoreId: deviceContext.hardwareCoreId || prev.hardwareCoreId,
+      candidateFingerprints: filterValidFingerprints([
+        ...(prev.candidateFingerprints || []),
+        fp,
+        ...(deviceContext.candidateFingerprints || []),
+      ]),
+      browsersSeen: mergeBrowsers(prev.browsersSeen, deviceContext.browser),
+      lastActive: nowIso,
+    };
+  } else if (config.isUnlimited || existingDevices.length < config.maxDevices) {
+    const isPrimary = existingDevices.length === 0;
+    existingDevices.push({
+      id: crypto.randomUUID(),
+      hardwareCoreId: deviceContext.hardwareCoreId || fp,
+      fingerprint: fp,
+      candidateFingerprints: filterValidFingerprints([
+        fp,
+        deviceContext.hardwareCoreId,
+        ...(deviceContext.candidateFingerprints || []),
+      ]),
+      name: deviceContext.name || (isPrimary ? 'جهاز التفعيل الأساسي' : 'جهاز مسجل للكورس'),
+      deviceType: deviceContext.deviceType || 'desktop',
+      os: deviceContext.os || 'Other',
+      gpuSummary: deviceContext.gpuSummary || '',
+      screenSummary: deviceContext.screenSummary || '',
+      timezone: deviceContext.timezone || '',
+      browsersSeen: mergeBrowsers([], deviceContext.browser),
+      isPrimary,
+      activatedVia,
+      boundAt: nowIso,
+      lastActive: nowIso,
+    });
+  }
+
+  const nextDetails = {
+    studentId,
+    courseId,
+    courseTitle: config.courseTitle,
+    maxDevicesSnapshot: config.maxDevices,
+    devices: existingDevices,
+    updatedAt: nowIso,
+  };
+
+  if (existingRow?.id) {
+    await supabaseAdmin
+      .from('audit_logs')
+      .update({ details: nextDetails })
+      .eq('id', existingRow.id);
+  } else {
+    await supabaseAdmin.from('audit_logs').insert([
+      {
+        actor_id: studentId,
+        actor_name: 'نظام تفعيل الكورسات',
+        actor_role: 'student',
+        action_type: 'COURSE_DEVICE_REGISTRY',
+        target_entity: 'course_device_bindings',
+        target_id: courseId,
+        details: nextDetails,
+      },
+    ]);
+  }
+
+  return { maxDevices: config.maxDevices, isUnlimited: config.isUnlimited };
+}
+
+/**
+ * Per-course physical hardware verification & enforcement.
+ * Collapses browsers/incognito onto 1 physical device per (studentId, courseId).
+ */
+async function verifyAndEnforceCourseDeviceServer(
+  studentId: string,
+  courseId: string,
+  cleanFp: string,
+  deviceInfo?: IncomingHardwareContext
+): Promise<{
+  allowed: boolean;
+  isPrimary: boolean;
+  deviceId?: string;
+  maxDevices?: number;
+  activeCount?: number;
+  isUnlimited?: boolean;
+  maxDevicesReached?: boolean;
+  isBanned?: boolean;
+  message?: string;
+}> {
+  const allIncomingFps = filterValidFingerprints([
+    cleanFp,
+    deviceInfo?.hardwareCoreId,
+    ...(deviceInfo?.candidateFingerprints || []),
+  ]);
+
+  // 1. Check banned device fingerprints
+  const banRes = await isDeviceBannedServer(allIncomingFps);
+  if (banRes.banned) {
     return {
-      allowed: true,
-      isPrimary: Boolean(matchedDevice.is_primary),
+      allowed: false,
+      isPrimary: false,
+      isBanned: true,
+      message: 'تم حظر هذا الجهاز نهائياً من قبل إدارة المنصة. ' + (banRes.reason || ''),
     };
   }
 
-  // 5b. If student has a legacy device slot (e.g. DEV_LEGACY_...), replace that slot with their real device token
-  const legacySlot = existingList.find((d: any) => (d.device_fingerprint || '').startsWith('DEV_LEGACY_'));
-  if (legacySlot) {
-    await supabaseAdmin
-      .from('student_devices')
-      .update({
-        device_fingerprint: cleanFp,
-        device_name: deviceInfo?.name || legacySlot.device_name,
-        browser_info: deviceInfo?.browser || legacySlot.browser_info,
-        last_active: new Date().toISOString(),
-      })
-      .eq('id', legacySlot.id);
+  // 2. Check student profile ban status
+  const { data: prof } = await supabaseAdmin
+    .from('profiles')
+    .select('id, status, ban_reason')
+    .eq('id', studentId)
+    .maybeSingle();
 
-    if (legacySlot.is_primary) {
-      await supabaseAdmin
-        .from('profiles')
-        .update({ primary_device_fingerprint: cleanFp })
-        .eq('id', studentId);
+  if (prof?.status === 'banned') {
+    return {
+      allowed: false,
+      isPrimary: false,
+      isBanned: true,
+      message: 'تم إيقاف هذا الحساب من قبل إدارة المنصة.' + (prof.ban_reason ? ` (${prof.ban_reason})` : ''),
+    };
+  }
+
+  // 3. Read course-level device policy
+  const config = await getCourseMaxDevicesServer(courseId);
+
+  // 4. Read per-course device bindings row
+  const { data: existingRow } = await supabaseAdmin
+    .from('audit_logs')
+    .select('id, details')
+    .eq('target_entity', 'course_device_bindings')
+    .eq('actor_id', studentId)
+    .eq('target_id', courseId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const devices: any[] = Array.isArray(existingRow?.details?.devices)
+    ? [...existingRow.details.devices]
+    : [];
+
+  const nowIso = new Date().toISOString();
+
+  // 5. Match existing physical device for this (student, course)
+  const matchedIdx = devices.findIndex((d: any) =>
+    matchesPhysicalDevice(d, {
+      fp: cleanFp,
+      hardwareCoreId: deviceInfo?.hardwareCoreId,
+      candidateFingerprints: deviceInfo?.candidateFingerprints,
+      os: deviceInfo?.os,
+      deviceType: deviceInfo?.deviceType,
+      gpuSummary: deviceInfo?.gpuSummary,
+      timezone: deviceInfo?.timezone,
+    })
+  );
+
+  if (matchedIdx >= 0) {
+    const existing = devices[matchedIdx];
+    devices[matchedIdx] = {
+      ...existing,
+      hardwareCoreId: deviceInfo?.hardwareCoreId || existing.hardwareCoreId,
+      candidateFingerprints: filterValidFingerprints([
+        ...(existing.candidateFingerprints || []),
+        cleanFp,
+        ...(deviceInfo?.candidateFingerprints || []),
+      ]),
+      os: deviceInfo?.os || existing.os,
+      deviceType: deviceInfo?.deviceType || existing.deviceType,
+      gpuSummary: deviceInfo?.gpuSummary || existing.gpuSummary,
+      screenSummary: deviceInfo?.screenSummary || existing.screenSummary,
+      timezone: deviceInfo?.timezone || existing.timezone,
+      browsersSeen: mergeBrowsers(existing.browsersSeen, deviceInfo?.browser),
+      lastActive: nowIso,
+    };
+
+    const nextDetails = {
+      studentId,
+      courseId,
+      courseTitle: config.courseTitle,
+      maxDevicesSnapshot: config.maxDevices,
+      devices,
+      updatedAt: nowIso,
+    };
+
+    if (existingRow?.id) {
+      await supabaseAdmin.from('audit_logs').update({ details: nextDetails }).eq('id', existingRow.id);
     }
 
     return {
       allowed: true,
-      isPrimary: Boolean(legacySlot.is_primary),
+      isPrimary: Boolean(existing.isPrimary),
+      deviceId: existing.id,
+      maxDevices: config.maxDevices,
+      activeCount: devices.length,
+      isUnlimited: config.isUnlimited,
     };
   }
 
-  // 6. New device for this student: Enforce max 2 devices limit
-  if (existingList.length >= 2 && !hasUnlimitedDevicesExemption) {
+  // 6. Enforce per-course device quota strictly for new physical devices
+  if (!config.isUnlimited && devices.length >= config.maxDevices) {
     return {
       allowed: false,
+      isPrimary: false,
       maxDevicesReached: true,
-      message: 'عذراً، لقد بلغت الحد الأقصى للأجهزة المصرح بها لحسابك (جهازين فقط). لا يمكن فتح الحساب على جهاز ثالث. يرجى الدخول من أحد جهازيك المسجلين، أو إزالة الجهاز الثاني من صفحة إعدادات الحساب لإتاحة هذا الجهاز.',
+      maxDevices: config.maxDevices,
+      activeCount: devices.length,
+      isUnlimited: false,
+      message: `تم بلوغ الحد الأقصى للأجهزة المسموحة لهذا الكورس (${devices.length} من ${config.maxDevices} أجهزة). يمكنك استخدام أحد أجهزتك المرتبطة بهذا الكورس، أو إزالة جهاز ثانوي من صفحة "الأجهزة المرتبطة" لإتاحة هذا الجهاز.`,
     };
   }
 
-  // 7. Register as authorized device for this student
-  const isPrimary = (existingList.length === 0);
-  const finalDeviceName = deviceInfo?.name || (isPrimary ? 'الجهاز الأساسي (مثبت)' : 'الجهاز الثاني');
-  const finalBrowser = deviceInfo?.browser || '';
+  // 7. Register physical device for this course
+  const isPrimary = devices.length === 0;
+  const newDeviceId = crypto.randomUUID();
+  devices.push({
+    id: newDeviceId,
+    hardwareCoreId: deviceInfo?.hardwareCoreId || cleanFp,
+    fingerprint: cleanFp,
+    candidateFingerprints: allIncomingFps,
+    name: deviceInfo?.name || (isPrimary ? 'الجهاز الأساسي للكورس' : `جهاز إضافي (${devices.length + 1})`),
+    deviceType: deviceInfo?.deviceType || 'desktop',
+    os: deviceInfo?.os || 'Other',
+    gpuSummary: deviceInfo?.gpuSummary || '',
+    screenSummary: deviceInfo?.screenSummary || '',
+    timezone: deviceInfo?.timezone || '',
+    browsersSeen: mergeBrowsers([], deviceInfo?.browser),
+    isPrimary,
+    activatedVia: isPrimary ? 'course_watch' : 'watch',
+    boundAt: nowIso,
+    lastActive: nowIso,
+  });
 
-  if (isPrimary) {
-    await supabaseAdmin
-      .from('profiles')
-      .update({ primary_device_fingerprint: cleanFp })
-      .eq('id', studentId);
+  const nextDetails = {
+    studentId,
+    courseId,
+    courseTitle: config.courseTitle,
+    maxDevicesSnapshot: config.maxDevices,
+    devices,
+    updatedAt: nowIso,
+  };
+
+  if (existingRow?.id) {
+    await supabaseAdmin.from('audit_logs').update({ details: nextDetails }).eq('id', existingRow.id);
+  } else {
+    await supabaseAdmin.from('audit_logs').insert([
+      {
+        actor_id: studentId,
+        actor_name: 'نظام حماية الكورسات',
+        actor_role: 'student',
+        action_type: 'COURSE_DEVICE_REGISTRY',
+        target_entity: 'course_device_bindings',
+        target_id: courseId,
+        details: nextDetails,
+      },
+    ]);
   }
-
-  await supabaseAdmin.from('student_devices').insert([{
-    student_id: studentId,
-    device_fingerprint: cleanFp,
-    device_name: finalDeviceName,
-    browser_info: finalBrowser,
-    is_primary: isPrimary,
-    last_active: new Date().toISOString(),
-  }]);
 
   return {
     allowed: true,
     isPrimary,
+    deviceId: newDeviceId,
+    maxDevices: config.maxDevices,
+    activeCount: devices.length,
+    isUnlimited: config.isUnlimited,
   };
 }
 
@@ -961,7 +1505,7 @@ export async function loginAction(
   emailOrPhone: string, 
   pass: string, 
   deviceFingerprint?: string,
-  deviceInfo?: { name?: string; browser?: string }
+  deviceInfo?: IncomingHardwareContext
 ) {
   try {
     const rawIdentifier = (emailOrPhone || '').trim();
@@ -1252,16 +1796,15 @@ export async function loginAction(
       };
     }
 
-    // Active student: Enforce 2-Device Policy and Anti-Account-Sharing
+    // Active student: Record login physical device quietly (only rejects if device/student is banned)
     if (user.status === 'active') {
-      if (cleanFp) {
-        const deviceResult = await verifyAndEnforceStudentDevice(user.id, cleanFp, deviceInfo);
-        if (!deviceResult.allowed) {
+      if (cleanFp || deviceInfo?.hardwareCoreId) {
+        const loginDevResult = await recordStudentLoginDevice(user.id, cleanFp || deviceInfo?.hardwareCoreId || '', deviceInfo);
+        if (!loginDevResult.allowed) {
           return {
             success: false,
-            isBanned: deviceResult.isBanned,
-            maxDevicesReached: deviceResult.maxDevicesReached,
-            message: deviceResult.message || 'تم رفض الدخول من هذا الجهاز',
+            isBanned: loginDevResult.isBanned,
+            message: loginDevResult.message || 'تم رفض الدخول من هذا الجهاز',
           };
         }
       }
@@ -1644,87 +2187,143 @@ export async function registerStudentAction(studentData: any) {
 }
 
 // =========================================================================
-// STUDENT 2-DEVICE LIMIT & HARDWARE SECURITY ACTIONS
+// PER-COURSE HARDWARE SECURITY & DEVICE MANAGEMENT ACTIONS
 // =========================================================================
 
-export async function getStudentRegisteredDevicesAction(studentId: string) {
+export async function getStudentRegisteredDevicesAction(studentId: string, courseIdFilter?: string) {
   try {
     const cleanStudentId = (studentId || '').trim();
     if (!cleanStudentId) {
-      return { success: false, devices: [], message: 'معرف الطالب غير محدد' };
+      return { success: false, devices: [], courseGroups: [], loginDevices: [], message: 'معرف الطالب غير محدد' };
     }
 
     const session = await requireStudentOrStaffSession(cleanStudentId);
     if (!session) {
-      return { success: false, devices: [], message: 'غير مصرح بالوصول لبيانات أجهزة هذا الحساب.' };
+      return { success: false, devices: [], courseGroups: [], loginDevices: [], message: 'غير مصرح بالوصول لبيانات أجهزة هذا الحساب.' };
     }
 
-    // 1. Fetch profile to check primary device fingerprint
-    const { data: profile } = await supabaseAdmin
-      .from('profiles')
-      .select('id, full_name, primary_device_fingerprint')
-      .eq('id', cleanStudentId)
-      .maybeSingle();
-
-    // 2. Query student_devices
-    let { data: devices, error } = await supabaseAdmin
+    // 1. Login hardware history (passive physical devices recorded in student_devices)
+    const { data: rawLoginDevs } = await supabaseAdmin
       .from('student_devices')
       .select('*')
       .eq('student_id', cleanStudentId)
       .order('is_primary', { ascending: false })
-      .order('created_at', { ascending: true });
+      .order('last_active', { ascending: false });
 
-    if (error) {
-      console.warn('Error querying student_devices:', error);
-      devices = [];
-    }
-
-    // If student_devices is empty, but profile has primary_device_fingerprint, auto-populate
-    if ((!devices || devices.length === 0) && profile?.primary_device_fingerprint) {
-      const primaryRecord = {
-        student_id: cleanStudentId,
-        device_fingerprint: profile.primary_device_fingerprint,
-        device_name: 'الجهاز الأساسي (مثبت)',
-        is_primary: true,
-        last_active: new Date().toISOString(),
+    const loginDevices = (rawLoginDevs || []).map((d: any) => {
+      const meta = parseStoredDeviceMeta(d.browser_info);
+      return {
+        id: d.id,
+        fingerprint: d.device_fingerprint,
+        hardwareCoreId: meta.hardwareCoreId || d.device_fingerprint,
+        name: d.device_name || 'جهاز دخول مسجل',
+        browser: meta.browsersSeen[0] || 'متصفح ويب',
+        browsersSeen: meta.browsersSeen,
+        deviceType: (meta.deviceType as any) || 'desktop',
+        os: meta.os || 'Other',
+        isPrimary: Boolean(d.is_primary),
+        registeredAt: d.created_at || new Date().toISOString(),
+        lastActive: d.last_active || d.created_at || new Date().toISOString(),
       };
-      const { data: inserted } = await supabaseAdmin
-        .from('student_devices')
-        .insert([primaryRecord])
-        .select()
-        .maybeSingle();
+    });
 
-      if (inserted) {
-        devices = [inserted];
-      }
+    // 2. Enrolled courses + per-course configured maxDevices
+    const { data: enrollments } = await supabaseAdmin
+      .from('course_enrollments')
+      .select('course_id, enrolled_at, payment_method')
+      .eq('student_id', cleanStudentId)
+      .eq('is_active', true);
+
+    const { data: bindingLogs } = await supabaseAdmin
+      .from('audit_logs')
+      .select('target_id, details, updated_at, created_at')
+      .eq('target_entity', 'course_device_bindings')
+      .eq('actor_id', cleanStudentId);
+
+    const courseIdsSet = new Set<string>();
+    (enrollments || []).forEach((e: any) => e.course_id && courseIdsSet.add(e.course_id));
+    (bindingLogs || []).forEach((b: any) => b.target_id && courseIdsSet.add(b.target_id));
+    if (courseIdFilter) courseIdsSet.add(courseIdFilter);
+
+    const courseIds = Array.from(courseIdsSet);
+    const courseMetaMap: Record<string, { title: string; maxDevices: number; isUnlimited: boolean }> = {};
+
+    if (courseIds.length > 0) {
+      const { data: courseRows } = await supabaseAdmin
+        .from('courses')
+        .select('id, title, description')
+        .in('id', courseIds);
+
+      (courseRows || []).forEach((c: any) => {
+        const maxDev = parseCourseMetaMaxDevices(c.description, null);
+        courseMetaMap[c.id] = {
+          title: c.title || 'كورس تعليمي',
+          maxDevices: maxDev,
+          isUnlimited: maxDev >= 1000 || maxDev === 0,
+        };
+      });
     }
 
-    const mapped = (devices || []).map((d: any) => ({
-      id: d.id,
-      deviceFingerprint: d.device_fingerprint,
-      deviceName: d.device_name || (d.is_primary ? 'الجهاز الأساسي (مثبت)' : 'الجهاز الثاني'),
-      browserInfo: d.browser_info || '',
-      isPrimary: Boolean(d.is_primary),
-      lastActive: d.last_active,
-      createdAt: d.created_at,
-    }));
+    const bindingsByCourse: Record<string, any[]> = {};
+    (bindingLogs || []).forEach((row: any) => {
+      const cid = row.target_id || row.details?.courseId;
+      if (cid && Array.isArray(row.details?.devices)) {
+        bindingsByCourse[cid] = row.details.devices;
+      }
+    });
+
+    const courseGroups = courseIds.map((cid) => {
+      const cMeta = courseMetaMap[cid] || { title: 'كورس تعليمي', maxDevices: 3, isUnlimited: false };
+      const rawDevs = bindingsByCourse[cid] || [];
+      const mappedDevs = rawDevs.map((d: any) => ({
+        id: d.id,
+        fingerprint: d.fingerprint,
+        hardwareCoreId: d.hardwareCoreId || d.fingerprint,
+        name: d.name || (d.isPrimary ? 'جهاز التفعيل الأساسي' : 'جهاز إضافي'),
+        browser: Array.isArray(d.browsersSeen) && d.browsersSeen.length > 0 ? d.browsersSeen[0] : 'متصفح ويب',
+        browsersSeen: Array.isArray(d.browsersSeen) ? d.browsersSeen : [],
+        deviceType: d.deviceType || 'desktop',
+        os: d.os || 'Other',
+        isPrimary: Boolean(d.isPrimary),
+        registeredAt: d.boundAt || new Date().toISOString(),
+        lastActive: d.lastActive || d.boundAt || new Date().toISOString(),
+        courseId: cid,
+        courseTitle: cMeta.title,
+        activatedVia: d.activatedVia,
+      }));
+
+      return {
+        courseId: cid,
+        courseTitle: cMeta.title,
+        maxDevices: cMeta.maxDevices,
+        isUnlimited: cMeta.isUnlimited,
+        activeCount: mappedDevs.length,
+        remainingSlots: cMeta.isUnlimited ? null : Math.max(0, cMeta.maxDevices - mappedDevs.length),
+        devices: mappedDevs,
+      };
+    });
+
+    const flattenedDevices = courseIdFilter
+      ? (courseGroups.find((g) => g.courseId === courseIdFilter)?.devices || [])
+      : courseGroups.flatMap((g) => g.devices);
 
     return {
       success: true,
-      devices: mapped,
-      totalCount: mapped.length,
-      maxAllowed: 2,
+      devices: flattenedDevices,
+      courseGroups,
+      loginDevices,
     };
   } catch (err: any) {
     console.error('getStudentRegisteredDevicesAction error:', err);
-    return { success: false, devices: [], error: err.message };
+    return { success: false, devices: [], courseGroups: [], loginDevices: [], error: err.message };
   }
 }
 
-export async function deleteStudentSecondaryDeviceAction(studentId: string, deviceId: string) {
+export async function deleteStudentSecondaryDeviceAction(studentId: string, deviceId: string, courseId?: string) {
   try {
     const cleanStudentId = (studentId || '').trim();
     const cleanDeviceId = (deviceId || '').trim();
+    const cleanCourseId = (courseId || '').trim();
 
     if (!cleanStudentId || !cleanDeviceId) {
       return { success: false, message: 'بيانات غير صالحة' };
@@ -1735,57 +2334,78 @@ export async function deleteStudentSecondaryDeviceAction(studentId: string, devi
       return { success: false, message: 'غير مصرح لك بإدارة أجهزة هذا الحساب.' };
     }
 
-    // 1. Fetch device record
-    const { data: device, error: fetchErr } = await supabaseAdmin
-      .from('student_devices')
-      .select('*')
-      .eq('id', cleanDeviceId)
-      .eq('student_id', cleanStudentId)
-      .maybeSingle();
+    let query = supabaseAdmin
+      .from('audit_logs')
+      .select('id, target_id, details')
+      .eq('target_entity', 'course_device_bindings')
+      .eq('actor_id', cleanStudentId);
 
-    if (fetchErr || !device) {
-      return { success: false, message: 'الجهاز غير موجود أو تم حذفه مسبقاً' };
+    if (cleanCourseId) {
+      query = query.eq('target_id', cleanCourseId);
     }
 
-    // 2. Strict Check: Primary device CANNOT be deleted
-    if (device.is_primary) {
+    const { data: bindingRows } = await query;
+
+    let targetRow: any = null;
+    let targetDevice: any = null;
+
+    for (const row of bindingRows || []) {
+      const devs = Array.isArray(row.details?.devices) ? row.details.devices : [];
+      const found = devs.find((d: any) => d.id === cleanDeviceId);
+      if (found) {
+        targetRow = row;
+        targetDevice = found;
+        break;
+      }
+    }
+
+    if (!targetRow || !targetDevice) {
+      return { success: false, message: 'الجهاز غير موجود في هذا الكورس أو تم حذفه مسبقاً' };
+    }
+
+    if (targetDevice.isPrimary) {
       return {
         success: false,
-        message: 'عذراً! لا يمكن حذف الجهاز الأساسي للحساب نهائياً، هذا الجهاز مثبت دائماً لضمان أمان حسابك وحماية الكورسات من التسريب. يمكنك إزالة الجهاز الثاني فقط واستبداله.',
+        message: 'عذراً! هذا هو الجهاز الأساسي المرتبط بتفعيل الكورس ولا يمكن حذفه نهائياً. يمكنك حذف أو استبدال الأجهزة الإضافية فقط ضمن الحد المسموح للكورس.',
       };
     }
 
-    // 3. Delete secondary device
-    const { error: delErr } = await supabaseAdmin
-      .from('student_devices')
-      .delete()
-      .eq('id', cleanDeviceId)
-      .eq('student_id', cleanStudentId);
+    const updatedDevices = (targetRow.details?.devices || []).filter((d: any) => d.id !== cleanDeviceId);
+    const updatedDetails = {
+      ...targetRow.details,
+      devices: updatedDevices,
+      updatedAt: new Date().toISOString(),
+    };
 
-    if (delErr) {
+    const { error: updErr } = await supabaseAdmin
+      .from('audit_logs')
+      .update({ details: updatedDetails })
+      .eq('id', targetRow.id);
+
+    if (updErr) {
       return { success: false, message: 'تعذر حذف الجهاز، يرجى المحاولة لاحقاً' };
     }
 
-    // 4. Audit Log
     try {
       await supabaseAdmin.from('audit_logs').insert([{
         actor_id: cleanStudentId,
         actor_role: 'student',
         action_type: 'STUDENT_SECONDARY_DEVICE_REMOVED',
-        target_entity: 'student_devices',
-        target_id: cleanDeviceId,
+        target_entity: 'course_device_bindings',
+        target_id: targetRow.target_id,
         details: {
-          removed_device_fingerprint: device.device_fingerprint,
-          removed_device_name: device.device_name,
+          removed_device_id: cleanDeviceId,
+          removed_device_fingerprint: targetDevice.fingerprint,
+          removed_hardware_core: targetDevice.hardwareCoreId,
+          removed_device_name: targetDevice.name,
+          courseId: targetRow.target_id,
         },
       }]);
-    } catch {
-      // silent
-    }
+    } catch {}
 
     return {
       success: true,
-      message: 'تم حذف الجهاز الثاني بنجاح! يمكنك الآن تسجيل الدخول أو تشغيل الكورس من جهاز بديل وتعيينه كجهازك الثاني.',
+      message: 'تم إزالة الجهاز الإضافي بنجاح! يمكنك الآن تشغيل الكورس من جهاز بديل ضمن الحد المسموح.',
     };
   } catch (err: any) {
     console.error('deleteStudentSecondaryDeviceAction error:', err);
@@ -1794,16 +2414,18 @@ export async function deleteStudentSecondaryDeviceAction(studentId: string, devi
 }
 
 export async function checkAndRegisterStudentDeviceAction(
-  studentId: string, 
-  fingerprint: string, 
-  deviceInfo?: { name?: string; browser?: string }
+  studentId: string,
+  fingerprint: string,
+  deviceInfo?: IncomingHardwareContext,
+  courseId?: string
 ) {
   try {
     const cleanStudentId = (studentId || '').trim();
     const cleanFp = (fingerprint || '').trim();
+    const cleanCourseId = (courseId || '').trim();
 
-    if (!cleanStudentId || !cleanFp) {
-      return { allowed: false, message: 'بيانات غير مكتملة' };
+    if (!cleanStudentId || (!cleanFp && !deviceInfo?.hardwareCoreId)) {
+      return { allowed: false, message: 'بيانات الجهاز غير مكتملة' };
     }
 
     const session = await requireStudentOrStaffSession(cleanStudentId);
@@ -1811,8 +2433,12 @@ export async function checkAndRegisterStudentDeviceAction(
       return { allowed: false, message: 'يرجى تسجيل الدخول للتحقق من أمان الجهاز.' };
     }
 
-    const res = await verifyAndEnforceStudentDevice(cleanStudentId, cleanFp, deviceInfo);
-    return res;
+    if (cleanCourseId) {
+      return await verifyAndEnforceCourseDeviceServer(cleanStudentId, cleanCourseId, cleanFp || deviceInfo?.hardwareCoreId || '', deviceInfo);
+    }
+
+    // Without courseId: silent login hardware check (only blocks banned hardware)
+    return await recordStudentLoginDevice(cleanStudentId, cleanFp || deviceInfo?.hardwareCoreId || '', deviceInfo);
   } catch (err: any) {
     console.error('checkAndRegisterStudentDeviceAction error:', err);
     return { allowed: false, message: err.message || 'حدث خطأ أثناء فحص الجهاز' };
@@ -2019,6 +2645,7 @@ async function lookupStudentForPasswordReset(identifier: string) {
 export async function requestOrCheckPasswordResetAction(params: {
   identifier: string;
   deviceFingerprint?: string;
+  hardwareCoreId?: string;
   candidateFingerprints?: string[];
   submitRequest?: boolean;
 }) {
@@ -2029,20 +2656,15 @@ export async function requestOrCheckPasswordResetAction(params: {
     }
 
     const cleanFp = (params.deviceFingerprint || '').trim();
-    const allFps = Array.from(
-      new Set([cleanFp, ...(Array.isArray(params.candidateFingerprints) ? params.candidateFingerprints : [])]
-        .map(f => (f || '').trim())
-        .filter(f => Boolean(f) && !/^DEV-(MOBILE|DESKTOP|TABLET)-(ANDROID|WINDOWS|IOS|LINUX|OTHER)-\d+X\d+/i.test(f)))
-    );
+    const allFps = filterValidFingerprints([
+      cleanFp,
+      params.hardwareCoreId,
+      ...(Array.isArray(params.candidateFingerprints) ? params.candidateFingerprints : []),
+    ]);
 
     if (allFps.length > 0) {
-      const { data: bannedDevs } = await supabaseAdmin
-        .from('banned_devices')
-        .select('id, reason')
-        .in('device_fingerprint', allFps)
-        .limit(1);
-
-      if (bannedDevs && bannedDevs.length > 0) {
+      const banRes = await isDeviceBannedServer(allFps);
+      if (banRes.banned) {
         return {
           success: false,
           blockedReason: 'device_banned' as const,

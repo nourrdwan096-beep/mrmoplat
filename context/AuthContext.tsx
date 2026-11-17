@@ -188,13 +188,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     try {
       let deviceFp = '';
-      let deviceInfo: { name?: string; browser?: string } | undefined = undefined;
+      let deviceInfo: {
+        name?: string;
+        browser?: string;
+        hardwareCoreId?: string;
+        candidateFingerprints?: string[];
+        os?: string;
+        deviceType?: string;
+        gpuSummary?: string;
+        screenSummary?: string;
+        timezone?: string;
+      } | undefined = undefined;
       try {
-        const { getStrictDeviceIdentity, getPhysicalHardwareProfile } = await import('@/lib/deviceSecurity');
-        const identity = await getStrictDeviceIdentity();
-        deviceFp = identity.primaryFingerprint;
-        const profile = getPhysicalHardwareProfile();
-        deviceInfo = { name: profile.displayName, browser: profile.browserName };
+        const { getDeviceContextPayload } = await import('@/lib/deviceSecurity');
+        const ctx = await getDeviceContextPayload();
+        deviceFp = ctx.primaryFingerprint;
+        deviceInfo = {
+          name: ctx.name,
+          browser: ctx.browser,
+          hardwareCoreId: ctx.hardwareCoreId,
+          candidateFingerprints: ctx.candidateFingerprints,
+          os: ctx.os,
+          deviceType: ctx.deviceType,
+          gpuSummary: ctx.gpuSummary,
+          screenSummary: ctx.screenSummary,
+          timezone: ctx.timezone,
+        };
       } catch {}
 
       const { loginAction } = await import('@/app/actions/studentActions');
@@ -270,10 +289,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
+      const { getDeviceContextPayload } = await import('@/lib/deviceSecurity');
+      const ctx = await getDeviceContextPayload().catch(() => null);
       const { registerStudentAction } = await import('@/app/actions/studentActions');
       const res = await registerStudentAction({
         ...studentData,
-        deviceFingerprint,
+        deviceFingerprint: ctx?.primaryFingerprint || deviceFingerprint,
+        candidateFingerprints: ctx?.candidateFingerprints || [],
+        hardwareSignature: ctx?.hardwareCoreId || undefined,
       });
 
       if (!res.success) {
