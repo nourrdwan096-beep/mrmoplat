@@ -65,14 +65,15 @@ export default function LoginPage() {
 
   const getClientDeviceContext = async () => {
     try {
-      const { getStrictDeviceIdentity } = await import('@/lib/deviceSecurity');
-      const identity = await getStrictDeviceIdentity();
+      const { getDeviceContextPayload } = await import('@/lib/deviceSecurity');
+      const ctx = await getDeviceContextPayload();
       return {
-        deviceFingerprint: identity.primaryFingerprint,
-        candidateFingerprints: identity.candidateFingerprints,
+        deviceFingerprint: ctx.primaryFingerprint,
+        hardwareCoreId: ctx.hardwareCoreId,
+        candidateFingerprints: ctx.candidateFingerprints,
       };
     } catch {
-      return { deviceFingerprint: '', candidateFingerprints: [] as string[] };
+      return { deviceFingerprint: '', hardwareCoreId: '', candidateFingerprints: [] as string[] };
     }
   };
 
@@ -87,6 +88,7 @@ export default function LoginPage() {
       const res = await requestOrCheckPasswordResetAction({
         identifier: cleanId,
         deviceFingerprint: dev.deviceFingerprint,
+        hardwareCoreId: dev.hardwareCoreId,
         candidateFingerprints: dev.candidateFingerprints,
         submitRequest: false,
       });
@@ -169,6 +171,7 @@ export default function LoginPage() {
       const res = await requestOrCheckPasswordResetAction({
         identifier: cleanId,
         deviceFingerprint: dev.deviceFingerprint,
+        hardwareCoreId: dev.hardwareCoreId,
         candidateFingerprints: dev.candidateFingerprints,
         submitRequest: true,
       });
@@ -235,6 +238,8 @@ export default function LoginPage() {
         newPassword: cleanPass,
         confirmPassword: cleanConfirm,
         deviceFingerprint: dev.deviceFingerprint,
+        hardwareCoreId: dev.hardwareCoreId,
+        candidateFingerprints: dev.candidateFingerprints,
       });
 
       if (!res.success) {

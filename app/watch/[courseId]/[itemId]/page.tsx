@@ -589,14 +589,14 @@ export default function WatchLessonPage() {
                         fullName: currentUser.fullName,
                         phone: currentUser.phone
                       } : undefined}
-                      onComplete={async (score, passed) => {
-                        const studentId = currentUser?.id || 'demo_student';
-                        const refreshed = await fetchStudentProgress(studentId, courseId);
+                      onComplete={async () => {
+                        if (!currentUser?.id) return;
+                        const refreshed = await fetchStudentProgress(currentUser.id, courseId);
                         setStudentProgress(refreshed);
                       }}
                       onSecurityViolation={async () => {
-                        const studentId = currentUser?.id || 'demo_student';
-                        const refreshed = await fetchStudentProgress(studentId, courseId);
+                        if (!currentUser?.id) return;
+                        const refreshed = await fetchStudentProgress(currentUser.id, courseId);
                         setStudentProgress(refreshed);
                       }}
                     />
@@ -604,7 +604,6 @@ export default function WatchLessonPage() {
                 }
 
                 if (currentItem?.itemType === 'concept_sheet' || currentItem?.itemType === 'summary_pdf') {
-                  const studentId = currentUser?.id || 'demo_student';
                   const isPassed = studentProgress[currentItem.id]?.isPassed || false;
                   return (
                     <InteractiveDocumentViewer
@@ -617,8 +616,9 @@ export default function WatchLessonPage() {
                       studentPhone={currentUser?.phone || '01xxxxxxxxx'}
                       isPassed={isPassed}
                       onComplete={async () => {
-                        await recordStudentItemProgress(studentId, courseId, currentItem.id, 100, true);
-                        const refreshed = await fetchStudentProgress(studentId, courseId);
+                        if (!currentUser?.id || currentRole !== 'student') return;
+                        await recordStudentItemProgress(currentUser.id, courseId, currentItem.id, 100, true);
+                        const refreshed = await fetchStudentProgress(currentUser.id, courseId);
                         setStudentProgress(refreshed);
                       }}
                     />

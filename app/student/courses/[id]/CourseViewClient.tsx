@@ -247,12 +247,31 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
     setTimeout(() => setCourseNotice(''), 5000);
   };
 
-  const handleDownloadDocument = (e: React.MouseEvent, item: UnitItemData, isAccessible: boolean) => {
+  const handleDownloadDocument = async (e: React.MouseEvent, item: UnitItemData, isAccessible: boolean) => {
     e.stopPropagation();
     if (!isAccessible) {
       setCourseNotice('يجب اجتياز المحتوى السابق أولاً لفتح هذا المستند والتمكن من تحميله.');
       setTimeout(() => setCourseNotice(''), 5000);
       return;
+    }
+
+    if (currentUser?.id && currentUser.role === 'student') {
+      try {
+        const { registerOrVerifyStudentCourseDevice } = await import('@/lib/deviceSecurity');
+        const devCheck = await registerOrVerifyStudentCourseDevice(currentUser.id, courseId);
+        if (!devCheck.allowed) {
+          setCourseNotice(
+            devCheck.message ||
+              'تم بلوغ الحد الأقصى للأجهزة المسموح بها لهذا الكورس. يرجى إدارة أجهزتك من صفحة الأجهزة.'
+          );
+          setTimeout(() => setCourseNotice(''), 6000);
+          return;
+        }
+      } catch {
+        setCourseNotice('تعذر التحقق من صلاحية الجهاز لهذا الكورس حالياً.');
+        setTimeout(() => setCourseNotice(''), 5000);
+        return;
+      }
     }
 
     if (item.pdfAttachmentUrl) {

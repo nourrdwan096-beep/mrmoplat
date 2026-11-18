@@ -73,17 +73,22 @@ function extractNormalizedGpuInfo(): { gpuCore: string; maxTexBucket: number } {
     const rawRenderer = String(debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER) || '');
     const maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0);
 
-    // Strip browser wrappers while keeping silicon architecture tokens (NVIDIA RTX/GTX, AMD Radeon, Intel UHD/Iris, Apple M1/GPU, Adreno, Mali, PowerVR, etc.)
+    // Strip browser wrappers & trademark tokens while preserving silicon architecture (NVIDIA, AMD, Intel, Apple, Adreno, Mali, PowerVR, Xclipse)
     const cleanStr = (s: string) =>
       s
         .toUpperCase()
+        .replace(/\(TM\)|\(R\)|™|®/g, ' ')
         .replace(/ANGLE\s*\(/g, ' ')
         .replace(/GOOGLE INC\.?\s*\(?/g, ' ')
+        .replace(/ANGLE METAL RENDERER:?/g, ' ')
+        .replace(/UNSPECIFIED VERSION/g, ' ')
+        .replace(/LAPTOP GPU/g, ' ')
         .replace(/DIRECT3D\d*\s*(VS_\d+_\d+\s*PS_\d+_\d+)?/g, ' ')
-        .replace(/D3D\d+|OPENGL ENGINE|METAL/g, ' ')
+        .replace(/D3D\d+|OPENGL ES \d+(?:\.\d+)?|OPENGL ENGINE|METAL/g, ' ')
         .replace(/\(\s*0X[0-9A-F]+\s*\)/g, ' ')
         .replace(/0X[0-9A-F]+/g, ' ')
-        .replace(/[^A-Z0-9\s]/g, ' ')
+        .replace(/\bMP\d+\b/g, ' ')
+        .replace(/[^A-Z0-9\s-]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 
@@ -93,11 +98,11 @@ function extractNormalizedGpuInfo(): { gpuCore: string; maxTexBucket: number } {
     // Extract canonical GPU family / model signature invariant across browsers
     const combined = `${vendorClean} ${rendererClean}`.trim();
     const knownMatch = combined.match(
-      /(APPLE M\d+(?:\s*(?:PRO|MAX|ULTRA))?|APPLE GPU|ADRENO\s*(?:\(TM\)\s*)?\d+|MALI-[A-Z0-9]+|POWERVR\s*[A-Z0-9]+|GEFORCE\s*[A-Z]*\s*\d+[A-Z]*|RTX\s*\d+[A-Z]*|GTX\s*\d+[A-Z]*|RADEON\s*(?:RX\s*)?[A-Z0-9]+|IRIS\s*[A-Z0-9\s]*|UHD GRAPHICS\s*\d*|HD GRAPHICS\s*\d*|INTEL\s*[A-Z0-9]+|SWIFTSHADER|LLVMPipe)/i
+      /(APPLE M\d+(?:\s*(?:PRO|MAX|ULTRA))?|APPLE GPU|ADRENO\s*\d+|MALI-[A-Z]?\d+|XCLIPSE\s*\d+|IMMORTALIS-[A-Z]?\d+|POWERVR\s*[A-Z0-9]+|GEFORCE\s*(?:RTX|GTX|MX|GT)?\s*\d+(?:\s*(?:TI|SUPER|M))?|RTX\s*[A-Z]?\d+(?:\s*(?:TI|SUPER))?|GTX\s*\d+(?:\s*(?:TI|SUPER))?|RADEON\s*(?:RX\s*)?(?:VEGA\s*)?[A-Z0-9]+|ARC\s*[A-Z]?\d+[A-Z]?|IRIS\s*(?:XE|PLUS|PRO)?(?:\s*\d+)?|UHD GRAPHICS\s*\d*|HD GRAPHICS\s*\d*|INTEL\s*[A-Z0-9]+|SWIFTSHADER|LLVMPIPE)/i
     );
 
     const gpuCore = knownMatch
-      ? knownMatch[1].replace(/\s+/g, '_')
+      ? knownMatch[1].replace(/\s+/g, '_').replace(/_+/g, '_')
       : (rendererClean || vendorClean || 'GENERIC_GPU').slice(0, 48).replace(/\s+/g, '_');
 
     return {
@@ -245,11 +250,16 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
   const nav = navigator as any;
   const ua = nav.userAgent || '';
 
-  // 1. Detect OS accurately across all browsers (handles iPadOS desktop-mode UA)
+  // 0. Extract physical GPU & screen before classifying OS (handles Android/iOS "Desktop Site" mode cleanly)
+  const { physMax, physMin, logicalSummary } = getZoomCompensatedPhysicalScreen();
+  const { gpuCore } = extractNormalizedGpuInfo();
+  const isAndroidGpu = /^(ADRENO|MALI|POWERVR|XCLIPSE|IMMORTALIS)/i.test(gpuCore);
+
+  // 1. Detect OS accurately across all browsers (handles iPadOS & Android desktop-mode UA)
   let os: 'Android' | 'iOS' | 'Windows' | 'macOS' | 'Linux' | 'Other' = 'Other';
   let osArabic = 'نظام تشغيل';
 
-  if (/Android/i.test(ua)) {
+  if (/Android/i.test(ua) || (isAndroidGpu && (nav.maxTouchPoints || 0) > 0)) {
     os = 'Android';
     osArabic = 'أندرويد (Android)';
   } else if (/iPhone|iPad|iPod/i.test(ua) || (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1)) {
@@ -270,10 +280,14 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
   let deviceType: 'mobile' | 'tablet' | 'desktop' = 'desktop';
   let deviceTypeArabic = 'كمبيوتر / لابتوب';
 
-  const isTablet = /iPad|tablet|(android(?!.*mobile))/i.test(ua) || (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1);
+  const isTablet =
+    /iPad|tablet|(android(?!.*mobile))/i.test(ua) ||
+    (nav.platform === 'MacIntel' && (nav.maxTouchPoints || 0) > 1) ||
+    (os === 'Android' && Math.min(window.screen?.width || 0, window.screen?.height || 0) >= 600);
   const isMobile =
     !isTablet &&
     (/Mobile|iPhone|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(ua) ||
+      (os === 'Android' && (nav.maxTouchPoints || 0) > 0) ||
       ((window.screen?.width || 999) < 600 && (nav.maxTouchPoints || 0) > 0));
 
   if (isTablet) {
@@ -296,10 +310,7 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
   else if (/CriOS|Chrome/i.test(ua) && !/Edg/i.test(ua)) browserName = 'Google Chrome';
   else if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) browserName = 'Apple Safari';
 
-  // 4. Cross-browser physical silicon & display core
-  const { physMax, physMin, logicalSummary } = getZoomCompensatedPhysicalScreen();
-  const { gpuCore, maxTexBucket } = extractNormalizedGpuInfo();
-  const coresBucket = Math.min(32, Math.max(1, Number(nav.hardwareConcurrency || 4)));
+  // 4. Cross-browser physical silicon & display core (excludes Safari/Brave-masked hardwareConcurrency/maxTexSize)
   const touchCap = (nav.maxTouchPoints || 0) > 0 ? 'TOUCH' : 'NOTOUCH';
   let timezone = 'UTC';
   try {
@@ -311,9 +322,7 @@ export function getPhysicalHardwareProfile(): PhysicalHardwareProfile {
     deviceType,
     gpuCore,
     `${physMax}x${physMin}`,
-    `C${coresBucket}`,
     touchCap,
-    `T${maxTexBucket}`,
     timezone,
   ].join('::');
 

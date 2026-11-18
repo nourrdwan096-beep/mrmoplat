@@ -297,6 +297,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         deviceFingerprint: ctx?.primaryFingerprint || deviceFingerprint,
         candidateFingerprints: ctx?.candidateFingerprints || [],
         hardwareSignature: ctx?.hardwareCoreId || undefined,
+        deviceInfo: ctx
+          ? {
+              name: ctx.name,
+              browser: ctx.browser,
+              hardwareCoreId: ctx.hardwareCoreId,
+              candidateFingerprints: ctx.candidateFingerprints,
+              os: ctx.os,
+              deviceType: ctx.deviceType,
+              gpuSummary: ctx.gpuSummary,
+              screenSummary: ctx.screenSummary,
+              timezone: ctx.timezone,
+            }
+          : undefined,
       });
 
       if (!res.success) {

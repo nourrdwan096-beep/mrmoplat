@@ -911,6 +911,25 @@ function mergeBrowsers(existing: string[] | undefined, incomingBrowser?: string)
   return list.length > 0 ? list : ['متصفح ويب'];
 }
 
+function parseScreenSummaryDims(screenSummary?: string): { phys: string; logical: string } {
+  if (!screenSummary || typeof screenSummary !== 'string') {
+    return { phys: '', logical: '' };
+  }
+  const physMatch = screenSummary.match(/^(\d+x\d+)/);
+  const logMatch = screenSummary.match(/\((\d+x\d+)@/);
+  return {
+    phys: physMatch ? physMatch[1] : '',
+    logical: logMatch ? logMatch[1] : '',
+  };
+}
+
+function isMacAppleSiliconPair(os: string, gpuA: string, gpuB: string): boolean {
+  if (os !== 'macOS') return false;
+  const isAppleGpuA = gpuA === 'APPLE_GPU' || /^APPLE_M\d+/.test(gpuA);
+  const isAppleGpuB = gpuB === 'APPLE_GPU' || /^APPLE_M\d+/.test(gpuB);
+  return isAppleGpuA && isAppleGpuB;
+}
+
 function matchesPhysicalDevice(
   stored: {
     hardwareCoreId?: string;
@@ -919,6 +938,7 @@ function matchesPhysicalDevice(
     os?: string;
     deviceType?: string;
     gpuSummary?: string;
+    screenSummary?: string;
     timezone?: string;
   },
   incoming: {
@@ -928,6 +948,7 @@ function matchesPhysicalDevice(
     os?: string;
     deviceType?: string;
     gpuSummary?: string;
+    screenSummary?: string;
     timezone?: string;
   }
 ): boolean {
@@ -947,7 +968,9 @@ function matchesPhysicalDevice(
     return true;
   }
 
-  // Same-student exact silicon fallback for cross-browser recovery
+  // Same-student physical silicon + display geometry fallback for cross-browser recovery
+  // Requires matching screen dimensions so distinct phone/laptop models (e.g. two iPhones) stay separated,
+  // while Safari vs Chrome/Firefox (including zoomed browsers or Apple Silicon masking) unify cleanly.
   const stGpu = (stored.gpuSummary || '').toUpperCase().trim();
   const inGpu = (incoming.gpuSummary || '').toUpperCase().trim();
   if (
@@ -961,8 +984,17 @@ function matchesPhysicalDevice(
     incoming.timezone &&
     stored.timezone === incoming.timezone &&
     !GENERIC_GPU_TOKENS.has(stGpu) &&
-    stGpu === inGpu
+    !GENERIC_GPU_TOKENS.has(inGpu) &&
+    (stGpu === inGpu || isMacAppleSiliconPair(stored.os, stGpu, inGpu))
   ) {
+    const stScreen = parseScreenSummaryDims(stored.screenSummary);
+    const inScreen = parseScreenSummaryDims(incoming.screenSummary);
+    if (stScreen.phys && inScreen.phys) {
+      if (stScreen.phys === inScreen.phys || (stScreen.logical && inScreen.logical && stScreen.logical === inScreen.logical)) {
+        return true;
+      }
+      return false;
+    }
     return true;
   }
 
@@ -1106,6 +1138,7 @@ async function recordStudentLoginDevice(
         os: meta.os,
         deviceType: meta.deviceType,
         gpuSummary: meta.gpuSummary,
+        screenSummary: meta.screenSummary,
         timezone: meta.timezone,
       },
       {
@@ -1115,6 +1148,7 @@ async function recordStudentLoginDevice(
         os: deviceInfo?.os,
         deviceType: deviceInfo?.deviceType,
         gpuSummary: deviceInfo?.gpuSummary,
+        screenSummary: deviceInfo?.screenSummary,
         timezone: deviceInfo?.timezone,
       }
     );
@@ -1231,6 +1265,7 @@ export async function bindCoursePrimaryDeviceServer(
       os: deviceContext.os,
       deviceType: deviceContext.deviceType,
       gpuSummary: deviceContext.gpuSummary,
+      screenSummary: deviceContext.screenSummary,
       timezone: deviceContext.timezone,
     })
   );
@@ -1386,6 +1421,7 @@ async function verifyAndEnforceCourseDeviceServer(
       os: deviceInfo?.os,
       deviceType: deviceInfo?.deviceType,
       gpuSummary: deviceInfo?.gpuSummary,
+      screenSummary: deviceInfo?.screenSummary,
       timezone: deviceInfo?.timezone,
     })
   );
@@ -1918,12 +1954,13 @@ export async function registerStudentAction(studentData: any) {
     const candidateFps = Array.isArray(studentData.candidateFingerprints) 
       ? studentData.candidateFingerprints.map((f: any) => (f || '').trim()).filter(Boolean)
       : [];
-    const allFps = Array.from(
-      new Set([fingerprint, ...candidateFps]
-        .map(f => (f || '').trim())
-        .filter(f => Boolean(f) && !/^DEV-(MOBILE|DESKTOP|TABLET)-(ANDROID|WINDOWS|IOS|LINUX|OTHER)-\d+X\d+/i.test(f))
-      )
-    );
+    const devInfo = studentData.deviceInfo as IncomingHardwareContext | undefined;
+    const allFps = filterValidFingerprints([
+      fingerprint,
+      studentData.hardwareSignature,
+      devInfo?.hardwareCoreId,
+      ...candidateFps,
+    ]);
 
     if (!cleanPhone || cleanPhone.length !== 11) {
       return { success: false, error: 'يرجى إدخال رقم هاتف مصري صحيح مكون من 11 رقماً.' };
@@ -2130,15 +2167,27 @@ export async function registerStudentAction(studentData: any) {
       return { success: false, error: 'حدث خطأ في قاعدة البيانات: ' + error.message };
     }
 
-    // 10. Register the primary fingerprint in student_devices
-    if (insertedUser && fingerprint) {
+    // 10. Register the primary fingerprint & full physical hardware profile in student_devices
+    if (insertedUser && (fingerprint || devInfo?.hardwareCoreId)) {
       try {
+        const regFp = fingerprint || devInfo?.hardwareCoreId || '';
+        const regMeta: StoredDeviceMetadata = {
+          hardwareCoreId: devInfo?.hardwareCoreId || studentData.hardwareSignature,
+          candidateFingerprints: allFps,
+          os: devInfo?.os,
+          deviceType: devInfo?.deviceType,
+          gpuSummary: devInfo?.gpuSummary,
+          screenSummary: devInfo?.screenSummary,
+          timezone: devInfo?.timezone,
+          browsersSeen: mergeBrowsers([], devInfo?.browser),
+        };
         await supabaseAdmin
           .from('student_devices')
           .upsert([{
             student_id: insertedUser.id,
-            device_fingerprint: fingerprint,
-            device_name: 'الجهاز الأساسي للتسجيل',
+            device_fingerprint: regFp,
+            device_name: devInfo?.name || 'الجهاز الأساسي للتسجيل',
+            browser_info: serializeStoredDeviceMeta(regMeta),
             is_primary: true,
             last_active: new Date().toISOString(),
           }], { onConflict: 'student_id,device_fingerprint' });
@@ -2873,12 +2922,19 @@ export async function completeStudentPasswordResetAction(params: {
   newPassword: string;
   confirmPassword: string;
   deviceFingerprint?: string;
+  hardwareCoreId?: string;
+  candidateFingerprints?: string[];
 }) {
   try {
     const rawId = (params.identifier || '').trim();
     const cleanPass = (params.newPassword || '').trim();
     const cleanConfirm = (params.confirmPassword || '').trim();
     const cleanFp = (params.deviceFingerprint || '').trim();
+    const allFps = filterValidFingerprints([
+      cleanFp,
+      params.hardwareCoreId,
+      ...(Array.isArray(params.candidateFingerprints) ? params.candidateFingerprints : []),
+    ]);
 
     if (!rawId) {
       return { success: false, message: 'بيانات الحساب غير محددة.' };
@@ -2896,13 +2952,9 @@ export async function completeStudentPasswordResetAction(params: {
       return { success: false, message: 'كلمتا المرور غير متطابقتين. يرجى التأكد وإعادة المحاولة.' };
     }
 
-    if (cleanFp) {
-      const { data: bannedDevs } = await supabaseAdmin
-        .from('banned_devices')
-        .select('id')
-        .eq('device_fingerprint', cleanFp)
-        .limit(1);
-      if (bannedDevs && bannedDevs.length > 0) {
+    if (allFps.length > 0) {
+      const banRes = await isDeviceBannedServer(allFps);
+      if (banRes.banned) {
         return { success: false, message: 'هذا الجهاز محظور نهائياً من إدارة المنصة.' };
       }
     }
