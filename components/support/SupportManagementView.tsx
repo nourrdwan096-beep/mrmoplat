@@ -40,6 +40,8 @@ import { fetchAllCourses, CourseData } from '@/lib/academicService';
 interface SupportManagementViewProps {
   viewMode: 'teacher' | 'assistant';
   assignedCourseIds?: string[];
+  canManageAllCourses?: boolean;
+  allowedTicketTypes?: Array<'academic' | 'technical'>;
 }
 
 const CANNED_RESPONSES = [
@@ -52,6 +54,8 @@ const CANNED_RESPONSES = [
 export function SupportManagementView({
   viewMode,
   assignedCourseIds = [],
+  canManageAllCourses = true,
+  allowedTicketTypes,
 }: SupportManagementViewProps) {
   const { currentUser, currentRole } = useAuth();
   const [tickets, setTickets] = useState<SupportTicketData[]>([]);
@@ -59,11 +63,18 @@ export function SupportManagementView({
   const [assistants, setAssistants] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const allowAcademic = !allowedTicketTypes || allowedTicketTypes.includes('academic');
+  const allowTechnical = !allowedTicketTypes || allowedTicketTypes.includes('technical');
+  const allowBothTypes = allowAcademic && allowTechnical;
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'in_progress' | 'resolved' | 'closed'>('all');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'academic' | 'technical'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'academic' | 'technical'>(
+    allowBothTypes ? 'all' : allowAcademic ? 'academic' : 'technical'
+  );
   const [courseFilter, setCourseFilter] = useState<string>('all');
 
   // Selected Ticket State
@@ -77,6 +88,12 @@ export function SupportManagementView({
   // Mobile View Toggle
   const [mobileActiveView, setMobileActiveView] = useState<'list' | 'chat'>('list');
 
+  useEffect(() => {
+    if (!allowBothTypes) {
+      setTypeFilter(allowAcademic ? 'academic' : 'technical');
+    }
+  }, [allowBothTypes, allowAcademic]);
+
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     else setRefreshing(true);
@@ -84,24 +101,43 @@ export function SupportManagementView({
     try {
       const role = (currentRole as any) || (viewMode === 'teacher' ? 'teacher' : 'assistant');
       const staffId = currentUser?.id || 'staff-master';
+      const courseScope = viewMode === 'assistant' && !canManageAllCourses ? assignedCourseIds : [];
 
       const [staffTickets, allCourses, assistantsList] = await Promise.all([
-        fetchStaffTickets(staffId, role, assignedCourseIds),
+        fetchStaffTickets(staffId, role, courseScope),
         fetchAllCourses(),
-        fetchAssistants(),
+        viewMode === 'teacher' ? fetchAssistants() : Promise.resolve([]),
       ]);
 
-      setTickets(staffTickets || []);
-      setCourses(allCourses || []);
+      const scopedTickets = (staffTickets || []).filter((t) => {
+        if (allowedTicketTypes && !allowedTicketTypes.includes(t.ticketType as any)) {
+          return false;
+        }
+        if (viewMode === 'assistant' && !canManageAllCourses) {
+          const cid = (t.courseId || t.course_id || '') as string;
+          if (cid && !assignedCourseIds.includes(cid)) {
+            return false;
+          }
+        }
+        return true;
+      });
+
+      const scopedCourses =
+        viewMode === 'assistant' && !canManageAllCourses
+          ? (allCourses || []).filter((c) => assignedCourseIds.includes(c.id))
+          : allCourses || [];
+
+      setTickets(scopedTickets);
+      setCourses(scopedCourses);
       if (Array.isArray(assistantsList)) {
         setAssistants(assistantsList);
       }
 
       // Keep selected ticket updated if it was selected
       setSelectedTicket((prev) => {
-        if (!prev) return staffTickets && staffTickets.length > 0 ? staffTickets[0] : null;
-        const updated = staffTickets?.find((t) => t.id === prev.id);
-        return updated || prev;
+        if (!prev) return scopedTickets.length > 0 ? scopedTickets[0] : null;
+        const updated = scopedTickets.find((t) => t.id === prev.id);
+        return updated || (scopedTickets.length > 0 ? scopedTickets[0] : null);
       });
     } catch (err) {
       console.error('Error loading support data:', err);
@@ -109,7 +145,7 @@ export function SupportManagementView({
       setLoading(false);
       setRefreshing(false);
     }
-  }, [currentRole, viewMode, currentUser?.id, assignedCourseIds]);
+  }, [currentRole, viewMode, currentUser?.id, assignedCourseIds, canManageAllCourses, allowedTicketTypes]);
 
   useEffect(() => {
     loadData();
@@ -193,7 +229,7 @@ export function SupportManagementView({
       }
     } catch (err) {
       console.error('Error sending reply:', err);
-      alert('حدث خطأ أثناء إرسال الرد، يرجى المحاولة مرة أخرى.');
+      setActionError('حدث خطأ أثناء إرسال الرد، يرجى المحاولة مرة أخرى.');
     } finally {
       setIsSending(false);
     }
@@ -201,6 +237,7 @@ export function SupportManagementView({
 
   const handleStatusChange = async (newStatus: SupportTicketData['status']) => {
     if (!selectedTicket) return;
+    setActionError(null);
     try {
       await updateTicketStatus(selectedTicket.id, newStatus, undefined, {
         id: currentUser?.id,
@@ -214,13 +251,14 @@ export function SupportManagementView({
       );
     } catch (err) {
       console.error('Error changing ticket status:', err);
-      alert('حدث خطأ أثناء تحديث حالة التذكرة');
+      setActionError('حدث خطأ أثناء تحديث حالة التذكرة.');
     }
   };
 
   const handleAssignAssistant = async (assistantId: string) => {
     if (!selectedTicket) return;
     setAssigningAssistant(true);
+    setActionError(null);
     try {
       const targetAsst = assistants.find((a) => a.id === assistantId);
       const asstName = targetAsst?.fullName || 'مساعد';
@@ -252,7 +290,7 @@ export function SupportManagementView({
       );
     } catch (err) {
       console.error('Error assigning assistant:', err);
-      alert('حدث خطأ أثناء تعيين المساعد');
+      setActionError('حدث خطأ أثناء تعيين المساعد للتذكرة.');
     } finally {
       setAssigningAssistant(false);
     }
@@ -351,6 +389,22 @@ export function SupportManagementView({
         </div>
       </div>
 
+      {actionError && (
+        <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{actionError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="text-rose-500 hover:text-rose-700 px-2 py-0.5 text-xs font-black"
+          >
+            إغلاق
+          </button>
+        </div>
+      )}
+
       {/* Filter Bar */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
@@ -387,9 +441,9 @@ export function SupportManagementView({
               onChange={(e: any) => setTypeFilter(e.target.value)}
               className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs md:text-sm font-bold focus:ring-2 focus:ring-indigo-500 outline-none"
             >
-              <option value="all">كل الأنواع</option>
-              <option value="academic">أكاديمي فقط</option>
-              <option value="technical">فني فقط</option>
+              {allowBothTypes && <option value="all">كل الأنواع</option>}
+              {allowAcademic && <option value="academic">أكاديمي فقط</option>}
+              {allowTechnical && <option value="technical">فني فقط</option>}
             </select>
           </div>
 

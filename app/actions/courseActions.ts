@@ -3,7 +3,12 @@
 import { supabase } from '@/lib/supabaseClient';
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import { revalidatePath } from 'next/cache';
-import { requireStaffSession } from '@/lib/serverAuth';
+import {
+  requireStaffSession,
+  canAssistantAccessCoursePerm,
+  canAssistantAccessAnyCoursePerm,
+} from '@/lib/serverAuth';
+import { getItemTypePermissionKey } from '@/lib/assistantPermissions';
 
 export async function getTeacherCourses() {
   const { data, error } = await supabase
@@ -50,7 +55,7 @@ export async function getCourseDetails(courseId: string) {
 
 export async function createCourse(courseData: any) {
   const session = await requireStaffSession();
-  if (!session) throw new Error('غير مصرح بإنشاء الكورسات');
+  if (!session || !session.isTeacher) throw new Error('غير مصرح بإنشاء الكورسات — صلاحية حصرية للمعلم');
   const { data, error } = await supabaseAdmin
     .from('courses')
     .insert([courseData])
@@ -65,6 +70,9 @@ export async function createCourse(courseData: any) {
 export async function createCourseUnit(unitData: any) {
   const session = await requireStaffSession();
   if (!session) throw new Error('غير مصرح بإنشاء الوحدات');
+  if (!session.isTeacher && !canAssistantAccessCoursePerm(session, unitData?.course_id, 'canManageUnits')) {
+    throw new Error('غير مصرح للمساعد بإضافة وحدات لهذا الكورس');
+  }
   const { data, error } = await supabaseAdmin
     .from('course_units')
     .insert([unitData])
@@ -79,6 +87,12 @@ export async function createCourseUnit(unitData: any) {
 export async function createUnitItem(itemData: any) {
   const session = await requireStaffSession();
   if (!session) throw new Error('غير مصرح بإنشاء الدروس');
+  if (!session.isTeacher) {
+    const permKey = getItemTypePermissionKey(itemData?.item_type);
+    if (!permKey || !canAssistantAccessCoursePerm(session, itemData?.course_id, permKey)) {
+      throw new Error('غير مصرح للمساعد بإضافة هذا النوع من المحتوى');
+    }
+  }
   const { data, error } = await supabaseAdmin
     .from('unit_items')
     .insert([itemData])
@@ -103,6 +117,9 @@ export async function generateActivationCodes(
 ) {
   const session = await requireStaffSession();
   if (!session) throw new Error('غير مصرح بإصدار أكواد التفعيل');
+  if (!session.isTeacher && !canAssistantAccessCoursePerm(session, courseId, 'canGenerateCodes')) {
+    throw new Error('غير مصرح للمساعد بإصدار أكواد تفعيل لهذا الكورس');
+  }
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   const client = supabaseAdmin || supabase;
 
@@ -173,6 +190,9 @@ export async function generateActivationCodes(
 export async function getCourseCodes(courseId: string) {
   const session = await requireStaffSession();
   if (!session) throw new Error('غير مصرح بعرض أكواد التفعيل');
+  if (!session.isTeacher && !canAssistantAccessAnyCoursePerm(session, courseId, ['canGenerateCodes', 'canViewCourseStudents'])) {
+    throw new Error('غير مصرح للمساعد بعرض أكواد هذا الكورس');
+  }
   const client = supabaseAdmin || supabase;
   const { data, error } = await client
     .from('course_activation_codes')

@@ -28,6 +28,14 @@ import {
 } from '@/lib/studentService';
 import { useAuth } from '@/context/AuthContext';
 import { sendMessage } from '@/lib/messagingService';
+import { fetchMyAssistantProfileServerAction } from '@/app/actions/assistantActions';
+import {
+  AssistantPermissionsConfig,
+  DEFAULT_STUDENT_PERMISSIONS,
+  FULL_STUDENT_PERMISSIONS,
+  StudentGranularPermissions,
+  normalizeAssistantPermissions,
+} from '@/lib/assistantPermissions';
 import { 
   fetchAllCourses, 
   fetchStudentEnrolledCourseIds, 
@@ -52,8 +60,36 @@ export type ManagedStudentProfile = StudentProfile & {
 };
 
 export default function StudentsManagementClient() {
-  const { currentRole } = useAuth();
+  const { currentUser, currentRole } = useAuth();
   const isTeacherUser = currentRole === 'teacher' || currentRole === 'super_admin';
+
+  const [assistantPerms, setAssistantPerms] = useState<AssistantPermissionsConfig | null>(null);
+  const [permsLoaded, setPermsLoaded] = useState<boolean>(isTeacherUser);
+
+  const sp: StudentGranularPermissions = isTeacherUser
+    ? FULL_STUDENT_PERMISSIONS
+    : (assistantPerms?.studentPermissions || DEFAULT_STUDENT_PERMISSIONS);
+  const allowMessaging = isTeacherUser || Boolean(assistantPerms?.canSendMessages);
+
+  const canViewPendingTab = isTeacherUser || sp.canApproveRegistrations || sp.canManageStudents;
+  const canViewActiveTab =
+    isTeacherUser ||
+    sp.canManageStudents ||
+    sp.canManageStudentDevices ||
+    sp.canBanStudents ||
+    sp.canDeleteStudents ||
+    sp.canHandlePasswordResets;
+  const canViewResetsTab = isTeacherUser || sp.canHandlePasswordResets;
+  const canViewBannedTab =
+    isTeacherUser || sp.canBanStudents || sp.canManageStudents || sp.canDeleteStudents;
+
+  const canApprove = isTeacherUser || sp.canApproveRegistrations;
+  const canCreate = isTeacherUser || sp.canCreateStudents;
+  const canHandleResets = isTeacherUser || sp.canHandlePasswordResets;
+  const canManageDevices = isTeacherUser || sp.canManageStudentDevices;
+  const canBan = isTeacherUser || sp.canBanStudents;
+  const canDelete = isTeacherUser || sp.canDeleteStudents;
+  const canRevealMasterEmail = isTeacherUser; // Strictly Teacher ONLY (Zero-Knowledge)
 
   const [students, setStudents] = useState<ManagedStudentProfile[]>([]);
   const [resetRequests, setResetRequests] = useState<PasswordResetRequestItem[]>([]);
@@ -139,8 +175,9 @@ export default function StudentsManagementClient() {
     setMasterKeyError('');
   };
 
-  const loadResetRequests = async () => {
-    if (!isTeacherUser) return;
+  const loadResetRequests = async (allowResetsOverride?: boolean) => {
+    const allowed = allowResetsOverride ?? canHandleResets;
+    if (!allowed) return;
     const res = await fetchPasswordResetRequests();
     if (res.success) {
       setResetRequests(res.requests);
@@ -150,26 +187,86 @@ export default function StudentsManagementClient() {
   const loadStudents = async () => {
     const data = await fetchStudents();
     setStudents(data);
-    if (isTeacherUser) {
-      await loadResetRequests();
+    if (canHandleResets) {
+      await loadResetRequests(true);
     }
     setIsLoading(false);
   };
 
   useEffect(() => {
+    let mounted = true;
+
+    async function initAssistantPerms() {
+      if (isTeacherUser) {
+        if (mounted) setPermsLoaded(true);
+        return;
+      }
+      if (currentRole === 'assistant') {
+        try {
+          const res = await fetchMyAssistantProfileServerAction();
+          if (mounted && res.success && res.data) {
+            const norm = normalizeAssistantPermissions(
+              res.data.permissions as Record<string, any>,
+              res.data.permissions as Partial<AssistantPermissionsConfig>
+            );
+            setAssistantPerms(norm);
+          }
+        } catch (err) {
+          console.error('Failed to load assistant student permissions:', err);
+        } finally {
+          if (mounted) setPermsLoaded(true);
+        }
+      } else {
+        if (mounted) setPermsLoaded(true);
+      }
+    }
+
+    initAssistantPerms();
+    return () => {
+      mounted = false;
+    };
+  }, [isTeacherUser, currentRole]);
+
+  useEffect(() => {
     if (typeof window !== 'undefined') {
-      if (sessionStorage.getItem('mr_radwan_master_unlocked') === 'true') {
+      if (isTeacherUser && sessionStorage.getItem('mr_radwan_master_unlocked') === 'true') {
         setIsMasterKeyUnlocked(true);
       }
       setCaptchaCode(Math.floor(1000 + Math.random() * 9000).toString());
       const tabParam = new URLSearchParams(window.location.search).get('tab');
-      if (tabParam === 'active' || tabParam === 'banned' || tabParam === 'pending') {
-        setActiveTab(tabParam);
-      } else if (tabParam === 'password_resets' && isTeacherUser) {
+      if (tabParam === 'active' && canViewActiveTab) {
+        setActiveTab('active');
+      } else if (tabParam === 'banned' && canViewBannedTab) {
+        setActiveTab('banned');
+      } else if (tabParam === 'pending' && canViewPendingTab) {
+        setActiveTab('pending');
+      } else if (tabParam === 'password_resets' && canViewResetsTab) {
         setActiveTab('password_resets');
       }
     }
-  }, [isTeacherUser]);
+  }, [isTeacherUser, canViewActiveTab, canViewBannedTab, canViewPendingTab, canViewResetsTab]);
+
+  // Ensure activeTab always falls on a permitted tab once permissions load
+  useEffect(() => {
+    if (!permsLoaded) return;
+    if (activeTab === 'pending' && !canViewPendingTab) {
+      if (canViewActiveTab) setActiveTab('active');
+      else if (canViewResetsTab) setActiveTab('password_resets');
+      else if (canViewBannedTab) setActiveTab('banned');
+    } else if (activeTab === 'active' && !canViewActiveTab) {
+      if (canViewPendingTab) setActiveTab('pending');
+      else if (canViewResetsTab) setActiveTab('password_resets');
+      else if (canViewBannedTab) setActiveTab('banned');
+    } else if (activeTab === 'password_resets' && !canViewResetsTab) {
+      if (canViewPendingTab) setActiveTab('pending');
+      else if (canViewActiveTab) setActiveTab('active');
+      else if (canViewBannedTab) setActiveTab('banned');
+    } else if (activeTab === 'banned' && !canViewBannedTab) {
+      if (canViewPendingTab) setActiveTab('pending');
+      else if (canViewActiveTab) setActiveTab('active');
+      else if (canViewResetsTab) setActiveTab('password_resets');
+    }
+  }, [permsLoaded, activeTab, canViewPendingTab, canViewActiveTab, canViewResetsTab, canViewBannedTab]);
 
   useEffect(() => {
     let mounted = true;
@@ -179,7 +276,7 @@ export default function StudentsManagementClient() {
         setIsLoading(false);
       }
     });
-    if (isTeacherUser) {
+    if (canHandleResets) {
       fetchPasswordResetRequests().then(res => {
         if (mounted && res.success) {
           setResetRequests(res.requests);
@@ -187,7 +284,7 @@ export default function StudentsManagementClient() {
       });
     }
     return () => { mounted = false; };
-  }, [isTeacherUser]);
+  }, [canHandleResets]);
 
   // Load Academic Records & Physical Hardware Devices when detailsTargetStudent changes
   useEffect(() => {
@@ -595,9 +692,9 @@ export default function StudentsManagementClient() {
     setIsSendingMessage(true);
     try {
       await sendMessage({
-        senderId: 'teacher',
-        senderName: 'مستر محمد رضوان',
-        senderRole: 'teacher',
+        senderId: isTeacherUser ? 'teacher' : (currentUser?.id || 'assistant'),
+        senderName: isTeacherUser ? 'مستر محمد رضوان' : (currentUser?.fullName || 'فريق المساعدين'),
+        senderRole: isTeacherUser ? 'teacher' : 'assistant',
         recipientStudentId: messageTargetStudent.id,
         recipientStudentName: messageTargetStudent.fullName,
         isBroadcast: false,
@@ -624,13 +721,15 @@ export default function StudentsManagementClient() {
     setSendingAdvice(true);
     try {
       await sendMessage({
-        senderId: 'teacher',
-        senderName: 'مستر محمد رضوان',
-        senderRole: 'teacher',
+        senderId: isTeacherUser ? 'teacher' : (currentUser?.id || 'assistant'),
+        senderName: isTeacherUser ? 'مستر محمد رضوان' : (currentUser?.fullName || 'فريق المساعدين'),
+        senderRole: isTeacherUser ? 'teacher' : 'assistant',
         recipientStudentId: detailsTargetStudent.id,
         recipientStudentName: detailsTargetStudent.fullName,
         isBroadcast: false,
-        title: '🌟 توجيه ونصيحة أكاديمية خاصة من مستر محمد رضوان',
+        title: isTeacherUser
+          ? '🌟 توجيه ونصيحة أكاديمية خاصة من مستر محمد رضوان'
+          : `🌟 توجيه أكاديمي من ${currentUser?.fullName || 'فريق المساعدين'}`,
         content: adviceText.trim(),
       });
       setAdviceSuccess(true);
@@ -700,12 +799,14 @@ export default function StudentsManagementClient() {
     >
       <div className="flex flex-col md:flex-row gap-6">
         <div className="flex items-start gap-4 flex-1">
-          <input 
-            type="checkbox" 
-            checked={selectedIds.includes(student.id)}
-            onChange={() => toggleSelection(student.id)}
-            className="mt-2 w-5 h-5 rounded-md border-slate-300 text-violet-600 focus:ring-violet-500"
-          />
+          {(canApprove || canDelete) && (
+            <input 
+              type="checkbox" 
+              checked={selectedIds.includes(student.id)}
+              onChange={() => toggleSelection(student.id)}
+              className="mt-2 w-5 h-5 rounded-md border-slate-300 text-violet-600 focus:ring-violet-500"
+            />
+          )}
           <button
             type="button"
             onClick={() => setPreviewPhotoStudent(student)}
@@ -778,14 +879,14 @@ export default function StudentsManagementClient() {
         <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl flex flex-col justify-center gap-2 min-w-[240px] border border-slate-100 dark:border-slate-800">
           <div className="text-xs font-bold text-slate-400">البريد الإلكتروني:</div>
           <div className="text-sm font-black text-slate-800 dark:text-slate-200 truncate" dir="ltr">
-            {isTeacherUser && isMasterKeyUnlocked ? student.email : '••••••••••@•••.com'}
+            {canRevealMasterEmail && isMasterKeyUnlocked ? student.email : '••••••••••@•••.com'}
           </div>
           <div className="text-xs font-bold text-slate-400 mt-2">أمان كلمة المرور:</div>
           <div className="inline-flex items-center gap-1.5 text-xs font-black text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800/50">
             <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
             <span>مشفرة أحادياً (لا يمكن كشفها)</span>
           </div>
-          {isTeacherUser && !isMasterKeyUnlocked && (
+          {canRevealMasterEmail && !isMasterKeyUnlocked && (
             <button 
               onClick={() => { refreshCaptcha(); setShowMasterKeyModal(true); }}
               className="mt-2 text-xs font-bold text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1"
@@ -797,49 +898,61 @@ export default function StudentsManagementClient() {
       </div>
 
       {/* Action Buttons */}
-      <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2">
-          <button 
-            onClick={() => handleAction([student.id], 'accept')}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shadow-sm"
-          >
-            <Check className="w-4 h-4" /> موافقة الطلب بلا تأكيد
-          </button>
-          <button 
-            onClick={() => handleAction([student.id], 'accept_otp')}
-            className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shadow-sm"
-          >
-            <Key className="w-4 h-4" /> موافقة بتأكيد (كود واتساب)
-          </button>
-          <button 
-            onClick={() => handleAction([student.id], 'reject')}
-            className="px-4 py-2 bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400 hover:bg-rose-100 rounded-xl font-bold text-xs transition-colors"
-          >
-            رفض الطلب
-          </button>
-          <button 
-            onClick={() => { setBanTargetStudent(student); setBanReason(''); }}
-            className="px-4 py-2 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 hover:bg-slate-200 rounded-xl font-bold text-xs transition-colors"
-          >
-            حظر الجهاز
-          </button>
-          <button 
-            onClick={() => { setResetDeviceTarget(student); setResetSuccessMessage(''); }}
-            className="px-3 py-2 bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 hover:bg-amber-100 rounded-xl font-bold text-xs transition-colors flex items-center gap-1"
-            title="فك قيد الجهاز"
-          >
-            <RotateCcw className="w-3.5 h-3.5" /> فك قيد الجهاز
-          </button>
-        </div>
+      {(canApprove || canBan || canManageDevices || canDelete) && (
+        <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-2">
+            {canApprove && (
+              <>
+                <button 
+                  onClick={() => handleAction([student.id], 'accept')}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shadow-sm"
+                >
+                  <Check className="w-4 h-4" /> موافقة الطلب بلا تأكيد
+                </button>
+                <button 
+                  onClick={() => handleAction([student.id], 'accept_otp')}
+                  className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 transition-colors shadow-sm"
+                >
+                  <Key className="w-4 h-4" /> موافقة بتأكيد (كود SMS)
+                </button>
+                <button 
+                  onClick={() => handleAction([student.id], 'reject')}
+                  className="px-4 py-2 bg-rose-50 text-rose-600 dark:bg-rose-950/30 dark:text-rose-400 hover:bg-rose-100 rounded-xl font-bold text-xs transition-colors"
+                >
+                  رفض الطلب
+                </button>
+              </>
+            )}
+            {canBan && (
+              <button 
+                onClick={() => { setBanTargetStudent(student); setBanReason(''); }}
+                className="px-4 py-2 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400 hover:bg-slate-200 rounded-xl font-bold text-xs transition-colors"
+              >
+                حظر الجهاز
+              </button>
+            )}
+            {canManageDevices && (
+              <button 
+                onClick={() => { setResetDeviceTarget(student); setResetSuccessMessage(''); }}
+                className="px-3 py-2 bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 hover:bg-amber-100 rounded-xl font-bold text-xs transition-colors flex items-center gap-1"
+                title="فك قيد الجهاز"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> فك قيد الجهاز
+              </button>
+            )}
+          </div>
 
-        <button 
-          onClick={() => confirmDeleteSingle(student.id, student.fullName)}
-          className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-all"
-          title="حذف الطالب وفك قيد جهازه"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
-      </div>
+          {canDelete && (
+            <button 
+              onClick={() => confirmDeleteSingle(student.id, student.fullName)}
+              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-all"
+              title="حذف الطالب وفك قيد جهازه"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      )}
     </motion.div>
     );
   };
@@ -874,27 +987,33 @@ export default function StudentsManagementClient() {
           </div>
         </div>
         <div className="flex items-center gap-1">
-          <button 
-            onClick={() => { setResetDeviceTarget(student); setResetSuccessMessage(''); }}
-            className="p-2 text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/30 rounded-xl transition-colors"
-            title="فك قيد الجهاز وإتاحة الدخول من جهاز جديد"
-          >
-            <RotateCcw className="w-5 h-5" />
-          </button>
-          <button 
-            onClick={() => confirmDeleteSingle(student.id, student.fullName)} 
-            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors"
-            title="حذف وفك قيد الجهاز نهائياً"
-          >
-            <Trash2 className="w-5 h-5" />
-          </button>
-          <button 
-            onClick={() => { setBanTargetStudent(student); setBanReason(''); }} 
-            className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-xl transition-colors" 
-            title="إيقاف / حظر"
-          >
-            <ShieldBan className="w-5 h-5" />
-          </button>
+          {canManageDevices && (
+            <button 
+              onClick={() => { setResetDeviceTarget(student); setResetSuccessMessage(''); }}
+              className="p-2 text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/30 rounded-xl transition-colors"
+              title="فك قيد الجهاز وإتاحة الدخول من جهاز جديد"
+            >
+              <RotateCcw className="w-5 h-5" />
+            </button>
+          )}
+          {canDelete && (
+            <button 
+              onClick={() => confirmDeleteSingle(student.id, student.fullName)} 
+              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors"
+              title="حذف وفك قيد الجهاز نهائياً"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+          )}
+          {canBan && (
+            <button 
+              onClick={() => { setBanTargetStudent(student); setBanReason(''); }} 
+              className="p-2 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-xl transition-colors" 
+              title="إيقاف / حظر"
+            >
+              <ShieldBan className="w-5 h-5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -905,7 +1024,7 @@ export default function StudentsManagementClient() {
         </div>
         <div className="flex items-center justify-between text-sm">
           <span className="font-bold text-slate-500">البريد الإلكتروني:</span>
-          {isTeacherUser && isMasterKeyUnlocked ? (
+          {canRevealMasterEmail && isMasterKeyUnlocked ? (
             <span className="font-bold text-slate-900 dark:text-white truncate max-w-[200px]" dir="ltr">{student.email}</span>
           ) : (
             <span className="text-slate-400 font-mono text-xs" dir="ltr">{student.email}</span>
@@ -941,7 +1060,7 @@ export default function StudentsManagementClient() {
         )}
       </div>
 
-      {isTeacherUser && !isMasterKeyUnlocked && (
+      {canRevealMasterEmail && !isMasterKeyUnlocked && (
         <button 
           onClick={() => { refreshCaptcha(); setShowMasterKeyModal(true); }} 
           className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl font-bold text-xs transition-colors"
@@ -950,7 +1069,7 @@ export default function StudentsManagementClient() {
         </button>
       )}
 
-      {isTeacherUser && (
+      {canHandleResets && (
         <button
           type="button"
           onClick={() => handleAuthorizePasswordReset(student.id)}
@@ -963,16 +1082,18 @@ export default function StudentsManagementClient() {
       )}
 
       <div className="mt-3 flex gap-2">
-        <button 
-          onClick={() => {
-            setMessageTargetStudent(student);
-            setMessageTitle('');
-            setMessageContent('');
-          }}
-          className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-400 hover:bg-violet-100 dark:hover:bg-violet-900/40 rounded-xl font-bold text-sm transition-colors"
-        >
-          <Mail className="w-4 h-4" /> مراسلة
-        </button>
+        {allowMessaging && (
+          <button 
+            onClick={() => {
+              setMessageTargetStudent(student);
+              setMessageTitle('');
+              setMessageContent('');
+            }}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-400 hover:bg-violet-100 dark:hover:bg-violet-900/40 rounded-xl font-bold text-sm transition-colors"
+          >
+            <Mail className="w-4 h-4" /> مراسلة
+          </button>
+        )}
         <button 
           onClick={() => setDetailsTargetStudent(student)}
           className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-slate-50 text-slate-600 dark:bg-slate-800 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-xl font-bold text-sm transition-colors"
@@ -1006,13 +1127,15 @@ export default function StudentsManagementClient() {
             </div>
           </div>
         </div>
-        <button 
-          onClick={() => confirmDeleteSingle(student.id, student.fullName)} 
-          className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors"
-          title="حذف نهائي وسحب البيانات"
-        >
-          <Trash2 className="w-5 h-5" />
-        </button>
+        {canDelete && (
+          <button 
+            onClick={() => confirmDeleteSingle(student.id, student.fullName)} 
+            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl transition-colors"
+            title="حذف نهائي وسحب البيانات"
+          >
+            <Trash2 className="w-5 h-5" />
+          </button>
+        )}
       </div>
 
       <div className="mt-4 p-3 bg-rose-100/60 dark:bg-rose-950/60 rounded-2xl border border-rose-200 dark:border-rose-800/80">
@@ -1020,7 +1143,7 @@ export default function StudentsManagementClient() {
           <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" /> سبب الحظر المسجل:
         </p>
         <p className="text-xs text-slate-700 dark:text-slate-300 font-medium mr-5">
-          {student.banReason || 'حظر أمني شامل بقرار المعلم وإغلاق بصمات الأجهزة المسجلة.'}
+          {student.banReason || 'حظر أمني شامل بقرار الإدارة وإغلاق بصمات الأجهزة المسجلة.'}
         </p>
       </div>
 
@@ -1035,14 +1158,16 @@ export default function StudentsManagementClient() {
         </div>
       </div>
 
-      <div className="mt-5 flex gap-2">
-        <button 
-          onClick={() => handleAction([student.id], 'accept')}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs transition-colors shadow-sm"
-        >
-          <CheckCircle2 className="w-4 h-4" /> فك الحظر وتفعيل الحساب
-        </button>
-      </div>
+      {canBan && (
+        <div className="mt-5 flex gap-2">
+          <button 
+            onClick={() => handleAction([student.id], 'accept')}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs transition-colors shadow-sm"
+          >
+            <CheckCircle2 className="w-4 h-4" /> فك الحظر وتفعيل الحساب
+          </button>
+        </div>
+      )}
     </motion.div>
   );
 
@@ -1056,27 +1181,29 @@ export default function StudentsManagementClient() {
         
         {/* Actions & Search */}
         <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => {
-              setShowAddStudentModal(true);
-              setCreateStudentError('');
-              setCreatedStudentSuccess(null);
-              setNewStudentForm({
-                fullName: '',
-                email: '',
-                phone: '',
-                password: '',
-                stage: 'high',
-                grade: 1,
-                educationType: 'general',
-                parentPhone: '',
-              });
-            }}
-            className="px-4 py-3 bg-violet-600 hover:bg-violet-700 text-white rounded-2xl font-black text-sm flex items-center gap-2 transition-all shadow-md shadow-violet-600/20"
-          >
-            <Plus className="w-4 h-4" />
-            <span>تسجيل طالب يدوي استثنائي</span>
-          </button>
+          {canCreate && (
+            <button
+              onClick={() => {
+                setShowAddStudentModal(true);
+                setCreateStudentError('');
+                setCreatedStudentSuccess(null);
+                setNewStudentForm({
+                  fullName: '',
+                  email: '',
+                  phone: '',
+                  password: '',
+                  stage: 'high',
+                  grade: 1,
+                  educationType: 'general',
+                  parentPhone: '',
+                });
+              }}
+              className="px-4 py-3 bg-violet-600 hover:bg-violet-700 text-white rounded-2xl font-black text-sm flex items-center gap-2 transition-all shadow-md shadow-violet-600/20"
+            >
+              <Plus className="w-4 h-4" />
+              <span>تسجيل طالب يدوي استثنائي</span>
+            </button>
+          )}
 
           <div className="relative w-full md:w-64">
             <input 
@@ -1114,21 +1241,25 @@ export default function StudentsManagementClient() {
 
       {/* Tabs */}
       <div className="flex p-1 bg-slate-200/50 dark:bg-slate-800/50 rounded-2xl w-fit flex-wrap gap-1">
-        <button 
-          onClick={() => { setActiveTab('pending'); setSelectedIds([]); }}
-          className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all ${activeTab === 'pending' ? 'bg-white dark:bg-slate-700 text-violet-600 dark:text-violet-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
-        >
-          طلبات الانضمام 
-          <span className="mr-2 inline-flex items-center justify-center bg-orange-100 text-orange-600 dark:bg-orange-900/50 dark:text-orange-400 text-xs px-2 py-0.5 rounded-full">{students.filter(s => s.status === 'pending_review').length}</span>
-        </button>
-        <button 
-          onClick={() => { setActiveTab('active'); setSelectedIds([]); }}
-          className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all ${activeTab === 'active' ? 'bg-white dark:bg-slate-700 text-violet-600 dark:text-violet-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
-        >
-          المقيدين بالفعل
-          <span className="mr-2 inline-flex items-center justify-center bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400 text-xs px-2 py-0.5 rounded-full">{students.filter(s => s.status === 'active').length}</span>
-        </button>
-        {isTeacherUser && (
+        {canViewPendingTab && (
+          <button 
+            onClick={() => { setActiveTab('pending'); setSelectedIds([]); }}
+            className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all ${activeTab === 'pending' ? 'bg-white dark:bg-slate-700 text-violet-600 dark:text-violet-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+          >
+            طلبات الانضمام 
+            <span className="mr-2 inline-flex items-center justify-center bg-orange-100 text-orange-600 dark:bg-orange-900/50 dark:text-orange-400 text-xs px-2 py-0.5 rounded-full">{students.filter(s => s.status === 'pending_review').length}</span>
+          </button>
+        )}
+        {canViewActiveTab && (
+          <button 
+            onClick={() => { setActiveTab('active'); setSelectedIds([]); }}
+            className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all ${activeTab === 'active' ? 'bg-white dark:bg-slate-700 text-violet-600 dark:text-violet-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+          >
+            المقيدين بالفعل
+            <span className="mr-2 inline-flex items-center justify-center bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400 text-xs px-2 py-0.5 rounded-full">{students.filter(s => s.status === 'active').length}</span>
+          </button>
+        )}
+        {canViewResetsTab && (
           <button 
             onClick={() => { setActiveTab('password_resets'); setSelectedIds([]); loadResetRequests(); }}
             className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all flex items-center gap-1.5 ${activeTab === 'password_resets' ? 'bg-white dark:bg-slate-700 text-amber-600 dark:text-amber-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
@@ -1144,13 +1275,15 @@ export default function StudentsManagementClient() {
             </span>
           </button>
         )}
-        <button 
-          onClick={() => { setActiveTab('banned'); setSelectedIds([]); }}
-          className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all ${activeTab === 'banned' ? 'bg-white dark:bg-slate-700 text-rose-600 dark:text-rose-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
-        >
-          المحظورين أمنياً
-          <span className="mr-2 inline-flex items-center justify-center bg-rose-100 text-rose-600 dark:bg-rose-900/50 dark:text-rose-400 text-xs px-2 py-0.5 rounded-full">{students.filter(s => s.status === 'banned').length}</span>
-        </button>
+        {canViewBannedTab && (
+          <button 
+            onClick={() => { setActiveTab('banned'); setSelectedIds([]); }}
+            className={`px-5 py-2.5 rounded-xl font-black text-sm transition-all ${activeTab === 'banned' ? 'bg-white dark:bg-slate-700 text-rose-600 dark:text-rose-400 shadow-sm' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+          >
+            المحظورين أمنياً
+            <span className="mr-2 inline-flex items-center justify-center bg-rose-100 text-rose-600 dark:bg-rose-900/50 dark:text-rose-400 text-xs px-2 py-0.5 rounded-full">{students.filter(s => s.status === 'banned').length}</span>
+          </button>
+        )}
       </div>
 
       {/* Content Area */}
@@ -1160,10 +1293,10 @@ export default function StudentsManagementClient() {
             <Loader2 className="w-8 h-8 animate-spin mx-auto text-violet-600" />
             <p className="mt-2 text-sm font-bold text-slate-400">جاري تحميل بيانات الطلاب...</p>
           </div>
-        ) : activeTab === 'pending' ? (
+        ) : activeTab === 'pending' && canViewPendingTab ? (
           <div className="space-y-4">
             {/* Bulk Actions Header */}
-            {selectedIds.length > 0 && (
+            {selectedIds.length > 0 && (canApprove || canDelete) && (
               <motion.div 
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -1176,49 +1309,57 @@ export default function StudentsManagementClient() {
                   <span className="font-bold text-slate-900 dark:text-white text-sm">طالب تم تحديدهم</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    disabled={isBulkStudentLoading}
-                    onClick={() => handleAction(selectedIds, 'accept')}
-                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-colors disabled:opacity-60 flex items-center gap-1"
-                  >
-                    {isBulkStudentLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    <span>موافقة جماعية</span>
-                  </button>
-                  <button
-                    disabled={isBulkStudentLoading}
-                    onClick={() => handleAction(selectedIds, 'accept_otp')}
-                    className="px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-bold hover:bg-violet-700 transition-colors disabled:opacity-60"
-                  >
-                    تأكيد برقم سري موحد
-                  </button>
-                  <button
-                    disabled={isBulkStudentLoading}
-                    onClick={() => handleAction(selectedIds, 'reject')}
-                    className="px-3 py-1.5 bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 rounded-xl text-xs font-bold hover:bg-rose-200 transition-colors disabled:opacity-60"
-                  >
-                    رفض المحدد
-                  </button>
-                  <button
-                    disabled={isBulkStudentLoading}
-                    onClick={() => confirmDeleteBulk(selectedIds)}
-                    className="px-3 py-1.5 bg-rose-600 text-white rounded-xl text-xs font-bold hover:bg-rose-700 transition-colors flex items-center gap-1 disabled:opacity-60"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" /> حذف وفك قيد
-                  </button>
+                  {canApprove && (
+                    <>
+                      <button
+                        disabled={isBulkStudentLoading}
+                        onClick={() => handleAction(selectedIds, 'accept')}
+                        className="px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-colors disabled:opacity-60 flex items-center gap-1"
+                      >
+                        {isBulkStudentLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                        <span>موافقة جماعية</span>
+                      </button>
+                      <button
+                        disabled={isBulkStudentLoading}
+                        onClick={() => handleAction(selectedIds, 'accept_otp')}
+                        className="px-3 py-1.5 bg-violet-600 text-white rounded-xl text-xs font-bold hover:bg-violet-700 transition-colors disabled:opacity-60"
+                      >
+                        تأكيد برقم سري موحد
+                      </button>
+                      <button
+                        disabled={isBulkStudentLoading}
+                        onClick={() => handleAction(selectedIds, 'reject')}
+                        className="px-3 py-1.5 bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300 rounded-xl text-xs font-bold hover:bg-rose-200 transition-colors disabled:opacity-60"
+                      >
+                        رفض المحدد
+                      </button>
+                    </>
+                  )}
+                  {canDelete && (
+                    <button
+                      disabled={isBulkStudentLoading}
+                      onClick={() => confirmDeleteBulk(selectedIds)}
+                      className="px-3 py-1.5 bg-rose-600 text-white rounded-xl text-xs font-bold hover:bg-rose-700 transition-colors flex items-center gap-1 disabled:opacity-60"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> حذف وفك قيد
+                    </button>
+                  )}
                 </div>
               </motion.div>
             )}
 
             {/* Select All Row */}
-            <div className="flex items-center px-4 py-2">
-              <input 
-                type="checkbox" 
-                checked={selectedIds.length === pendingStudents.length && pendingStudents.length > 0}
-                onChange={() => selectAll(pendingStudents)}
-                className="w-5 h-5 rounded-md border-slate-300 text-violet-600 focus:ring-violet-500"
-              />
-              <span className="mr-3 font-bold text-slate-500 text-sm">تحديد الكل</span>
-            </div>
+            {(canApprove || canDelete) && (
+              <div className="flex items-center px-4 py-2">
+                <input 
+                  type="checkbox" 
+                  checked={selectedIds.length === pendingStudents.length && pendingStudents.length > 0}
+                  onChange={() => selectAll(pendingStudents)}
+                  className="w-5 h-5 rounded-md border-slate-300 text-violet-600 focus:ring-violet-500"
+                />
+                <span className="mr-3 font-bold text-slate-500 text-sm">تحديد الكل</span>
+              </div>
+            )}
 
             <div className="space-y-4">
               {pendingStudents.length > 0 ? (
@@ -1231,7 +1372,7 @@ export default function StudentsManagementClient() {
               )}
             </div>
           </div>
-        ) : activeTab === 'active' ? (
+        ) : activeTab === 'active' && canViewActiveTab ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
             {activeStudents.length > 0 ? (
               activeStudents.map(student => renderActiveCard(student))
@@ -1242,7 +1383,7 @@ export default function StudentsManagementClient() {
               </div>
             )}
           </div>
-        ) : activeTab === 'password_resets' && isTeacherUser ? (
+        ) : activeTab === 'password_resets' && canViewResetsTab ? (
           <div className="space-y-4">
             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-start gap-3">
@@ -1250,7 +1391,7 @@ export default function StudentsManagementClient() {
                   <ShieldCheck className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-black text-slate-900 dark:text-white text-sm">تصاريح استعادة كلمة المرور (حصرية للمعلم فقط)</h3>
+                  <h3 className="font-black text-slate-900 dark:text-white text-sm">تصاريح استعادة كلمة المرور (مخصصة للإدارة المعتمدة)</h3>
                   <p className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-0.5">
                     كلمات مرور الطلاب مشفرة أحادياً؛ يمكنك قبول طلب واحد بعينه، أو تحديد مجموعة معينة، أو تحديد الكل دفعة واحدة.
                   </p>
@@ -1270,7 +1411,7 @@ export default function StudentsManagementClient() {
                 )}
                 <button
                   type="button"
-                  onClick={loadResetRequests}
+                  onClick={() => loadResetRequests()}
                   className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -1527,7 +1668,7 @@ export default function StudentsManagementClient() {
                           </button>
                         )}
 
-                        {cleanWaPhone && (
+                        {allowMessaging && cleanWaPhone && (
                           <a
                             href={`https://wa.me/20${cleanWaPhone}?text=${waConfirmText}`}
                             target="_blank"
@@ -1553,7 +1694,7 @@ export default function StudentsManagementClient() {
               </div>
             )}
           </div>
-        ) : (
+        ) : activeTab === 'banned' && canViewBannedTab ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
             {bannedStudents.length > 0 ? (
               bannedStudents.map(student => renderBannedCard(student))
@@ -1565,12 +1706,17 @@ export default function StudentsManagementClient() {
               </div>
             )}
           </div>
+        ) : (
+          <div className="text-center py-16 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800">
+            <Lock className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-3" />
+            <h3 className="text-base font-black text-slate-500 dark:text-slate-400">لا توجد صلاحيات مفعلة لعرض هذا القسم</h3>
+          </div>
         )}
       </div>
 
       {/* Master Key Modal with Human Verification Captcha */}
       <AnimatePresence>
-        {showMasterKeyModal && (
+        {canRevealMasterEmail && showMasterKeyModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" dir="rtl">
             <motion.div 
               initial={{ opacity: 0, scale: 0.95 }}
@@ -1937,7 +2083,7 @@ export default function StudentsManagementClient() {
                                       : `${grp.activeCount} / ${grp.maxDevices} أجهزة`}
                                   </span>
                                 </div>
-                                {grp.activeCount > 0 && (
+                                {canManageDevices && grp.activeCount > 0 && (
                                   <button
                                     type="button"
                                     onClick={() => handleResetCourseDevicesInline(detailsTargetStudent.id, grp.courseId, grp.courseTitle)}
@@ -1986,36 +2132,38 @@ export default function StudentsManagementClient() {
               </div>
 
               {/* Advice Input Section */}
-              <div className="mb-6 p-5 rounded-2xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 space-y-3">
-                <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400 font-black text-sm">
-                  <Sparkles className="w-4 h-4" /> توجيه نصيحة أكاديمية خاصة للطالب
-                </div>
-                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-                  اكتب توصياتك أو ملاحظاتك التوجيهية لتصل إلى شاشة الطالب فوراً مع تنبيهه بنقاط الضعف المطلوب معالجتها:
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={adviceText}
-                    onChange={(e) => setAdviceText(e.target.value)}
-                    placeholder="مثال: أحسنت في قواعد الوحدة الأولى، يُرجى إعادة مراجعة فيديو الكلمات وحل الاختبار الجزئي..."
-                    className="flex-1 bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/60 rounded-xl px-4 py-2.5 text-xs font-bold outline-none focus:ring-2 focus:ring-amber-500"
-                  />
-                  <button
-                    onClick={handleSendAdvice}
-                    disabled={sendingAdvice || !adviceText.trim()}
-                    className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-600/20 disabled:opacity-50 transition-colors shrink-0"
-                  >
-                    {sendingAdvice ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                    إرسال النصيحة
-                  </button>
-                </div>
-                {adviceSuccess && (
-                  <p className="text-xs font-black text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> تم إرسال النصيحة إلى صندوق رسائل الطالب بنجاح!
+              {allowMessaging && (
+                <div className="mb-6 p-5 rounded-2xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 space-y-3">
+                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400 font-black text-sm">
+                    <Sparkles className="w-4 h-4" /> توجيه نصيحة أكاديمية خاصة للطالب
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                    اكتب توصياتك أو ملاحظاتك التوجيهية لتصل إلى شاشة الطالب فوراً مع تنبيهه بنقاط الضعف المطلوب معالجتها:
                   </p>
-                )}
-              </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={adviceText}
+                      onChange={(e) => setAdviceText(e.target.value)}
+                      placeholder="مثال: أحسنت في قواعد الوحدة الأولى، يُرجى إعادة مراجعة فيديو الكلمات وحل الاختبار الجزئي..."
+                      className="flex-1 bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/60 rounded-xl px-4 py-2.5 text-xs font-bold outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    <button
+                      onClick={handleSendAdvice}
+                      disabled={sendingAdvice || !adviceText.trim()}
+                      className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-md shadow-amber-600/20 disabled:opacity-50 transition-colors shrink-0"
+                    >
+                      {sendingAdvice ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                      إرسال النصيحة
+                    </button>
+                  </div>
+                  {adviceSuccess && (
+                    <p className="text-xs font-black text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> تم إرسال النصيحة إلى صندوق رسائل الطالب بنجاح!
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Academic Courses & Progress */}
               <div className="space-y-4">
@@ -2063,22 +2211,26 @@ export default function StudentsManagementClient() {
                                   <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${prog.isPassed ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400' : 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400'}`}>
                                     {prog.isPassed ? 'ناجح' : 'إعادة'}
                                   </span>
-                                  {/* Grant extra attempt (+1) */}
-                                  <button
-                                    onClick={() => handleGrantExtraAttempt(course.id, prog.itemId)}
-                                    className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded-lg transition-colors"
-                                    title="منح محاولة إضافية واحدة (+1)"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                  </button>
-                                  {/* Full reset (0) */}
-                                  <button
-                                    onClick={() => handleResetItemProgress(course.id, prog.itemId)}
-                                    className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-lg transition-colors"
-                                    title="تصفير شامل لكافة المحاولات والدرجات (0 محاولات)"
-                                  >
-                                    <RotateCcw className="w-3.5 h-3.5" />
-                                  </button>
+                                  {(isTeacherUser || sp.canManageStudents) && (
+                                    <>
+                                      {/* Grant extra attempt (+1) */}
+                                      <button
+                                        onClick={() => handleGrantExtraAttempt(course.id, prog.itemId)}
+                                        className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 rounded-lg transition-colors"
+                                        title="منح محاولة إضافية واحدة (+1)"
+                                      >
+                                        <Plus className="w-3.5 h-3.5" />
+                                      </button>
+                                      {/* Full reset (0) */}
+                                      <button
+                                        onClick={() => handleResetItemProgress(course.id, prog.itemId)}
+                                        className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-lg transition-colors"
+                                        title="تصفير شامل لكافة المحاولات والدرجات (0 محاولات)"
+                                      >
+                                        <RotateCcw className="w-3.5 h-3.5" />
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             ))}

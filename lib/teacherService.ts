@@ -1,13 +1,18 @@
 import { supabase } from './supabaseClient';
-import { proxyUpsert, proxyInsert, proxyUpdate, proxyDelete } from '@/app/actions/dbProxy';
+import { proxyInsert, proxyDelete } from '@/app/actions/dbProxy';
+import type {
+  CourseGranularPermissions,
+  StudentGranularPermissions,
+  AssistantPermissionsConfig,
+} from './assistantPermissions';
 
-export interface CourseActionPermissions {
-  canAddVideos: boolean;
-  canAddHomework: boolean;
-  canAddExams: boolean;
-  canAddConceptSheets: boolean;
-  canAddSummaries: boolean;
-}
+export type {
+  CourseGranularPermissions,
+  StudentGranularPermissions,
+  AssistantPermissionsConfig,
+};
+
+export type CourseActionPermissions = CourseGranularPermissions;
 
 export interface AssistantData {
   id: string;
@@ -15,26 +20,12 @@ export interface AssistantData {
   assistantRoleTitle?: string; // e.g. "مساعد أول ثانوي", "مشرف الدعم الأكاديمي"
   email: string;
   phone?: string;
-  passwordVault?: string; // Stored securely for teacher master key review
+  passwordVault?: string; // Stored securely, only returned to teacher when Master Key is verified
   role: 'assistant';
   isFrozen: boolean;
+  isActive?: boolean;
   createdAt: string;
-  permissions?: {
-    canManageStudents: boolean;
-    canApproveRegistrations: boolean;
-    canViewStudentPasswords: boolean;
-    canManageAllCourses: boolean;
-    assignedCourseIds: string[];
-    courseActions?: {
-      [courseId: string]: CourseActionPermissions;
-    };
-    globalCourseActions?: CourseActionPermissions;
-    canHandleAcademicSupport: boolean;
-    canHandleTechnicalSupport: boolean;
-    canReviewHomework: boolean;
-    canPublishAnnouncements: boolean;
-    canSendMessages: boolean;
-  };
+  permissions?: AssistantPermissionsConfig;
 }
 
 export interface AnnouncementData {
@@ -138,39 +129,57 @@ export async function fetchAssistants(): Promise<AssistantData[]> {
   try {
     const { fetchAssistantsServerAction } = await import('@/app/actions/assistantActions');
     const res = await fetchAssistantsServerAction();
-    if (res.success && res.data && res.data.length > 0) {
-      setLocal(LOCAL_ASSISTANTS_KEY, res.data);
+    if (res.success && Array.isArray(res.data)) {
       return res.data as AssistantData[];
     }
   } catch (err) {
-    console.warn('fetchAssistantsServerAction error, falling back:', err);
+    console.warn('fetchAssistantsServerAction error:', err);
   }
 
-  return getLocal<AssistantData[]>(LOCAL_ASSISTANTS_KEY, [
-    {
-      id: 'a1000000-0000-4000-8000-000000000001',
-      fullName: 'أحمد محمود (مساعد أول ثانوي)',
-      assistantRoleTitle: 'مشرف أول ثانوي ومراجعة الواجبات',
-      email: 'ahmed.assistant@radwan.edu',
-      phone: '01012345678',
-      passwordVault: 'Radwan@Ast#2026_Secured!',
-      role: 'assistant',
-      isFrozen: false,
-      createdAt: new Date().toISOString(),
-      permissions: {
-        canManageStudents: true,
-        canApproveRegistrations: true,
-        canViewStudentPasswords: false,
-        canManageAllCourses: false,
-        assignedCourseIds: [],
-        canHandleAcademicSupport: true,
-        canHandleTechnicalSupport: true,
-        canReviewHomework: true,
-        canPublishAnnouncements: false,
-        canSendMessages: true,
-      },
-    },
-  ]);
+  return [];
+}
+
+export async function revealAssistantCredential(
+  assistantId: string
+): Promise<{ success: boolean; email?: string; passwordNote?: string; message?: string }> {
+  try {
+    const { revealAssistantCredentialServerAction } = await import('@/app/actions/assistantActions');
+    const res = await revealAssistantCredentialServerAction(assistantId);
+    return {
+      success: res.success,
+      email: (res as { email?: string }).email,
+      passwordNote:
+        res.passwordVault && res.passwordVault !== '••••••••'
+          ? `كلمة المرور المحفوظة: ${res.passwordVault}`
+          : undefined,
+      message: res.error,
+    };
+  } catch (err: any) {
+    return { success: false, message: err?.message || 'تعذر كشف البريد الإلكتروني' };
+  }
+}
+
+export async function fetchAssistantActivityLogs(assistantId?: string): Promise<AuditLogData[]> {
+  try {
+    const { fetchAssistantActivityLogsServerAction } = await import('@/app/actions/assistantActions');
+    const res = await fetchAssistantActivityLogsServerAction(assistantId);
+    if (res.success && Array.isArray(res.logs)) {
+      return res.logs.map((d) => ({
+        id: d.id,
+        actorId: d.actorId,
+        actorName: d.actorName,
+        actorRole: d.actorRole,
+        actionType: d.actionType,
+        targetEntity: d.targetEntity,
+        targetId: d.targetId,
+        details: d.details,
+        createdAt: d.createdAt,
+      }));
+    }
+  } catch (err) {
+    console.warn('fetchAssistantActivityLogs error:', err);
+  }
+  return [];
 }
 
 export async function createAssistant(payload: {
@@ -179,96 +188,66 @@ export async function createAssistant(payload: {
   email: string;
   passwordHash: string;
   phone?: string;
-  permissions: AssistantData['permissions'];
+  permissions: AssistantPermissionsConfig;
 }): Promise<AssistantData> {
-  const newId = crypto.randomUUID();
-  const newAssistant: AssistantData = {
-    id: newId,
+  const { createAssistantServerAction } = await import('@/app/actions/assistantActions');
+  const res = await createAssistantServerAction({
+    fullName: payload.fullName,
+    assistantRoleTitle: payload.assistantRoleTitle,
+    email: payload.email,
+    passwordHash: payload.passwordHash,
+    phone: payload.phone,
+    permissions: payload.permissions,
+  });
+
+  if (!res.success || !res.assistantId) {
+    throw new Error(res.error || 'فشل إنشاء حساب المساعد على السيرفر');
+  }
+
+  return {
+    id: res.assistantId,
     fullName: payload.fullName,
     assistantRoleTitle: payload.assistantRoleTitle,
     email: payload.email,
     phone: payload.phone || '',
-    passwordVault: payload.passwordHash,
     role: 'assistant',
     isFrozen: false,
+    isActive: true,
     createdAt: new Date().toISOString(),
     permissions: payload.permissions,
   };
-
-  try {
-    const { createAssistantServerAction } = await import('@/app/actions/assistantActions');
-    const res = await createAssistantServerAction({
-      fullName: payload.fullName,
-      assistantRoleTitle: payload.assistantRoleTitle,
-      email: payload.email,
-      passwordHash: payload.passwordHash,
-      phone: payload.phone,
-      permissions: payload.permissions as any,
-    });
-    if (res.success && res.assistantId) {
-      newAssistant.id = res.assistantId;
-    }
-  } catch (err) {
-    console.warn('createAssistantServerAction error, fallback to local:', err);
-  }
-
-  const current = getLocal<AssistantData[]>(LOCAL_ASSISTANTS_KEY, []);
-  setLocal(LOCAL_ASSISTANTS_KEY, [newAssistant, ...current.filter(a => a.email.toLowerCase() !== payload.email.toLowerCase())]);
-
-  return newAssistant;
 }
 
-export async function updateAssistant(assistant: AssistantData): Promise<void> {
-  try {
-    const { updateAssistantServerAction } = await import('@/app/actions/assistantActions');
-    await updateAssistantServerAction({
-      id: assistant.id,
-      fullName: assistant.fullName,
-      assistantRoleTitle: assistant.assistantRoleTitle,
-      email: assistant.email,
-      passwordHash: assistant.passwordVault || '',
-      phone: assistant.phone,
-      permissions: assistant.permissions as any,
-    });
-  } catch (err) {
-    console.warn('updateAssistantServerAction fallback to local:', err);
+export async function updateAssistant(assistant: AssistantData & { newPassword?: string }): Promise<void> {
+  const { updateAssistantServerAction } = await import('@/app/actions/assistantActions');
+  const res = await updateAssistantServerAction({
+    id: assistant.id,
+    fullName: assistant.fullName,
+    assistantRoleTitle: assistant.assistantRoleTitle,
+    email: assistant.email,
+    passwordHash: assistant.newPassword || '',
+    phone: assistant.phone,
+    permissions: assistant.permissions as AssistantPermissionsConfig,
+  });
+  if (!res.success) {
+    throw new Error(res.error || 'تعذر تحديث صلاحيات المساعد');
   }
-
-  const current = getLocal<AssistantData[]>(LOCAL_ASSISTANTS_KEY, []);
-  setLocal(
-    LOCAL_ASSISTANTS_KEY,
-    current.map((a) => (a.id === assistant.id ? assistant : a))
-  );
 }
 
 export async function toggleAssistantFreeze(id: string, isFrozen: boolean): Promise<void> {
-  try {
-    const { toggleAssistantFreezeServerAction } = await import('@/app/actions/assistantActions');
-    await toggleAssistantFreezeServerAction(id, isFrozen);
-  } catch (err) {
-    console.warn('toggleAssistantFreezeServerAction error:', err);
+  const { toggleAssistantFreezeServerAction } = await import('@/app/actions/assistantActions');
+  const res = await toggleAssistantFreezeServerAction(id, isFrozen);
+  if (!res.success) {
+    throw new Error(res.error || 'تعذر تغيير حالة الحساب');
   }
-
-  const current = getLocal<AssistantData[]>(LOCAL_ASSISTANTS_KEY, []);
-  setLocal(
-    LOCAL_ASSISTANTS_KEY,
-    current.map((a) => (a.id === id ? { ...a, isFrozen } : a))
-  );
 }
 
 export async function deleteAssistant(id: string): Promise<void> {
-  try {
-    const { deleteAssistantServerAction } = await import('@/app/actions/assistantActions');
-    await deleteAssistantServerAction(id);
-  } catch (err) {
-    console.warn('deleteAssistantServerAction error:', err);
+  const { deleteAssistantServerAction } = await import('@/app/actions/assistantActions');
+  const res = await deleteAssistantServerAction(id);
+  if (!res.success) {
+    throw new Error(res.error || 'تعذر حذف المساعد');
   }
-
-  const current = getLocal<AssistantData[]>(LOCAL_ASSISTANTS_KEY, []);
-  setLocal(
-    LOCAL_ASSISTANTS_KEY,
-    current.filter((a) => a.id !== id)
-  );
 }
 
 // ----------------- ANNOUNCEMENTS -----------------
@@ -359,10 +338,8 @@ export async function createAnnouncement(payload: {
   studentScore?: string;
   isPinned?: boolean;
 }): Promise<AnnouncementData> {
-  const newId = crypto.randomUUID();
   const isTopStudent = payload.announcementType === 'top_student';
-  
-  // Format content for database storage
+
   const dbContent = isTopStudent
     ? JSON.stringify({
         type: 'top_student',
@@ -377,8 +354,22 @@ export async function createAnnouncement(payload: {
         isPinned: !!payload.isPinned,
       });
 
+  const { createAnnouncementServerAction } = await import('@/app/actions/announcementActions');
+  const res = await createAnnouncementServerAction({
+    title: payload.title,
+    content: dbContent,
+    imageUrl: payload.imageUrl,
+    targetStage: payload.targetStage,
+    targetGrade: payload.targetGrade,
+    isPublished: true,
+  });
+
+  if (!res.success) {
+    throw new Error(res.error || 'غير مصرح لك بنشر الإعلانات');
+  }
+
   const newAnn: AnnouncementData = {
-    id: newId,
+    id: res.data?.id || crypto.randomUUID(),
     title: payload.title,
     content: payload.content,
     imageUrl: payload.imageUrl,
@@ -389,24 +380,8 @@ export async function createAnnouncement(payload: {
     announcementType: payload.announcementType || 'general',
     studentName: payload.studentName,
     studentScore: payload.studentScore,
-    createdAt: new Date().toISOString(),
+    createdAt: res.data?.created_at || new Date().toISOString(),
   };
-
-  try {
-    await proxyInsert('announcements', [
-      {
-        id: newId,
-        title: payload.title,
-        content: dbContent,
-        image_url: payload.imageUrl,
-        target_stage: payload.targetStage,
-        target_grade: payload.targetGrade,
-        is_published: true,
-      },
-    ]);
-  } catch (err) {
-    console.warn('Supabase createAnnouncement error:', err);
-  }
 
   const current = getLocal<AnnouncementData[]>(LOCAL_ANNOUNCEMENTS_KEY, []);
   setLocal(LOCAL_ANNOUNCEMENTS_KEY, [newAnn, ...current]);
@@ -442,19 +417,18 @@ export async function updateAnnouncement(
         isPinned: !!payload.isPinned,
       });
 
-  try {
-    await supabase
-      .from('announcements')
-      .update({
-        title: payload.title,
-        content: dbContent,
-        image_url: payload.imageUrl,
-        target_stage: payload.targetStage,
-        target_grade: payload.targetGrade,
-      })
-      .eq('id', id);
-  } catch (err) {
-    console.warn('Supabase updateAnnouncement error:', err);
+  const { updateAnnouncementServerAction } = await import('@/app/actions/announcementActions');
+  const res = await updateAnnouncementServerAction(id, {
+    title: payload.title,
+    content: dbContent,
+    imageUrl: payload.imageUrl,
+    targetStage: payload.targetStage,
+    targetGrade: payload.targetGrade,
+    isPublished: true,
+  });
+
+  if (!res.success) {
+    throw new Error(res.error || 'غير مصرح لك بتعديل الإعلانات');
   }
 
   const current = getLocal<AnnouncementData[]>(LOCAL_ANNOUNCEMENTS_KEY, []);
@@ -481,7 +455,11 @@ export async function updateAnnouncement(
 
 export async function togglePinAnnouncement(id: string, isPinned: boolean): Promise<void> {
   const current = getLocal<AnnouncementData[]>(LOCAL_ANNOUNCEMENTS_KEY, []);
-  const item = current.find((a) => a.id === id);
+  let item = current.find((a) => a.id === id);
+  if (!item) {
+    const remoteList = await fetchAnnouncements();
+    item = remoteList.find((a) => a.id === id);
+  }
   if (!item) return;
 
   const isTopStudent = item.announcementType === 'top_student';
@@ -499,13 +477,18 @@ export async function togglePinAnnouncement(id: string, isPinned: boolean): Prom
         isPinned,
       });
 
-  try {
-    await supabase
-      .from('announcements')
-      .update({ content: dbContent })
-      .eq('id', id);
-  } catch (err) {
-    console.warn('Supabase togglePinAnnouncement error:', err);
+  const { updateAnnouncementServerAction } = await import('@/app/actions/announcementActions');
+  const res = await updateAnnouncementServerAction(id, {
+    title: item.title,
+    content: dbContent,
+    imageUrl: item.imageUrl,
+    targetStage: item.targetStage,
+    targetGrade: item.targetGrade,
+    isPublished: item.isPublished,
+  });
+
+  if (!res.success) {
+    throw new Error(res.error || 'غير مصرح لك بتعديل تثبيت الإعلانات');
   }
 
   setLocal(

@@ -8,6 +8,8 @@ import {
   requireStaffSession,
   requireTeacherSession,
   requireStudentOrStaffSession,
+  hasAssistantStudentPerm,
+  hasAnyAssistantStudentAccess,
   setServerSessionCookie,
   clearServerSessionCookie,
   verifyTeacherCredentialsServer,
@@ -17,6 +19,7 @@ import {
   getTeacherProfilePayload,
   isTeacherEmail,
 } from '@/lib/serverAuth';
+import { normalizeAssistantPermissions } from '@/lib/assistantPermissions';
 
 export async function verifyMasterKeyAction(secretKey: string) {
   const session = await requireStaffSession();
@@ -218,6 +221,13 @@ export async function fetchStudentsAction(masterKey?: string) {
     if (!session) {
       return [];
     }
+    if (
+      !session.isTeacher &&
+      !hasAnyAssistantStudentAccess(session) &&
+      !session.assistantMatrix?.canSendMessages
+    ) {
+      return [];
+    }
 
     const cleanKey = (masterKey || '').trim();
     const hasCookieUnlock = await isMasterUnlockVerified();
@@ -328,8 +338,23 @@ export async function updateStudentStatusAction(
 ) {
   try {
     const session = await requireStaffSession();
-    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_approve_registrations && !session.assistantPermissions?.can_manage_students)) {
-      return false;
+    if (!session) return false;
+
+    if (!session.isTeacher) {
+      if (status === 'banned') {
+        if (!hasAssistantStudentPerm(session, 'canBanStudents')) return false;
+      } else {
+        const { data: currentStu } = await supabaseAdmin
+          .from('profiles')
+          .select('status')
+          .eq('id', studentId)
+          .maybeSingle();
+        if (currentStu?.status === 'banned' && status === 'active') {
+          if (!hasAssistantStudentPerm(session, 'canBanStudents')) return false;
+        } else if (!hasAssistantStudentPerm(session, 'canApproveRegistrations')) {
+          return false;
+        }
+      }
     }
 
     const updateData: any = { status };
@@ -372,8 +397,9 @@ export async function updateStudentStatusAction(
       // Add audit log
       try {
         await supabaseAdmin.from('audit_logs').insert([{
-          actor_name: 'إدارة المنصة (المعلم)',
-          actor_role: 'teacher',
+          actor_id: session.id,
+          actor_name: session.fullName || 'إدارة المنصة',
+          actor_role: session.role,
           action_type: 'STUDENT_BANNED_HARDWARE_LOCK',
           target_entity: 'profiles',
           target_id: studentId,
@@ -397,8 +423,9 @@ export async function updateStudentStatusAction(
       // Add audit log
       try {
         await supabaseAdmin.from('audit_logs').insert([{
-          actor_name: 'إدارة المنصة (المعلم)',
-          actor_role: 'teacher',
+          actor_id: session.id,
+          actor_name: session.fullName || 'إدارة المنصة',
+          actor_role: session.role,
           action_type: 'STUDENT_UNBANNED_ACTIVATED',
           target_entity: 'profiles',
           target_id: studentId,
@@ -435,7 +462,7 @@ export async function updateStudentStatusAction(
 export async function deleteStudentAction(studentId: string) {
   try {
     const session = await requireStaffSession();
-    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_manage_students)) {
+    if (!session || (!session.isTeacher && !hasAssistantStudentPerm(session, 'canDeleteStudents'))) {
       return { success: false, message: 'غير مصرح لك بحذف الطلاب.' };
     }
 
@@ -517,7 +544,7 @@ export async function deleteStudentAction(studentId: string) {
 export async function resetStudentDeviceLockAction(studentId: string, courseId?: string) {
   try {
     const session = await requireStaffSession();
-    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_manage_students)) {
+    if (!session || (!session.isTeacher && !hasAssistantStudentPerm(session, 'canManageStudentDevices'))) {
       return { success: false, message: 'غير مصرح لك بفك قيد أجهزة الطلاب.' };
     }
 
@@ -652,7 +679,7 @@ export async function createStudentByTeacherAction(data: {
 }) {
   try {
     const session = await requireStaffSession();
-    if (!session || (!session.isTeacher && !session.assistantPermissions?.can_manage_students)) {
+    if (!session || (!session.isTeacher && !hasAssistantStudentPerm(session, 'canCreateStudents'))) {
       return { success: false, message: 'غير مصرح لك بإنشاء حسابات الطلاب.' };
     }
 
@@ -1713,40 +1740,28 @@ export async function loginAction(
         return { success: false, message: 'عذراً، تم تجميد حساب المساعد من قبل المعلم. يرجى مراجعة مستر محمد رضوان.' };
       }
 
-      // Fetch assistant permissions
-      const { data: perm } = await supabaseAdmin
-        .from('assistant_permissions')
-        .select('*')
-        .eq('assistant_id', user.id)
-        .maybeSingle();
+      // Fetch assistant permissions & full granular matrix
+      const [{ data: perm }, { data: matrixLogs }] = await Promise.all([
+        supabaseAdmin
+          .from('assistant_permissions')
+          .select('*')
+          .eq('assistant_id', user.id)
+          .maybeSingle(),
+        supabaseAdmin
+          .from('audit_logs')
+          .select('details')
+          .eq('target_entity', 'assistant_permissions_matrix')
+          .eq('target_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1),
+      ]);
 
-      const permissions = perm
-        ? {
-            canManageStudents: perm.can_manage_students ?? false,
-            canApproveRegistrations: perm.can_approve_registrations ?? false,
-            canViewStudentPasswords: perm.can_view_student_passwords ?? false,
-            canManageAllCourses: perm.can_manage_all_courses ?? false,
-            assignedCourseIds: perm.assigned_course_ids ?? [],
-            courseActions: (perm as any).course_actions || {},
-            canHandleAcademicSupport: perm.can_handle_academic_support ?? false,
-            canHandleTechnicalSupport: perm.can_handle_technical_support ?? false,
-            canReviewHomework: perm.can_review_homework ?? false,
-            canPublishAnnouncements: perm.can_publish_announcements ?? false,
-            canSendMessages: (perm as any).can_send_messages ?? true,
-          }
-        : {
-            canManageStudents: true,
-            canApproveRegistrations: true,
-            canViewStudentPasswords: false,
-            canManageAllCourses: false,
-            assignedCourseIds: [],
-            courseActions: {},
-            canHandleAcademicSupport: true,
-            canHandleTechnicalSupport: true,
-            canReviewHomework: true,
-            canPublishAnnouncements: false,
-            canSendMessages: true,
-          };
+      const matrixOverride =
+        (perm as any)?.permissions_matrix ||
+        matrixLogs?.[0]?.details ||
+        null;
+
+      const permissions = normalizeAssistantPermissions(perm || undefined, matrixOverride);
 
       const assistantUser = {
         id: user.id,
@@ -1755,7 +1770,7 @@ export async function loginAction(
         phone: user.phone || '',
         role: 'assistant' as const,
         status: 'active' as const,
-        assistantRoleTitle: user.carrier || 'مساعد إداري وأكاديمي',
+        assistantRoleTitle: permissions.roleTitle || 'مساعد إداري وأكاديمي',
         permissions,
       };
 
@@ -3101,9 +3116,9 @@ export async function fetchPasswordResetRequestsAction(): Promise<{
   message?: string;
 }> {
   try {
-    const teacher = await requireTeacherSession();
-    if (!teacher) {
-      return { success: false, requests: [], message: 'صلاحية حصرية للمعلم فقط.' };
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !hasAssistantStudentPerm(session, 'canHandlePasswordResets'))) {
+      return { success: false, requests: [], message: 'غير مصرح بالوصول لطلبات استعادة كلمة المرور.' };
     }
 
     const { data: logs, error } = await supabaseAdmin
@@ -3140,12 +3155,13 @@ export async function fetchPasswordResetRequestsAction(): Promise<{
         if (status === 'approved' && d.expiresAt && new Date(d.expiresAt).getTime() <= nowMs) {
           status = 'expired';
         }
+        const rawEmail = prof?.email || d.studentEmail || '';
         return {
           id: row.id,
           requestId: d.requestId || row.id,
           studentId: sid,
           studentName: prof?.full_name || d.studentName || row.actor_name || 'طالب',
-          studentEmail: prof?.email || d.studentEmail || '',
+          studentEmail: session.isTeacher ? rawEmail : maskEmail(rawEmail),
           studentPhone: prof?.phone || d.studentPhone || '',
           stage: prof?.stage || d.stage || 'high',
           grade: Number(prof?.grade || d.grade || 1),
@@ -3187,9 +3203,9 @@ export async function fetchPasswordResetRequestsAction(): Promise<{
 
 export async function authorizeStudentPasswordResetByTeacherAction(studentId: string, requestId?: string) {
   try {
-    const teacher = await requireTeacherSession();
-    if (!teacher) {
-      return { success: false, message: 'هذه الصلاحية الحساسة حصرية للمعلم (مستر محمد رضوان) فقط.' };
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !hasAssistantStudentPerm(session, 'canHandlePasswordResets'))) {
+      return { success: false, message: 'غير مصرح لك بمنح إذن استعادة كلمة المرور.' };
     }
 
     const cleanId = (studentId || '').trim();
@@ -3237,7 +3253,7 @@ export async function authorizeStudentPasswordResetByTeacherAction(studentId: st
               ...d,
               status: 'approved',
               approvedAt: nowIso,
-              approvedBy: teacher.fullName,
+              approvedBy: session.fullName,
               expiresAt,
             },
           })
@@ -3275,7 +3291,7 @@ export async function authorizeStudentPasswordResetByTeacherAction(studentId: st
           deviceMatch: true,
           requestedAt: nowIso,
           approvedAt: nowIso,
-          approvedBy: teacher.fullName,
+          approvedBy: session.fullName,
           expiresAt,
         },
       }]);
@@ -3284,15 +3300,15 @@ export async function authorizeStudentPasswordResetByTeacherAction(studentId: st
     // Security audit log & student notification
     try {
       await supabaseAdmin.from('audit_logs').insert([{
-        actor_id: teacher.id,
-        actor_name: teacher.fullName,
-        actor_role: 'teacher',
+        actor_id: session.id,
+        actor_name: session.fullName,
+        actor_role: session.role,
         action_type: 'TEACHER_APPROVED_PASSWORD_RESET',
         target_entity: 'profiles',
         target_id: cleanId,
         details: {
           studentName: student.full_name,
-          studentEmail: student.email,
+          studentEmail: maskEmail(student.email),
           approvedAt: nowIso,
           expiresAt,
         },
@@ -3304,14 +3320,14 @@ export async function authorizeStudentPasswordResetByTeacherAction(studentId: st
         student_id: cleanId,
         type: 'password_reset_approved',
         title: 'تم السماح لك بإنشاء كلمة مرور جديدة 🔓',
-        message: 'وافق مستر محمد رضوان على طلب استعادة الحساب. توجه إلى صفحة تسجيل الدخول واختر "نسيت كلمة المرور؟" لإنشاء كلمتك الجديدة بنفسك.',
+        message: 'وافقت إدارة المنصة على طلب استعادة الحساب. توجه إلى صفحة تسجيل الدخول واختر "نسيت كلمة المرور؟" لإنشاء كلمتك الجديدة بنفسك.',
         link: '/login?mode=forgot',
       }]);
     } catch {}
 
     return {
       success: true,
-      message: `تم السماح للبريد (${student.email}) بتغيير كلمة المرور لمدة 24 ساعة (لمرة واحدة). سيتم إلغاء الكلمة القديمة فور تعيين الجديدة.`,
+      message: `تم السماح للطالب (${student.full_name}) بتغيير كلمة المرور لمدة 24 ساعة (لمرة واحدة). سيتم إلغاء الكلمة القديمة فور تعيين الجديدة.`,
     };
   } catch (err: any) {
     console.error('authorizeStudentPasswordResetByTeacherAction error:', err);
@@ -3321,9 +3337,9 @@ export async function authorizeStudentPasswordResetByTeacherAction(studentId: st
 
 export async function revokePasswordResetByTeacherAction(requestId: string, studentId: string, reason?: string) {
   try {
-    const teacher = await requireTeacherSession();
-    if (!teacher) {
-      return { success: false, message: 'صلاحية حصرية للمعلم فقط.' };
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !hasAssistantStudentPerm(session, 'canHandlePasswordResets'))) {
+      return { success: false, message: 'غير مصرح لك بإلغاء طلبات استعادة كلمة المرور.' };
     }
 
     const cleanStudentId = (studentId || '').trim();
@@ -3347,7 +3363,7 @@ export async function revokePasswordResetByTeacherAction(requestId: string, stud
               ...d,
               status: 'rejected',
               rejectedAt: nowIso,
-              rejectedBy: teacher.fullName,
+              rejectedBy: session.fullName,
               reason: reason || 'تم إلغاء الإذن من إدارة المنصة',
             },
           })
@@ -3370,13 +3386,13 @@ export async function bulkAuthorizePasswordResetByTeacherAction(
   message: string;
 }> {
   try {
-    const teacher = await requireTeacherSession();
-    if (!teacher) {
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !hasAssistantStudentPerm(session, 'canHandlePasswordResets'))) {
       return {
         success: false,
         approvedCount: 0,
         failedCount: targets.length,
-        message: 'هذه الصلاحية الحساسة حصرية للمعلم (مستر محمد رضوان) فقط.',
+        message: 'غير مصرح لك بتنفيذ الموافقات الجماعية لاستعادة كلمة المرور.',
       };
     }
 
@@ -3448,9 +3464,9 @@ export async function bulkRevokePasswordResetByTeacherAction(
   message: string;
 }> {
   try {
-    const teacher = await requireTeacherSession();
-    if (!teacher) {
-      return { success: false, revokedCount: 0, message: 'صلاحية حصرية للمعلم فقط.' };
+    const session = await requireStaffSession();
+    if (!session || (!session.isTeacher && !hasAssistantStudentPerm(session, 'canHandlePasswordResets'))) {
+      return { success: false, revokedCount: 0, message: 'غير مصرح لك بالإلغاء الجماعي لطلبات كلمة المرور.' };
     }
 
     const uniqueTargets = (targets || []).filter(t => t?.studentId && t?.requestId);

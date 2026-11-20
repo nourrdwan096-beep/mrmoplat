@@ -9,6 +9,15 @@ import {
   signSessionPayload,
   verifySessionToken,
 } from '@/lib/sessionCrypto';
+import {
+  AssistantPermissionsConfig,
+  CourseGranularPermissions,
+  StudentGranularPermissions,
+  canAccessCourse,
+  hasAnyStudentPermission,
+  normalizeAssistantPermissions,
+  resolveCoursePermissions,
+} from '@/lib/assistantPermissions';
 
 const TEACHER_ID = 'a0000000-0000-4000-8000-000000000001';
 const TEACHER_EMAIL = 'mr-mohamedrdwan-eng-langue-99@gmail.mnsa.nour.com';
@@ -141,6 +150,7 @@ export interface VerifiedServerSession extends SessionUserPayload {
   isStaff: boolean;
   isTeacher: boolean;
   assistantPermissions?: Record<string, any> | null;
+  assistantMatrix?: AssistantPermissionsConfig | null;
 }
 
 export async function getServerSession(): Promise<VerifiedServerSession | null> {
@@ -156,6 +166,7 @@ export async function getServerSession(): Promise<VerifiedServerSession | null> 
         isStaff: true,
         isTeacher: true,
         assistantPermissions: null,
+        assistantMatrix: null,
       };
     }
 
@@ -170,28 +181,47 @@ export async function getServerSession(): Promise<VerifiedServerSession | null> 
         return null;
       }
 
-      const { data: perm } = await supabaseAdmin
-        .from('assistant_permissions')
-        .select('*')
-        .eq('assistant_id', payload.id)
-        .maybeSingle();
+      const [{ data: perm }, { data: matrixLogs }] = await Promise.all([
+        supabaseAdmin
+          .from('assistant_permissions')
+          .select('*')
+          .eq('assistant_id', payload.id)
+          .maybeSingle(),
+        supabaseAdmin
+          .from('audit_logs')
+          .select('details')
+          .eq('target_entity', 'assistant_permissions_matrix')
+          .eq('target_id', payload.id)
+          .order('created_at', { ascending: false })
+          .limit(1),
+      ]);
+
+      const rawLegacy = perm || {
+        can_manage_students: false,
+        can_approve_registrations: false,
+        can_view_student_passwords: false,
+        can_manage_all_courses: false,
+        assigned_course_ids: [],
+        can_handle_academic_support: false,
+        can_handle_technical_support: false,
+        can_review_homework: false,
+        can_publish_announcements: false,
+        can_send_messages: false,
+      };
+
+      const matrixOverride =
+        (perm as any)?.permissions_matrix ||
+        matrixLogs?.[0]?.details ||
+        null;
+
+      const assistantMatrix = normalizeAssistantPermissions(rawLegacy, matrixOverride);
 
       return {
         ...payload,
         isStaff: true,
         isTeacher: false,
-        assistantPermissions: perm || {
-          can_manage_students: true,
-          can_approve_registrations: true,
-          can_view_student_passwords: false,
-          can_manage_all_courses: false,
-          assigned_course_ids: [],
-          can_handle_academic_support: true,
-          can_handle_technical_support: true,
-          can_review_homework: true,
-          can_publish_announcements: false,
-          can_send_messages: true,
-        },
+        assistantPermissions: rawLegacy,
+        assistantMatrix,
       };
     }
 
@@ -213,6 +243,7 @@ export async function getServerSession(): Promise<VerifiedServerSession | null> 
         isStaff: false,
         isTeacher: false,
         assistantPermissions: null,
+        assistantMatrix: null,
       };
     }
 
@@ -220,6 +251,50 @@ export async function getServerSession(): Promise<VerifiedServerSession | null> 
   } catch {
     return null;
   }
+}
+
+export function canAssistantAccessCoursePerm(
+  session: VerifiedServerSession | null,
+  courseId: string,
+  permKey: keyof CourseGranularPermissions
+): boolean {
+  if (!session || !session.isStaff) return false;
+  if (session.isTeacher) return true;
+  if (!session.assistantMatrix || !courseId) return false;
+  if (!canAccessCourse(session.assistantMatrix, courseId)) return false;
+  const resolved = resolveCoursePermissions(session.assistantMatrix, courseId);
+  return Boolean(resolved[permKey]);
+}
+
+export function canAssistantAccessAnyCoursePerm(
+  session: VerifiedServerSession | null,
+  courseId: string,
+  permKeys: Array<keyof CourseGranularPermissions>
+): boolean {
+  if (!session || !session.isStaff) return false;
+  if (session.isTeacher) return true;
+  if (!session.assistantMatrix || !courseId) return false;
+  if (!canAccessCourse(session.assistantMatrix, courseId)) return false;
+  const resolved = resolveCoursePermissions(session.assistantMatrix, courseId);
+  return permKeys.some((k) => Boolean(resolved[k]));
+}
+
+export function hasAssistantStudentPerm(
+  session: VerifiedServerSession | null,
+  permKey: keyof StudentGranularPermissions
+): boolean {
+  if (!session || !session.isStaff) return false;
+  if (session.isTeacher) return true;
+  if (!session.assistantMatrix) return false;
+  return Boolean(session.assistantMatrix.studentPermissions?.[permKey]);
+}
+
+export function hasAnyAssistantStudentAccess(
+  session: VerifiedServerSession | null
+): boolean {
+  if (!session || !session.isStaff) return false;
+  if (session.isTeacher) return true;
+  return hasAnyStudentPermission(session.assistantMatrix?.studentPermissions);
 }
 
 export async function requireTeacherSession(): Promise<VerifiedServerSession | null> {

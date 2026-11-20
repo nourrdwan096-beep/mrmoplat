@@ -107,19 +107,14 @@ export async function getStaffTickets(_userId: string, _role: string) {
       return allTickets;
     }
 
-    // Assistant: Smart Ticket Dispatching
+    // Assistant: Smart Ticket Dispatching using granular normalized matrix
     if (role === 'assistant') {
       const assistantUuid = toValidUuid(userId);
-      const { data: perm } = await supabaseAdmin
-        .from('assistant_permissions')
-        .select('can_handle_academic_support, can_handle_technical_support, can_manage_all_courses, assigned_course_ids')
-        .eq('assistant_id', assistantUuid)
-        .single();
-
-      const canTech = perm ? perm.can_handle_technical_support ?? true : true;
-      const canAcademic = perm ? perm.can_handle_academic_support ?? true : true;
-      const canAllCourses = perm ? perm.can_manage_all_courses ?? false : false;
-      const assignedIds: string[] = perm?.assigned_course_ids || [];
+      const matrix = session.assistantMatrix;
+      const canTech = Boolean(matrix?.canHandleTechnicalSupport ?? session.assistantPermissions?.can_handle_technical_support);
+      const canAcademic = Boolean(matrix?.canHandleAcademicSupport ?? session.assistantPermissions?.can_handle_academic_support);
+      const canAllCourses = Boolean(matrix?.canManageAllCourses ?? session.assistantPermissions?.can_manage_all_courses);
+      const assignedIds: string[] = matrix?.assignedCourseIds || session.assistantPermissions?.assigned_course_ids || [];
 
       return allTickets.filter((ticket: any) => {
         if (ticket.assigned_to_assistant_id === assistantUuid || ticket.assigned_to_assistant_id === userId) return true;
@@ -135,7 +130,7 @@ export async function getStaffTickets(_userId: string, _role: string) {
           return assignedIds.includes(ticket.course_id);
         }
 
-        return true;
+        return false;
       });
     }
 
@@ -246,6 +241,26 @@ export async function updateTicketStatus(
   try {
     const session = await requireStaffSession();
     if (!session) return null;
+
+    if (!session.isTeacher) {
+      const { data: ticketRow } = await supabaseAdmin
+        .from('support_tickets')
+        .select('ticket_type, course_id, assigned_to_assistant_id')
+        .eq('id', ticketId)
+        .maybeSingle();
+      if (!ticketRow) return null;
+      const m = session.assistantMatrix;
+      const isAssigned = ticketRow.assigned_to_assistant_id === session.id;
+      if (!isAssigned) {
+        if (ticketRow.ticket_type === 'technical' && !m?.canHandleTechnicalSupport) return null;
+        if (ticketRow.ticket_type === 'academic') {
+          if (!m?.canHandleAcademicSupport) return null;
+          if (ticketRow.course_id && !m?.canManageAllCourses && !(m?.assignedCourseIds || []).includes(ticketRow.course_id)) {
+            return null;
+          }
+        }
+      }
+    }
 
     const { data } = await supabaseAdmin
       .from('support_tickets')
@@ -396,6 +411,24 @@ export async function addTicketMessage(
         .maybeSingle();
       if (!ticketCheck || ticketCheck.student_id !== toValidUuid(session.id)) {
         return null;
+      }
+    } else if (!session.isTeacher) {
+      const { data: ticketRow } = await supabaseAdmin
+        .from('support_tickets')
+        .select('ticket_type, course_id, assigned_to_assistant_id')
+        .eq('id', ticketId)
+        .maybeSingle();
+      if (!ticketRow) return null;
+      const m = session.assistantMatrix;
+      const isAssigned = ticketRow.assigned_to_assistant_id === session.id;
+      if (!isAssigned) {
+        if (ticketRow.ticket_type === 'technical' && !m?.canHandleTechnicalSupport) return null;
+        if (ticketRow.ticket_type === 'academic') {
+          if (!m?.canHandleAcademicSupport) return null;
+          if (ticketRow.course_id && !m?.canManageAllCourses && !(m?.assignedCourseIds || []).includes(ticketRow.course_id)) {
+            return null;
+          }
+        }
       }
     }
 

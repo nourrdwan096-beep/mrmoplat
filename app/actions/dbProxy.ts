@@ -5,7 +5,10 @@ import {
   getServerSession,
   requireStaffSession,
   requireStudentOrStaffSession,
+  canAssistantAccessCoursePerm,
+  canAssistantAccessAnyCoursePerm,
 } from '@/lib/serverAuth';
+import { getItemTypePermissionKey } from '@/lib/assistantPermissions';
 
 const STAFF_PROXY_TABLES = new Set([
   'announcements',
@@ -14,14 +17,55 @@ const STAFF_PROXY_TABLES = new Set([
   'audit_logs',
 ]);
 
+async function resolveCourseIdForUnit(unitId: string): Promise<string | null> {
+  if (!unitId) return null;
+  const { data } = await supabaseAdmin
+    .from('course_units')
+    .select('course_id')
+    .eq('id', unitId)
+    .maybeSingle();
+  return data?.course_id || null;
+}
+
+async function resolveCourseIdForItem(itemId: string): Promise<string | null> {
+  if (!itemId) return null;
+  const { data } = await supabaseAdmin
+    .from('unit_items')
+    .select('course_id')
+    .eq('id', itemId)
+    .maybeSingle();
+  return data?.course_id || null;
+}
+
 async function assertProxyAccess(
   table: string,
-  payloadOrMatch?: Record<string, any> | any[]
+  payloadOrMatch?: Record<string, any> | any[],
+  op: 'select' | 'write' | 'delete' = 'write'
 ) {
   if (STAFF_PROXY_TABLES.has(table)) {
     const staff = await requireStaffSession();
     if (!staff) {
       throw new Error('غير مصرح بهذه العملية الإدارية');
+    }
+    if (!staff.isTeacher) {
+      if (table === 'announcements' && op !== 'select' && !staff.assistantMatrix?.canPublishAnnouncements) {
+        throw new Error('غير مصرح للمساعد بنشر أو تعديل الإعلانات');
+      }
+      if (table === 'course_activation_codes') {
+        const items = Array.isArray(payloadOrMatch) ? payloadOrMatch : (payloadOrMatch ? [payloadOrMatch] : []);
+        for (const rec of items) {
+          const cid = rec?.course_id || rec?.courseId;
+          if (op === 'delete') {
+            if (cid && !canAssistantAccessCoursePerm(staff, cid, 'canDeleteCodes')) {
+              throw new Error('غير مصرح للمساعد بحذف أكواد التفعيل');
+            }
+          } else if (op === 'write' && cid) {
+            if (!canAssistantAccessCoursePerm(staff, cid, 'canGenerateCodes')) {
+              throw new Error('غير مصرح للمساعد بإصدار أكواد تفعيل لهذا الكورس');
+            }
+          }
+        }
+      }
     }
     return staff;
   }
@@ -74,7 +118,7 @@ async function hasCourseContentAccess(
 
 // Generic CRUD proxies for Supabase via Admin Client (strictly role-guarded)
 export async function proxyUpsert(table: string, payload: any) {
-  const session = await assertProxyAccess(table, payload);
+  const session = await assertProxyAccess(table, payload, 'write');
   let normalizedPayload = payload;
   if (table === 'student_item_progress' && !session.isStaff) {
     if (Array.isArray(payload)) {
@@ -92,7 +136,7 @@ export async function proxyUpsert(table: string, payload: any) {
 }
 
 export async function proxyInsert(table: string, payload: any) {
-  const session = await assertProxyAccess(table, payload);
+  const session = await assertProxyAccess(table, payload, 'write');
   let normalizedPayload = payload;
   if (table === 'student_item_progress' && !session.isStaff) {
     if (Array.isArray(payload)) {
@@ -110,7 +154,7 @@ export async function proxyInsert(table: string, payload: any) {
 }
 
 export async function proxyUpdate(table: string, match: Record<string, any>, payload: any) {
-  const session = await assertProxyAccess(table, match);
+  const session = await assertProxyAccess(table, match, 'write');
   const safeMatch =
     table === 'student_item_progress' && !session.isStaff
       ? { ...match, student_id: session.id }
@@ -124,7 +168,17 @@ export async function proxyUpdate(table: string, match: Record<string, any>, pay
 }
 
 export async function proxyDelete(table: string, match: Record<string, any>) {
-  const session = await assertProxyAccess(table, match);
+  const session = await assertProxyAccess(table, match, 'delete');
+  if (table === 'course_activation_codes' && !session.isTeacher && match?.id) {
+    const { data: codeRow } = await supabaseAdmin
+      .from('course_activation_codes')
+      .select('course_id')
+      .eq('id', match.id)
+      .maybeSingle();
+    if (!codeRow?.course_id || !canAssistantAccessCoursePerm(session, codeRow.course_id, 'canDeleteCodes')) {
+      throw new Error('غير مصرح للمساعد بحذف هذا الكود');
+    }
+  }
   const safeMatch =
     table === 'student_item_progress' && !session.isStaff
       ? { ...match, student_id: session.id }
@@ -138,7 +192,7 @@ export async function proxyDelete(table: string, match: Record<string, any>) {
 }
 
 export async function proxySelect(table: string, match?: Record<string, any>, orderBy?: { column: string; ascending?: boolean }) {
-  const session = await assertProxyAccess(table, match);
+  const session = await assertProxyAccess(table, match, 'select');
   const safeMatch =
     table === 'student_item_progress' && !session.isStaff
       ? { ...(match || {}), student_id: session.id }
@@ -246,6 +300,9 @@ export async function saveCourseServer(course: any): Promise<any> {
     throw new Error('غير مصرح بتعديل الكورسات');
   }
   const courseId = course.id && course.id.length === 36 ? course.id : crypto.randomUUID();
+  if (!staff.isTeacher && !canAssistantAccessCoursePerm(staff, courseId, 'canEditCourseSettings')) {
+    throw new Error('غير مصرح للمساعد بتعديل إعدادات هذا الكورس');
+  }
 
   // Embed extra metadata cleanly into the description field so non-existent columns are avoided
   const parsedMaxDevices = Number(course.maxDevices);
@@ -289,13 +346,25 @@ export async function saveCourseServer(course: any): Promise<any> {
     throw new Error(error.message);
   }
 
+  try {
+    await supabaseAdmin.from('audit_logs').insert([{
+      actor_id: staff.id,
+      actor_name: staff.fullName,
+      actor_role: staff.role,
+      action_type: 'SAVE_COURSE_SETTINGS',
+      target_entity: 'courses',
+      target_id: courseId,
+      details: { title: course.title, isPublished: payload.is_published },
+    }]);
+  } catch {}
+
   return parseCourseFromRow(data[0]);
 }
 
 export async function deleteCourseServer(courseId: string): Promise<boolean> {
   const staff = await requireStaffSession();
-  if (!staff) {
-    throw new Error('غير مصرح بحذف الكورسات');
+  if (!staff || !staff.isTeacher) {
+    throw new Error('غير مصرح بحذف الكورسات — صلاحية حصرية للمعلم فقط');
   }
   const { error } = await supabaseAdmin
     .from('courses')
@@ -346,6 +415,9 @@ export async function saveUnitServer(unit: any): Promise<any> {
   if (!staff) {
     throw new Error('غير مصرح بتعديل الوحدات');
   }
+  if (!staff.isTeacher && !canAssistantAccessCoursePerm(staff, unit.courseId, 'canManageUnits')) {
+    throw new Error('غير مصرح للمساعد بإدارة الوحدات في هذا الكورس');
+  }
   const unitId = unit.id && unit.id.length === 36 ? unit.id : crypto.randomUUID();
   const payload = {
     id: unitId,
@@ -368,6 +440,18 @@ export async function saveUnitServer(unit: any): Promise<any> {
     throw new Error(error.message);
   }
 
+  try {
+    await supabaseAdmin.from('audit_logs').insert([{
+      actor_id: staff.id,
+      actor_name: staff.fullName,
+      actor_role: staff.role,
+      action_type: 'SAVE_COURSE_UNIT',
+      target_entity: 'course_units',
+      target_id: unitId,
+      details: { courseId: unit.courseId, title: unit.title },
+    }]);
+  } catch {}
+
   const u = data[0];
   return {
     id: u.id,
@@ -385,6 +469,12 @@ export async function deleteUnitServer(unitId: string): Promise<boolean> {
   const staff = await requireStaffSession();
   if (!staff) {
     throw new Error('غير مصرح بحذف الوحدات');
+  }
+  if (!staff.isTeacher) {
+    const courseId = await resolveCourseIdForUnit(unitId);
+    if (!courseId || !canAssistantAccessCoursePerm(staff, courseId, 'canDeleteContent')) {
+      throw new Error('غير مصرح للمساعد بحذف وحدات هذا الكورس');
+    }
   }
   const { error } = await supabaseAdmin
     .from('course_units')
@@ -449,6 +539,15 @@ export async function saveItemServer(item: any): Promise<any> {
   if (!staff) {
     throw new Error('غير مصرح بتعديل عناصر المنهج');
   }
+  if (!staff.isTeacher) {
+    const permKey = getItemTypePermissionKey(item.itemType);
+    const hasPerm = permKey
+      ? canAssistantAccessCoursePerm(staff, item.courseId, permKey)
+      : canAssistantAccessCoursePerm(staff, item.courseId, 'canTransferContent');
+    if (!hasPerm) {
+      throw new Error('غير مصرح للمساعد بإضافة أو تعديل هذا النوع من المحتوى');
+    }
+  }
   const itemId = item.id && item.id.length === 36 ? item.id : crypto.randomUUID();
   const payload = {
     id: itemId,
@@ -479,6 +578,18 @@ export async function saveItemServer(item: any): Promise<any> {
     console.error('saveItemServer error:', error);
     throw new Error(error.message);
   }
+
+  try {
+    await supabaseAdmin.from('audit_logs').insert([{
+      actor_id: staff.id,
+      actor_name: staff.fullName,
+      actor_role: staff.role,
+      action_type: 'SAVE_UNIT_ITEM',
+      target_entity: 'unit_items',
+      target_id: itemId,
+      details: { courseId: item.courseId, itemType: item.itemType, title: item.title },
+    }]);
+  } catch {}
 
   const i = data[0];
   return {
@@ -517,6 +628,21 @@ export async function updateItemMetadataServer(itemId: string, metadata: {
     const staff = await requireStaffSession();
     if (!staff) {
       return { success: false, error: 'غير مصرح بتحديث بيانات العنصر' };
+    }
+    if (!staff.isTeacher) {
+      const courseId = await resolveCourseIdForItem(itemId);
+      const allowed = courseId && canAssistantAccessAnyCoursePerm(staff, courseId, [
+        'canEditCourseSettings',
+        'canAddExams',
+        'canAddHomework',
+        'canAddQuestions',
+        'canAddVideos',
+        'canAddConceptSheets',
+        'canAddSummaries',
+      ]);
+      if (!allowed) {
+        return { success: false, error: 'غير مصرح للمساعد بتحديث بيانات هذا المحتوى' };
+      }
     }
     const updatePayload: Record<string, any> = {
       updated_at: new Date().toISOString(),
@@ -597,6 +723,12 @@ export async function deleteItemServer(itemId: string): Promise<boolean> {
   if (!staff) {
     throw new Error('غير مصرح بحذف عناصر المنهج');
   }
+  if (!staff.isTeacher) {
+    const courseId = await resolveCourseIdForItem(itemId);
+    if (!courseId || !canAssistantAccessCoursePerm(staff, courseId, 'canDeleteContent')) {
+      throw new Error('غير مصرح للمساعد بحذف محتوى هذا الكورس');
+    }
+  }
   const { error } = await supabaseAdmin
     .from('unit_items')
     .delete()
@@ -617,6 +749,13 @@ export async function fetchQuestionsServer(itemId: string): Promise<any[]> {
     const staff = await requireStaffSession();
     if (!staff) {
       return [];
+    }
+    if (!staff.isTeacher) {
+      const courseId = await resolveCourseIdForItem(itemId);
+      if (!courseId || !canAssistantAccessCoursePerm(staff, courseId, 'canViewQuestions')) {
+        // STRICT SECURITY: Blind Add-Only Mode receives zero existing questions
+        return [];
+      }
     }
     const { data, error } = await supabaseAdmin
       .from('quiz_questions')
@@ -673,6 +812,11 @@ export async function fetchSecuredStudentQuestionsServer(itemId: string): Promis
 
       const allowed = await hasCourseContentAccess(session, itemMeta?.course_id);
       if (!allowed) return [];
+    } else if (!session.isTeacher) {
+      const courseId = await resolveCourseIdForItem(itemId);
+      if (!courseId || !canAssistantAccessCoursePerm(session, courseId, 'canViewQuestions')) {
+        return [];
+      }
     }
 
     const { data, error } = await supabaseAdmin
@@ -730,6 +874,14 @@ export async function saveQuestionsServer(itemId: string, questions: any[]): Pro
     if (!staff) {
       return false;
     }
+    const courseId = await resolveCourseIdForItem(itemId);
+    if (!staff.isTeacher) {
+      const canView = courseId && canAssistantAccessCoursePerm(staff, courseId, 'canViewQuestions');
+      const canMutate = courseId && canAssistantAccessAnyCoursePerm(staff, courseId, ['canAddQuestions', 'canEditQuestions', 'canDeleteQuestions']);
+      if (!canView || !canMutate) {
+        return false;
+      }
+    }
     await supabaseAdmin.from('quiz_questions').delete().eq('item_id', itemId);
 
     if (!questions || questions.length === 0) return true;
@@ -764,10 +916,118 @@ export async function saveQuestionsServer(itemId: string, questions: any[]): Pro
       console.error('saveQuestionsServer error:', error);
       throw new Error(error.message);
     }
+
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_id: staff.id,
+        actor_name: staff.fullName,
+        actor_role: staff.role,
+        action_type: 'SAVE_ITEM_QUESTIONS',
+        target_entity: 'unit_items',
+        target_id: itemId,
+        details: { courseId, questionsCount: rows.length },
+      }]);
+    } catch {}
+
     return true;
   } catch (err) {
     console.error('saveQuestionsServer exception:', err);
     return false;
+  }
+}
+
+export async function appendQuestionsServer(
+  itemId: string,
+  newQuestions: any[]
+): Promise<{ success: boolean; insertedCount: number; totalMarks?: number; error?: string }> {
+  try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return { success: false, insertedCount: 0, error: 'غير مصرح بإضافة الأسئلة' };
+    }
+    const courseId = await resolveCourseIdForItem(itemId);
+    if (!courseId) {
+      return { success: false, insertedCount: 0, error: 'تعذر العثور على هذا الامتحان أو الواجب' };
+    }
+    if (!staff.isTeacher && !canAssistantAccessCoursePerm(staff, courseId, 'canAddQuestions')) {
+      return { success: false, insertedCount: 0, error: 'غير مصرح للمساعد بإضافة أسئلة في هذا الكورس' };
+    }
+    if (!Array.isArray(newQuestions) || newQuestions.length === 0) {
+      return { success: false, insertedCount: 0, error: 'لا توجد أسئلة جديدة للحفظ' };
+    }
+
+    const { data: existingOrderRows } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('order_index')
+      .eq('item_id', itemId)
+      .order('order_index', { ascending: false })
+      .limit(1);
+
+    const startOrder = (existingOrderRows?.[0]?.order_index || 0) + 1;
+
+    const rows = newQuestions.map((q: any, idx: number) => {
+      const optionsPayload = {
+        items: Array.isArray(q.options) ? q.options : (q.options?.items || []),
+        correctAnswerIds: q.correctAnswerIds || (q.correctAnswerId ? [q.correctAnswerId] : []),
+        wordBankBlanks: q.wordBankBlanks || [],
+        wordBankWords: q.wordBankWords || [],
+        hint: q.hint || '',
+        idealAnswer: q.idealAnswer || '',
+        gradingType: q.gradingType || 'auto',
+        parentId: q.parentId || null,
+      };
+      return {
+        id: q.id && q.id.length === 36 ? q.id : crypto.randomUUID(),
+        item_id: itemId,
+        question_text: q.questionText || '',
+        question_image_url: q.questionImageUrl || null,
+        question_type: q.questionType || 'mcq',
+        options: optionsPayload,
+        correct_answer_id: q.correctAnswerId || '',
+        explanation: q.explanation || null,
+        points: Number(q.points) || 1,
+        order_index: startOrder + idx,
+      };
+    });
+
+    const { error } = await supabaseAdmin.from('quiz_questions').insert(rows);
+    if (error) {
+      return { success: false, insertedCount: 0, error: error.message };
+    }
+
+    const { data: allPointRows } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('points, question_type')
+      .eq('item_id', itemId);
+
+    const recomputedTotalMarks = (allPointRows || []).reduce((sum: number, r: any) => {
+      if (r.question_type === 'passage') return sum;
+      return sum + (Number(r.points) || 1);
+    }, 0);
+
+    if (recomputedTotalMarks > 0) {
+      await supabaseAdmin
+        .from('unit_items')
+        .update({ total_marks: recomputedTotalMarks, updated_at: new Date().toISOString() })
+        .eq('id', itemId);
+    }
+
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_id: staff.id,
+        actor_name: staff.fullName,
+        actor_role: staff.role,
+        action_type: 'APPEND_QUESTIONS_BLIND_MODE',
+        target_entity: 'unit_items',
+        target_id: itemId,
+        details: { courseId, appendedCount: rows.length, totalMarks: recomputedTotalMarks },
+      }]);
+    } catch {}
+
+    return { success: true, insertedCount: rows.length, totalMarks: recomputedTotalMarks };
+  } catch (err: any) {
+    console.error('appendQuestionsServer exception:', err);
+    return { success: false, insertedCount: 0, error: err?.message || 'حدث خطأ أثناء حفظ الأسئلة الجديدة' };
   }
 }
 
@@ -1186,6 +1446,15 @@ export async function grantStudentExtraAttemptsServer(
         isPassed: false,
       };
     }
+    if (!staff.isTeacher && !canAssistantAccessCoursePerm(staff, courseId, 'canGrantExtraAttempts')) {
+      return {
+        success: false,
+        message: 'غير مصرح للمساعد بمنح محاولات إضافية في هذا الكورس',
+        attemptsCount: 0,
+        maxAttempts: 3,
+        isPassed: false,
+      };
+    }
     if (!studentId || !courseId || !itemId) {
       return {
         success: false,
@@ -1316,6 +1585,14 @@ export async function resetStudentItemProgressServer(
       return {
         success: false,
         message: 'غير مصرح بهذه العملية الإدارية',
+        attemptsCount: 0,
+        isPassed: false,
+      };
+    }
+    if (!staff.isTeacher && !canAssistantAccessCoursePerm(staff, courseId, 'canGrantExtraAttempts')) {
+      return {
+        success: false,
+        message: 'غير مصرح للمساعد بتصفير درجات الطلاب في هذا الكورس',
         attemptsCount: 0,
         isPassed: false,
       };
@@ -1557,6 +1834,35 @@ export async function fetchCodesServer(courseId?: string): Promise<any[]> {
     const staff = await requireStaffSession();
     if (!staff) return [];
 
+    if (!staff.isTeacher) {
+      if (courseId) {
+        if (!canAssistantAccessAnyCoursePerm(staff, courseId, ['canGenerateCodes', 'canViewCourseStudents'])) {
+          return [];
+        }
+      } else if (!staff.assistantMatrix?.canManageAllCourses) {
+        const allowedCourses = (staff.assistantMatrix?.assignedCourseIds || []).filter((cid) =>
+          canAssistantAccessAnyCoursePerm(staff, cid, ['canGenerateCodes', 'canViewCourseStudents'])
+        );
+        if (allowedCourses.length === 0) return [];
+        const { data, error } = await supabaseAdmin
+          .from('course_activation_codes')
+          .select('*')
+          .in('course_id', allowedCourses)
+          .order('created_at', { ascending: false });
+        if (error) return [];
+        return (data || []).map((c: any) => ({
+          id: c.id,
+          courseId: c.course_id,
+          code: c.code,
+          batchName: c.batch_name || '',
+          isUsed: Boolean(c.is_used),
+          usedByStudentId: c.used_by_student_id,
+          usedAt: c.used_at,
+          createdAt: c.created_at,
+        }));
+      }
+    }
+
     let query = supabaseAdmin.from('course_activation_codes').select('*').order('created_at', { ascending: false });
     if (courseId) {
       query = query.eq('course_id', courseId);
@@ -1587,6 +1893,15 @@ export async function insertCodesServer(codes: any[]): Promise<boolean> {
     const staff = await requireStaffSession();
     if (!staff) return false;
     if (!codes || codes.length === 0) return true;
+
+    if (!staff.isTeacher) {
+      for (const c of codes) {
+        if (!c?.courseId || !canAssistantAccessCoursePerm(staff, c.courseId, 'canGenerateCodes')) {
+          return false;
+        }
+      }
+    }
+
     const rows = codes.map((c: any) => ({
       id: c.id && c.id.length === 36 ? c.id : crypto.randomUUID(),
       course_id: c.courseId,
@@ -1605,6 +1920,48 @@ export async function insertCodesServer(codes: any[]): Promise<boolean> {
   } catch (err) {
     console.error('insertCodesServer exception:', err);
     return false;
+  }
+}
+
+export async function deleteActivationCodeServer(codeId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const staff = await requireStaffSession();
+    if (!staff) return { success: false, error: 'غير مصرح بحذف أكواد التفعيل' };
+
+    const { data: codeRow } = await supabaseAdmin
+      .from('course_activation_codes')
+      .select('id, course_id, code')
+      .eq('id', codeId)
+      .maybeSingle();
+
+    if (!codeRow) return { success: true };
+
+    if (!staff.isTeacher && !canAssistantAccessCoursePerm(staff, codeRow.course_id, 'canDeleteCodes')) {
+      return { success: false, error: 'غير مصرح للمساعد بحذف أكواد هذا الكورس' };
+    }
+
+    const { error } = await supabaseAdmin
+      .from('course_activation_codes')
+      .delete()
+      .eq('id', codeId);
+
+    if (error) return { success: false, error: error.message };
+
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_id: staff.id,
+        actor_name: staff.fullName,
+        actor_role: staff.role,
+        action_type: 'DELETE_ACTIVATION_CODE',
+        target_entity: 'course_activation_codes',
+        target_id: codeId,
+        details: { courseId: codeRow.course_id, code: codeRow.code },
+      }]);
+    } catch {}
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'فشل حذف الكود' };
   }
 }
 
@@ -1744,6 +2101,9 @@ export async function fetchCourseEnrolledStudentsDataServer(courseId: string) {
   try {
     const staff = await requireStaffSession();
     if (!staff) {
+      return { success: false, enrollments: [], progress: [], deviceCountsByStudent: {} as Record<string, number> };
+    }
+    if (!staff.isTeacher && !canAssistantAccessAnyCoursePerm(staff, courseId, ['canViewCourseStudents', 'canGrantExtraAttempts'])) {
       return { success: false, enrollments: [], progress: [], deviceCountsByStudent: {} as Record<string, number> };
     }
     const { data: dbEnrollments } = await supabaseAdmin

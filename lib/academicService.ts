@@ -18,6 +18,7 @@ import {
   fetchQuestionsServer,
   fetchSecuredStudentQuestionsServer,
   saveQuestionsServer,
+  appendQuestionsServer,
   submitAndGradeExamServer,
   verifyHomeworkQuestionAnswerServer,
   fetchStudentProgressServer,
@@ -25,6 +26,7 @@ import {
   resetStudentItemProgressServer,
   fetchCodesServer,
   insertCodesServer,
+  deleteActivationCodeServer,
   markCodeUsedServer,
   fetchStudentEnrollmentsServer,
   saveEnrollmentServer,
@@ -949,11 +951,32 @@ export async function verifyHomeworkQuestionAnswer(payload: {
   return await verifyHomeworkQuestionAnswerServer(payload);
 }
 
+export async function appendQuestionsForItem(
+  itemId: string,
+  newQuestions: QuestionData[]
+): Promise<{ success: boolean; insertedCount: number; totalMarks?: number; error?: string }> {
+  try {
+    // Blind Add-Only Mode: NEVER read or write localStorage STORAGE_KEYS.QUESTIONS
+    return await appendQuestionsServer(itemId, newQuestions);
+  } catch (err: any) {
+    console.warn('appendQuestionsForItem error:', err);
+    return {
+      success: false,
+      insertedCount: 0,
+      error: err?.message || 'حدث خطأ أثناء إضافة الأسئلة',
+    };
+  }
+}
+
 export async function saveQuestionsForItem(itemId: string, questions: QuestionData[]): Promise<boolean> {
   try {
-    await saveQuestionsServer(itemId, questions);
+    const ok = await saveQuestionsServer(itemId, questions);
+    if (!ok) {
+      return false;
+    }
   } catch (err) {
     console.warn('saveQuestionsServer error:', err);
+    return false;
   }
 
   const allQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
@@ -1335,23 +1358,23 @@ export async function generateActivationCodes(
 }
 
 export async function deleteActivationCode(codeId: string): Promise<boolean> {
-  // 1. Delete via server API
+  try {
+    const serverRes = await deleteActivationCodeServer(codeId);
+    if (!serverRes.success) {
+      console.warn('deleteActivationCodeServer rejected:', serverRes.error);
+      return false;
+    }
+  } catch (err) {
+    console.warn('deleteActivationCodeServer error:', err);
+    return false;
+  }
+
   try {
     await fetch(`/api/course-codes?id=${encodeURIComponent(codeId)}`, {
       method: 'DELETE',
     });
-  } catch (apiErr) {
-    console.warn('API /api/course-codes DELETE error:', apiErr);
-  }
+  } catch {}
 
-  // 2. Direct supabase fallback
-  try {
-    await proxyDelete('course_activation_codes', { id: codeId });
-  } catch (err) {
-    console.warn('Supabase delete code error:', err);
-  }
-
-  // 3. Delete from local storage
   const allCodes = getLocal<ActivationCodeData[]>(STORAGE_KEYS.CODES, []);
   setLocal(STORAGE_KEYS.CODES, allCodes.filter(c => c.id !== codeId));
   return true;

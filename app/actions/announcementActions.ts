@@ -9,7 +9,10 @@ async function checkAnnouncementAuth() {
   const session = await requireStaffSession();
   if (!session) return false;
   if (session.isTeacher) return true;
-  return Boolean(session.assistantPermissions?.can_publish_announcements);
+  return Boolean(
+    session.assistantMatrix?.canPublishAnnouncements ??
+      session.assistantPermissions?.can_publish_announcements
+  );
 }
 
 export async function deleteAnnouncementServerAction(id: string) {

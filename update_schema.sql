@@ -27,3 +27,9 @@ CREATE TABLE IF NOT EXISTS public.course_device_bindings (
   UNIQUE(student_id, course_id, hardware_core_id)
 );
 
+ALTER TABLE public.assistant_permissions
+  ADD COLUMN IF NOT EXISTS course_actions JSONB DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS permissions_matrix JSONB DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS can_send_messages BOOLEAN DEFAULT TRUE;
+
+

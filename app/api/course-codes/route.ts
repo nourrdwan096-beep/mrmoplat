@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import { supabase } from '@/lib/supabaseClient';
-import { requireStaffSession } from '@/lib/serverAuth';
+import {
+  requireStaffSession,
+  canAssistantAccessCoursePerm,
+  canAssistantAccessAnyCoursePerm,
+} from '@/lib/serverAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-// GET: Fetch codes for a specific course or all courses (staff-only)
+// GET: Fetch codes for a specific course or allowed courses (staff-only + granular perm check)
 export async function GET(req: NextRequest) {
   try {
     const staff = await requireStaffSession();
@@ -17,6 +21,12 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const courseId = searchParams.get('courseId');
 
+    if (!staff.isTeacher && courseId) {
+      if (!canAssistantAccessAnyCoursePerm(staff, courseId, ['canGenerateCodes', 'canViewCourseStudents'])) {
+        return NextResponse.json({ success: false, error: 'Forbidden', codes: [] }, { status: 403 });
+      }
+    }
+
     const client = supabaseAdmin || supabase;
     let query = client
       .from('course_activation_codes')
@@ -25,6 +35,14 @@ export async function GET(req: NextRequest) {
 
     if (courseId) {
       query = query.eq('course_id', courseId);
+    } else if (!staff.isTeacher && !staff.assistantMatrix?.canManageAllCourses) {
+      const allowed = (staff.assistantMatrix?.assignedCourseIds || []).filter((cid) =>
+        canAssistantAccessAnyCoursePerm(staff, cid, ['canGenerateCodes', 'canViewCourseStudents'])
+      );
+      if (allowed.length === 0) {
+        return NextResponse.json({ success: true, codes: [] });
+      }
+      query = query.in('course_id', allowed);
     }
 
     const { data, error } = await query;
@@ -41,7 +59,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST: Insert or Upsert activation codes (staff-only)
+// POST: Insert or Upsert activation codes (staff-only + canGenerateCodes check)
 export async function POST(req: NextRequest) {
   try {
     const staff = await requireStaffSession();
@@ -54,6 +72,15 @@ export async function POST(req: NextRequest) {
 
     if (codes.length === 0) {
       return NextResponse.json({ success: false, message: 'No codes provided' }, { status: 400 });
+    }
+
+    if (!staff.isTeacher) {
+      for (const c of codes) {
+        const cid = c.courseId || c.course_id;
+        if (!cid || !canAssistantAccessCoursePerm(staff, cid, 'canGenerateCodes')) {
+          return NextResponse.json({ success: false, error: 'غير مصرح للمساعد بإصدار أكواد لهذا الكورس' }, { status: 403 });
+        }
+      }
     }
 
     const client = supabaseAdmin || supabase;
@@ -77,6 +104,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: error.message }, { status: 200 });
     }
 
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_id: staff.id,
+        actor_name: staff.fullName,
+        actor_role: staff.role,
+        action_type: 'GENERATE_ACTIVATION_CODES',
+        target_entity: 'course_activation_codes',
+        target_id: payload[0]?.course_id || null,
+        details: { count: payload.length, batchName: payload[0]?.batch_name },
+      }]);
+    } catch {}
+
     return NextResponse.json({ success: true, inserted: data?.length || payload.length, data });
   } catch (err: any) {
     console.error('API /api/course-codes POST fatal error:', err);
@@ -84,7 +123,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// DELETE: Remove an activation code by ID (staff-only)
+// DELETE: Remove an activation code by ID (staff-only + canDeleteCodes check)
 export async function DELETE(req: NextRequest) {
   try {
     const staff = await requireStaffSession();
@@ -100,6 +139,19 @@ export async function DELETE(req: NextRequest) {
     }
 
     const client = supabaseAdmin || supabase;
+
+    const { data: codeRow } = await client
+      .from('course_activation_codes')
+      .select('id, course_id, code')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (!staff.isTeacher) {
+      if (!codeRow?.course_id || !canAssistantAccessCoursePerm(staff, codeRow.course_id, 'canDeleteCodes')) {
+        return NextResponse.json({ success: false, error: 'غير مصرح للمساعد بحذف أكواد هذا الكورس' }, { status: 403 });
+      }
+    }
+
     const { error } = await client
       .from('course_activation_codes')
       .delete()
@@ -109,6 +161,18 @@ export async function DELETE(req: NextRequest) {
       console.warn('API /api/course-codes DELETE error:', error.message);
       return NextResponse.json({ success: false, error: error.message }, { status: 200 });
     }
+
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_id: staff.id,
+        actor_name: staff.fullName,
+        actor_role: staff.role,
+        action_type: 'DELETE_ACTIVATION_CODE',
+        target_entity: 'course_activation_codes',
+        target_id: id,
+        details: { courseId: codeRow?.course_id, code: codeRow?.code },
+      }]);
+    } catch {}
 
     return NextResponse.json({ success: true, deletedId: id });
   } catch (err: any) {
