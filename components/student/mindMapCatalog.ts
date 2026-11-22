@@ -1,8 +1,15 @@
 'use client';
 
-export type MindMapShape = 'sketchbook' | 'radial_tree' | 'organic_clouds' | 'formal_sheet';
+export type MindMapShape =
+  | 'sketchbook'
+  | 'radial_tree'
+  | 'organic_clouds'
+  | 'formal_sheet'
+  | 'timeline_roadmap'
+  | 'kanban_board';
 export type MindMapPaperStyle = 'plain' | 'cream' | 'grid' | 'ruled' | 'dots';
 export type MindMapScope = 'daily' | 'weekly' | 'monthly';
+export type BranchPriority = 'normal' | 'high' | 'quick';
 
 export interface WordStyleRule {
   index: number;
@@ -16,6 +23,8 @@ export interface MindMapBranchItem {
   id: string;
   text: string;
   completed: boolean;
+  priority?: BranchPriority;
+  scheduledDay?: number;
   lineColor?: string;
   lineHighlight?: string;
   bold?: boolean;

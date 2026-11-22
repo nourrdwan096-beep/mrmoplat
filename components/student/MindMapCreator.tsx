@@ -29,6 +29,10 @@ import {
   PenTool,
   Calendar,
   User,
+  ZoomIn,
+  ZoomOut,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import DeleteConfirmationModal from '@/components/DeleteConfirmationModal';
@@ -110,6 +114,7 @@ export default function MindMapCreator() {
   // Modals & Popovers
   const [isShapesGalleryOpen, setIsShapesGalleryOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [zoom, setZoom] = useState<number>(1);
   const [toastMsg, setToastMsg] = useState('');
 
   // Add / Edit Subject Modal
@@ -144,6 +149,7 @@ export default function MindMapCreator() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const centerHubRef = useRef<HTMLDivElement>(null);
   const cardRefsMap = useRef<Record<string, HTMLDivElement | null>>({});
+  const importFileRef = useRef<HTMLInputElement>(null);
   const [connectors, setConnectors] = useState<SvgConnectorPath[]>([]);
 
   const showToast = useCallback((msg: string) => {
@@ -245,11 +251,17 @@ export default function MindMapCreator() {
     []
   );
 
-  // Compute SVG bezier branches between Central Hub and every Subject Card
+  // Compute SVG bezier branches between Central Hub and every Subject Card (zoom-safe)
   const recomputeConnectors = useCallback(() => {
     const canvas = canvasRef.current;
     const hub = centerHubRef.current;
-    if (!canvas || !hub || !activeDoc) {
+    if (
+      !canvas ||
+      !hub ||
+      !activeDoc ||
+      activeDoc.shape === 'timeline_roadmap' ||
+      activeDoc.shape === 'kanban_board'
+    ) {
       setConnectors([]);
       return;
     }
@@ -258,8 +270,13 @@ export default function MindMapCreator() {
     const hubRect = hub.getBoundingClientRect();
     if (canvasRect.width === 0 || hubRect.width === 0) return;
 
-    const hubCenterX = hubRect.left - canvasRect.left + hubRect.width / 2;
-    const hubCenterY = hubRect.top - canvasRect.top + hubRect.height / 2;
+    const scale = zoom || 1;
+    const hubLeft = (hubRect.left - canvasRect.left) / scale;
+    const hubRight = (hubRect.right - canvasRect.left) / scale;
+    const hubTop = (hubRect.top - canvasRect.top) / scale;
+    const hubBottom = (hubRect.bottom - canvasRect.top) / scale;
+    const hubCenterX = hubLeft + hubRect.width / (2 * scale);
+    const hubCenterY = hubTop + hubRect.height / (2 * scale);
 
     const nextConnectors: SvgConnectorPath[] = [];
 
@@ -269,8 +286,12 @@ export default function MindMapCreator() {
       const cardRect = cardEl.getBoundingClientRect();
       if (cardRect.width === 0) return;
 
-      const cardCenterX = cardRect.left - canvasRect.left + cardRect.width / 2;
-      const cardCenterY = cardRect.top - canvasRect.top + cardRect.height / 2;
+      const cardLeft = (cardRect.left - canvasRect.left) / scale;
+      const cardRight = (cardRect.right - canvasRect.left) / scale;
+      const cardTop = (cardRect.top - canvasRect.top) / scale;
+      const cardBottom = (cardRect.bottom - canvasRect.top) / scale;
+      const cardCenterX = cardLeft + cardRect.width / (2 * scale);
+      const cardCenterY = cardTop + cardRect.height / (2 * scale);
 
       const isCardRightOfHub = cardCenterX > hubCenterX + 30;
       const isCardLeftOfHub = cardCenterX < hubCenterX - 30;
@@ -281,21 +302,20 @@ export default function MindMapCreator() {
       let endY = cardCenterY;
 
       if (isCardRightOfHub) {
-        startX = hubRect.right - canvasRect.left - 6;
-        endX = cardRect.left - canvasRect.left + 2;
+        startX = hubRight - 6;
+        endX = cardLeft + 2;
       } else if (isCardLeftOfHub) {
-        startX = hubRect.left - canvasRect.left + 6;
-        endX = cardRect.right - canvasRect.left - 2;
+        startX = hubLeft + 6;
+        endX = cardRight - 2;
       } else {
-        // Vertical layout on small mobile viewports
         startX = hubCenterX;
         endX = cardCenterX;
         if (cardCenterY < hubCenterY) {
-          startY = hubRect.top - canvasRect.top;
-          endY = cardRect.bottom - canvasRect.top;
+          startY = hubTop;
+          endY = cardBottom;
         } else {
-          startY = hubRect.bottom - canvasRect.top;
-          endY = cardRect.top - canvasRect.top;
+          startY = hubBottom;
+          endY = cardTop;
         }
       }
 
@@ -335,7 +355,7 @@ export default function MindMapCreator() {
     });
 
     setConnectors(nextConnectors);
-  }, [activeDoc]);
+  }, [activeDoc, zoom]);
 
   useLayoutEffect(() => {
     recomputeConnectors();
@@ -352,7 +372,7 @@ export default function MindMapCreator() {
       ro.disconnect();
       window.removeEventListener('resize', recomputeConnectors);
     };
-  }, [recomputeConnectors, activeDoc?.subjects, activeDoc?.shape, activeDoc?.fontId]);
+  }, [recomputeConnectors, activeDoc?.subjects, activeDoc?.shape, activeDoc?.fontId, zoom]);
 
   // Fullscreen listener
   useEffect(() => {
@@ -542,7 +562,109 @@ export default function MindMapCreator() {
       ),
     }));
     setStylerTarget(null);
-    showToast('تم حفظ تنسيق وألوان الكلمات');
+    showToast('تم حفظ تنسيق وأولوية الكلمات');
+  };
+
+  const handleMoveSubject = (subjectId: string, direction: 'up' | 'down') => {
+    if (!activeDoc) return;
+    const idx = activeDoc.subjects.findIndex((s) => s.id === subjectId);
+    if (idx === -1) return;
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= activeDoc.subjects.length) return;
+    const nextSubjects = [...activeDoc.subjects];
+    const [moved] = nextSubjects.splice(idx, 1);
+    nextSubjects.splice(targetIdx, 0, moved);
+    updateActiveDoc((doc) => ({ ...doc, subjects: nextSubjects }));
+  };
+
+  const handleSendItemToSchedule = (
+    subject: MindMapSubjectNode,
+    item: MindMapBranchItem,
+    dayIndex: number
+  ) => {
+    const schedKey = `mr_radwan_student_schedule_${userId}`;
+    const dayNames = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    try {
+      const existingRaw = localStorage.getItem(schedKey);
+      const existing = existingRaw ? JSON.parse(existingRaw) : [];
+      const list = Array.isArray(existing) ? existing : [];
+      const newTask = {
+        id: 'task_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        title: `${subject.emoji} ${subject.name}: ${item.text}`,
+        time: '16:00',
+        duration: 45,
+        completed: item.completed,
+        day: dayIndex,
+        subject: subject.name,
+        category: 'study',
+        priority: item.priority === 'high' ? 'high' : 'normal',
+        notes: `مضاف من الخريطة الذهنية: ${activeDoc?.title || ''}`,
+      };
+      localStorage.setItem(schedKey, JSON.stringify([...list, newTask]));
+
+      updateActiveDoc((doc) => ({
+        ...doc,
+        subjects: doc.subjects.map((s) =>
+          s.id === subject.id
+            ? {
+                ...s,
+                items: s.items.map((it) =>
+                  it.id === item.id ? { ...it, scheduledDay: dayIndex } : it
+                ),
+              }
+            : s
+        ),
+      }));
+      showToast(`تمت إضافة "${item.text}" إلى جدول يوم ${dayNames[dayIndex]}`);
+    } catch {
+      showToast('تعذر إضافة البند إلى جدول المذاكرة');
+    }
+  };
+
+  const handleExportActiveMapJson = () => {
+    if (!activeDoc) return;
+    try {
+      const blob = new Blob([JSON.stringify(activeDoc, null, 2)], {
+        type: 'application/json;charset=utf-8',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${activeDoc.title.replace(/\s+/g, '_') || 'mindmap'}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('تم تنزيل نسخة احتياطية من الخريطة بصيغة JSON');
+    } catch {
+      showToast('تعذر تصدير الخريطة');
+    }
+  };
+
+  const handleImportMapJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!parsed || !parsed.title || !Array.isArray(parsed.subjects)) {
+        showToast('ملف الخريطة غير صالح');
+        return;
+      }
+      const importedDoc: MindMapDocument = {
+        ...createBlankDocument(studentDefaultName, `${parsed.title}`),
+        ...parsed,
+        id: 'mm_' + Date.now() + '_imp',
+        updatedAt: new Date().toISOString(),
+      };
+      const next = [...documents, importedDoc];
+      saveDocuments(next);
+      setActiveDocId(importedDoc.id);
+      showToast('تم استيراد الخريطة بنجاح');
+    } catch {
+      showToast('تعذر قراءة ملف الخريطة');
+    }
   };
 
   // Multi-map Management
@@ -688,57 +810,109 @@ export default function MindMapCreator() {
             </button>
           </div>
 
-          {/* Primary Action Tools */}
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={openAddSubjectModal}
-              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>إضافة مادة بنفسك</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={openAddSubjectModal}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4" />
+                <span>إضافة مادة بنفسك</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setIsShapesGalleryOpen(true)}
-              className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-black flex items-center gap-1.5 transition-colors"
-            >
-              <Shapes className="w-4 h-4 text-emerald-500" />
-              <span>أشكال الخرائط</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => setIsShapesGalleryOpen(true)}
+                className="px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-black flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              >
+                <Shapes className="w-4 h-4 text-emerald-500" />
+                <span>أشكال الخرائط</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={handleDuplicateActiveMap}
-              title="نسخ الخريطة الحالية"
-              className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
-            >
-              <Copy className="w-4 h-4" />
-            </button>
+              {/* Zoom Controls */}
+              <div className="hidden sm:flex items-center rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setZoom((z) => Math.max(0.75, +(z - 0.1).toFixed(2)))}
+                  title="تصغير العرض"
+                  className="p-1.5 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300"
+                >
+                  <ZoomOut className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setZoom(1)}
+                  title="إعادة ضبط التكبير"
+                  className="px-2 text-[11px] font-black text-slate-700 dark:text-slate-200 tabular-nums"
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setZoom((z) => Math.min(1.15, +(z + 0.1).toFixed(2)))}
+                  title="تكبير العرض"
+                  className="p-1.5 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300"
+                >
+                  <ZoomIn className="w-3.5 h-3.5" />
+                </button>
+              </div>
 
-            <button
-              type="button"
-              onClick={toggleFullscreen}
-              title={isFullscreen ? 'إنهاء ملء الشاشة' : 'عرض بملء الشاشة'}
-              className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
-            >
-              {isFullscreen ? (
-                <Minimize2 className="w-4 h-4" />
-              ) : (
-                <Maximize2 className="w-4 h-4" />
-              )}
-            </button>
+              <button
+                type="button"
+                onClick={handleDuplicateActiveMap}
+                title="نسخ الخريطة الحالية"
+                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
+              >
+                <Copy className="w-4 h-4" />
+              </button>
 
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 text-xs font-black flex items-center gap-1.5 transition-opacity"
-            >
-              <Printer className="w-4 h-4" />
-              <span>طباعة / حفظ PDF</span>
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={handleExportActiveMapJson}
+                title="تصدير نسخة احتياطية JSON"
+                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => importFileRef.current?.click()}
+                title="استيراد خريطة JSON"
+                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
+              >
+                <Upload className="w-4 h-4" />
+              </button>
+              <input
+                ref={importFileRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={handleImportMapJson}
+                className="hidden"
+              />
+
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                title={isFullscreen ? 'إنهاء ملء الشاشة' : 'عرض بملء الشاشة'}
+                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 transition-colors"
+              >
+                {isFullscreen ? (
+                  <Minimize2 className="w-4 h-4" />
+                ) : (
+                  <Maximize2 className="w-4 h-4" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 text-xs font-black flex items-center gap-1.5 transition-opacity whitespace-nowrap"
+              >
+                <Printer className="w-4 h-4" />
+                <span>طباعة / حفظ PDF</span>
+              </button>
+            </div>
         </div>
 
         {/* Studio Expandable Customization Tabs */}
@@ -1134,170 +1308,91 @@ export default function MindMapCreator() {
           </div>
         </div>
 
-        {/* Dynamic Radial Canvas with SVG Connectors */}
-        <div ref={canvasRef} className="relative z-10 min-h-[420px]">
-          {/* Dynamic Bezier SVG Overlay */}
-          <svg
-            aria-hidden="true"
-            className="hidden lg:block absolute inset-0 w-full h-full pointer-events-none z-0"
+        {/* Dynamic Radial / Timeline / Kanban Canvas */}
+        <div className="overflow-x-auto">
+          <div
+            ref={canvasRef}
+            style={{
+              transform: zoom !== 1 ? `scale(${zoom})` : undefined,
+              transformOrigin: 'top center',
+            }}
+            className="relative z-10 min-h-[420px] transition-transform duration-200"
           >
-            {connectors.map((c) => {
-              if (activeDoc.shape === 'formal_sheet') {
-                return (
-                  <g key={c.id}>
-                    <path
-                      d={c.straightD}
-                      fill="none"
-                      stroke={c.color}
-                      strokeOpacity="0.65"
-                      strokeWidth="2.2"
-                    />
-                    <circle cx={c.dotX} cy={c.dotY} r="4" fill={c.color} />
-                  </g>
-                );
-              }
-              if (activeDoc.shape === 'sketchbook') {
+            {/* Dynamic Bezier SVG Overlay (Radial / Sketch / Clouds / Formal) */}
+            <svg
+              aria-hidden="true"
+              className="hidden lg:block absolute inset-0 w-full h-full pointer-events-none z-0"
+            >
+              {connectors.map((c) => {
+                if (activeDoc.shape === 'formal_sheet') {
+                  return (
+                    <g key={c.id}>
+                      <path
+                        d={c.straightD}
+                        fill="none"
+                        stroke={c.color}
+                        strokeOpacity="0.65"
+                        strokeWidth="2.2"
+                      />
+                      <circle cx={c.dotX} cy={c.dotY} r="4" fill={c.color} />
+                    </g>
+                  );
+                }
+                if (activeDoc.shape === 'sketchbook') {
+                  return (
+                    <g key={c.id}>
+                      <path
+                        d={c.d}
+                        fill="none"
+                        stroke={c.color}
+                        strokeWidth="3.2"
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d={c.sketchD}
+                        fill="none"
+                        stroke={c.color}
+                        strokeOpacity="0.55"
+                        strokeWidth="1.6"
+                        strokeDasharray="6 4"
+                        strokeLinecap="round"
+                      />
+                      <circle
+                        cx={c.dotX}
+                        cy={c.dotY}
+                        r="5"
+                        fill="#ffffff"
+                        stroke={c.color}
+                        strokeWidth="2.5"
+                      />
+                    </g>
+                  );
+                }
                 return (
                   <g key={c.id}>
                     <path
                       d={c.d}
                       fill="none"
                       stroke={c.color}
-                      strokeWidth="3.2"
+                      strokeWidth="3.5"
                       strokeLinecap="round"
+                      strokeOpacity="0.85"
                     />
-                    <path
-                      d={c.sketchD}
-                      fill="none"
-                      stroke={c.color}
-                      strokeOpacity="0.55"
-                      strokeWidth="1.6"
-                      strokeDasharray="6 4"
-                      strokeLinecap="round"
-                    />
-                    <circle
-                      cx={c.dotX}
-                      cy={c.dotY}
-                      r="5"
-                      fill="#ffffff"
-                      stroke={c.color}
-                      strokeWidth="2.5"
-                    />
+                    <circle cx={c.dotX} cy={c.dotY} r="5" fill={c.color} />
                   </g>
                 );
-              }
-              return (
-                <g key={c.id}>
-                  <path
-                    d={c.d}
-                    fill="none"
-                    stroke={c.color}
-                    strokeWidth="3.5"
-                    strokeLinecap="round"
-                    strokeOpacity="0.85"
-                  />
-                  <circle cx={c.dotX} cy={c.dotY} r="5" fill={c.color} />
-                </g>
-              );
-            })}
-          </svg>
+              })}
+            </svg>
 
-          {activeDoc.subjects.length === 0 ? (
-            /* Empty Canvas — Student Starts From Scratch */
-            <div className="relative z-10 flex flex-col items-center justify-center py-12 px-4 text-center space-y-6">
-              <div
-                ref={centerHubRef}
-                className="px-8 py-6 rounded-[2rem] bg-slate-900 text-white border-2 border-emerald-400 shadow-lg max-w-sm w-full space-y-2"
-              >
-                <div className="text-xs font-bold text-emerald-400">
-                  المركز الرئيسي للخريطة
-                </div>
-                <input
-                  type="text"
-                  value={activeDoc.title}
-                  onChange={(e) =>
-                    updateActiveDoc((d) => ({ ...d, title: e.target.value }))
-                  }
-                  className="w-full text-center text-2xl font-black bg-transparent text-white border-b border-white/20 focus:border-emerald-400 focus:outline-none pb-1"
-                />
-                <div className="text-xs text-slate-300">
-                  إعداد: {activeDoc.studentName}
-                </div>
-              </div>
-
-              <div className="max-w-lg space-y-3">
-                <h3 className="text-lg font-black text-slate-900 dark:text-white">
-                  خريطتك الذهنية جاهزة لتبدأها من الصفر بطريقتك الخاصة
-                </h3>
-                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
-                  أضف موادك الدراسية مادة بمادة مع اختيار الإيموجي واللون لكل مادة، أو اختر شعبتك من الشريط العلوي لتظهر مواد شعبتك فارغة وتكتب فيها دروسك وأهدافك بنفسك.
-                </p>
-                <div className="flex flex-wrap items-center justify-center gap-3 pt-2 no-print">
-                  <button
-                    type="button"
-                    onClick={openAddSubjectModal}
-                    className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-black flex items-center gap-2 transition-colors"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>إضافة أول مادة يدوياً</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveStudioPanel('tracks')}
-                    className="px-5 py-3 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-xs sm:text-sm font-black flex items-center gap-2 hover:border-emerald-500 transition-colors"
-                  >
-                    <Layers className="w-4 h-4 text-emerald-500" />
-                    <span>اختيار مواد الشعبة بالإيموجي</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            /* Symmetrical 3-Column Mind Map Grid: Right Branches — Central Hub — Left Branches */
-            <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-center">
-              {/* Right Column Subjects */}
-              <div className="lg:col-span-4 space-y-5 order-2 lg:order-1">
-                {rightSubjects.map((subj) => (
-                  <SubjectNodeCard
-                    key={subj.id}
-                    subject={subj}
-                    shape={activeDoc.shape}
-                    showCheckboxesInPrint={activeDoc.showCheckboxesInPrint}
-                    onAddBranchItem={handleAddBranchItem}
-                    onToggleBranchItem={handleToggleBranchItem}
-                    onDeleteBranchItem={handleDeleteBranchItem}
-                    onOpenItemStyler={(subjectId, item) =>
-                      setStylerTarget({
-                        subjectId,
-                        subjectName: subj.name,
-                        item,
-                      })
-                    }
-                    onEditSubject={openEditSubjectModal}
-                    onDeleteSubject={(s) =>
-                      setDeleteTarget({ type: 'subject', subject: s })
-                    }
-                    registerCardRef={registerCardRef}
-                  />
-                ))}
-              </div>
-
-              {/* Central Hub */}
-              <div className="lg:col-span-4 flex flex-col items-center justify-center order-1 lg:order-2 py-4">
+            {activeDoc.subjects.length === 0 ? (
+              /* Empty Canvas — Student Starts From Scratch */
+              <div className="relative z-10 flex flex-col items-center justify-center py-12 px-4 text-center space-y-6">
                 <div
                   ref={centerHubRef}
-                  className={`w-full max-w-xs p-6 text-center space-y-2.5 transition-all ${
-                    activeDoc.shape === 'sketchbook'
-                      ? 'rounded-[2.2rem] bg-slate-900 text-white border-4 border-dashed border-amber-400 shadow-lg'
-                      : activeDoc.shape === 'organic_clouds'
-                      ? 'rounded-[3rem] bg-slate-900 text-white border-4 border-emerald-400 shadow-xl'
-                      : activeDoc.shape === 'formal_sheet'
-                      ? 'rounded-2xl bg-slate-900 text-white border-2 border-slate-700 shadow-md'
-                      : 'rounded-full aspect-square flex flex-col items-center justify-center bg-slate-900 text-white border-4 border-emerald-500 shadow-xl max-w-[230px]'
-                  }`}
+                  className="px-8 py-6 rounded-[2rem] bg-slate-900 text-white border-2 border-emerald-400 shadow-lg max-w-sm w-full space-y-2"
                 >
-                  <div className="text-[11px] font-black text-emerald-400">
-                    {SCOPE_LABELS[activeDoc.scope]}
+                  <div className="text-xs font-bold text-emerald-400">
+                    المركز الرئيسي للخريطة
                   </div>
                   <input
                     type="text"
@@ -1305,47 +1400,301 @@ export default function MindMapCreator() {
                     onChange={(e) =>
                       updateActiveDoc((d) => ({ ...d, title: e.target.value }))
                     }
-                    aria-label="عنوان الخريطة الذهنية"
-                    className="w-full text-center text-xl sm:text-2xl font-black bg-transparent text-white border-b border-white/20 focus:border-emerald-400 focus:outline-none pb-1"
+                    className="w-full text-center text-2xl font-black bg-transparent text-white border-b border-white/20 focus:border-emerald-400 focus:outline-none pb-1"
                   />
-                  <div className="text-xs font-bold text-slate-300">
-                    {activeDoc.studentName}
+                  <div className="text-xs text-slate-300">
+                    إعداد: {activeDoc.studentName}
                   </div>
-                  <div className="text-[11px] text-slate-400 tabular-nums">
-                    {activeDoc.subjects.length} مواد · {completedBranches}/
-                    {totalBranches} منجز
+                </div>
+
+                <div className="max-w-lg space-y-3">
+                  <h3 className="text-lg font-black text-slate-900 dark:text-white">
+                    خريطتك الذهنية جاهزة لتبدأها من الصفر بطريقتك الخاصة
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                    أضف موادك الدراسية مادة بمادة مع اختيار الإيموجي واللون لكل مادة، أو اختر شعبتك من الشريط العلوي لتظهر مواد شعبتك فارغة وتكتب فيها دروسك وأهدافك بنفسك.
+                  </p>
+                  <div className="flex flex-wrap items-center justify-center gap-3 pt-2 no-print">
+                    <button
+                      type="button"
+                      onClick={openAddSubjectModal}
+                      className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-black flex items-center gap-2 transition-colors"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>إضافة أول مادة يدوياً</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveStudioPanel('tracks')}
+                      className="px-5 py-3 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 text-xs sm:text-sm font-black flex items-center gap-2 hover:border-emerald-500 transition-colors"
+                    >
+                      <Layers className="w-4 h-4 text-emerald-500" />
+                      <span>اختيار مواد الشعبة بالإيموجي</span>
+                    </button>
                   </div>
                 </div>
               </div>
+            ) : activeDoc.shape === 'timeline_roadmap' ? (
+              /* Layout Mode: Sequential Timeline Roadmap */
+              <div className="relative z-10 space-y-6">
+                <div
+                  ref={centerHubRef}
+                  className="p-5 sm:p-6 rounded-2xl bg-slate-900 text-white border border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                >
+                  <div className="space-y-1 flex-1">
+                    <div className="text-[11px] font-black text-emerald-400">
+                      مسار خطة المذاكرة · {SCOPE_LABELS[activeDoc.scope]}
+                    </div>
+                    <input
+                      type="text"
+                      value={activeDoc.title}
+                      onChange={(e) =>
+                        updateActiveDoc((d) => ({ ...d, title: e.target.value }))
+                      }
+                      aria-label="عنوان الخريطة الذهنية"
+                      className="w-full text-xl sm:text-2xl font-black bg-transparent text-white border-b border-white/15 focus:border-emerald-400 focus:outline-none pb-1"
+                    />
+                  </div>
+                  <div className="flex items-center gap-4 text-xs text-slate-300 tabular-nums shrink-0">
+                    <div>
+                      <span className="block text-[10px] text-slate-400">المواد</span>
+                      <strong className="text-base font-black text-white">
+                        {activeDoc.subjects.length}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="block text-[10px] text-slate-400">الإنجاز الكلي</span>
+                      <strong className="text-base font-black text-emerald-400">
+                        {totalBranches > 0
+                          ? Math.round((completedBranches / totalBranches) * 100)
+                          : 0}
+                        % ({completedBranches}/{totalBranches})
+                      </strong>
+                    </div>
+                  </div>
+                </div>
 
-              {/* Left Column Subjects */}
-              <div className="lg:col-span-4 space-y-5 order-3">
-                {leftSubjects.map((subj) => (
-                  <SubjectNodeCard
-                    key={subj.id}
-                    subject={subj}
-                    shape={activeDoc.shape}
-                    showCheckboxesInPrint={activeDoc.showCheckboxesInPrint}
-                    onAddBranchItem={handleAddBranchItem}
-                    onToggleBranchItem={handleToggleBranchItem}
-                    onDeleteBranchItem={handleDeleteBranchItem}
-                    onOpenItemStyler={(subjectId, item) =>
-                      setStylerTarget({
-                        subjectId,
-                        subjectName: subj.name,
-                        item,
-                      })
-                    }
-                    onEditSubject={openEditSubjectModal}
-                    onDeleteSubject={(s) =>
-                      setDeleteTarget({ type: 'subject', subject: s })
-                    }
-                    registerCardRef={registerCardRef}
-                  />
-                ))}
+                <div className="relative space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {activeDoc.subjects.map((subj, idx) => (
+                      <SubjectNodeCard
+                        key={subj.id}
+                        subject={subj}
+                        shape={activeDoc.shape}
+                        stepIndex={idx}
+                        showCheckboxesInPrint={activeDoc.showCheckboxesInPrint}
+                        canMoveUp={idx > 0}
+                        canMoveDown={idx < activeDoc.subjects.length - 1}
+                        onMoveSubject={handleMoveSubject}
+                        onAddBranchItem={handleAddBranchItem}
+                        onToggleBranchItem={handleToggleBranchItem}
+                        onDeleteBranchItem={handleDeleteBranchItem}
+                        onSendItemToSchedule={handleSendItemToSchedule}
+                        onOpenItemStyler={(subjectId, item) =>
+                          setStylerTarget({
+                            subjectId,
+                            subjectName: subj.name,
+                            item,
+                          })
+                        }
+                        onEditSubject={openEditSubjectModal}
+                        onDeleteSubject={(s) =>
+                          setDeleteTarget({ type: 'subject', subject: s })
+                        }
+                        registerCardRef={registerCardRef}
+                      />
+                    ))}
+                  </div>
+                </div>
               </div>
-            </div>
-          )}
+            ) : activeDoc.shape === 'kanban_board' ? (
+              /* Layout Mode: Structured Multi-Column Kanban Board */
+              <div className="relative z-10 space-y-6">
+                <div
+                  ref={centerHubRef}
+                  className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                >
+                  <div className="space-y-1 flex-1">
+                    <div className="text-[11px] font-black text-emerald-600 dark:text-emerald-400">
+                      لوحة التنظيم الشاملة · {SCOPE_LABELS[activeDoc.scope]}
+                    </div>
+                    <input
+                      type="text"
+                      value={activeDoc.title}
+                      onChange={(e) =>
+                        updateActiveDoc((d) => ({ ...d, title: e.target.value }))
+                      }
+                      aria-label="عنوان الخريطة الذهنية"
+                      className="w-full text-xl sm:text-2xl font-black bg-transparent text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-700 focus:border-emerald-500 focus:outline-none pb-1"
+                    />
+                  </div>
+                  <div className="flex items-center gap-3 min-w-[200px]">
+                    <div className="flex-1">
+                      <div className="flex justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 mb-1 tabular-nums">
+                        <span>التقدم العام</span>
+                        <span>
+                          {completedBranches}/{totalBranches}
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                        <div
+                          className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+                          style={{
+                            width: `${
+                              totalBranches > 0
+                                ? Math.round((completedBranches / totalBranches) * 100)
+                                : 0
+                            }%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 items-start">
+                  {activeDoc.subjects.map((subj, idx) => (
+                    <SubjectNodeCard
+                      key={subj.id}
+                      subject={subj}
+                      shape={activeDoc.shape}
+                      showCheckboxesInPrint={activeDoc.showCheckboxesInPrint}
+                      canMoveUp={idx > 0}
+                      canMoveDown={idx < activeDoc.subjects.length - 1}
+                      onMoveSubject={handleMoveSubject}
+                      onAddBranchItem={handleAddBranchItem}
+                      onToggleBranchItem={handleToggleBranchItem}
+                      onDeleteBranchItem={handleDeleteBranchItem}
+                      onSendItemToSchedule={handleSendItemToSchedule}
+                      onOpenItemStyler={(subjectId, item) =>
+                        setStylerTarget({
+                          subjectId,
+                          subjectName: subj.name,
+                          item,
+                        })
+                      }
+                      onEditSubject={openEditSubjectModal}
+                      onDeleteSubject={(s) =>
+                        setDeleteTarget({ type: 'subject', subject: s })
+                      }
+                      registerCardRef={registerCardRef}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              /* Symmetrical 3-Column Mind Map Grid: Right Branches — Central Hub — Left Branches */
+              <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-center">
+                {/* Right Column Subjects */}
+                <div className="lg:col-span-4 space-y-5 order-2 lg:order-1">
+                  {rightSubjects.map((subj) => {
+                    const globalIdx = activeDoc.subjects.findIndex(
+                      (x) => x.id === subj.id
+                    );
+                    return (
+                      <SubjectNodeCard
+                        key={subj.id}
+                        subject={subj}
+                        shape={activeDoc.shape}
+                        showCheckboxesInPrint={activeDoc.showCheckboxesInPrint}
+                        canMoveUp={globalIdx > 0}
+                        canMoveDown={globalIdx < activeDoc.subjects.length - 1}
+                        onMoveSubject={handleMoveSubject}
+                        onAddBranchItem={handleAddBranchItem}
+                        onToggleBranchItem={handleToggleBranchItem}
+                        onDeleteBranchItem={handleDeleteBranchItem}
+                        onSendItemToSchedule={handleSendItemToSchedule}
+                        onOpenItemStyler={(subjectId, item) =>
+                          setStylerTarget({
+                            subjectId,
+                            subjectName: subj.name,
+                            item,
+                          })
+                        }
+                        onEditSubject={openEditSubjectModal}
+                        onDeleteSubject={(s) =>
+                          setDeleteTarget({ type: 'subject', subject: s })
+                        }
+                        registerCardRef={registerCardRef}
+                      />
+                    );
+                  })}
+                </div>
+
+                {/* Central Hub */}
+                <div className="lg:col-span-4 flex flex-col items-center justify-center order-1 lg:order-2 py-4">
+                  <div
+                    ref={centerHubRef}
+                    className={`w-full max-w-xs p-6 text-center space-y-2.5 transition-all ${
+                      activeDoc.shape === 'sketchbook'
+                        ? 'rounded-[2.2rem] bg-slate-900 text-white border-4 border-dashed border-amber-400 shadow-lg'
+                        : activeDoc.shape === 'organic_clouds'
+                        ? 'rounded-[3rem] bg-slate-900 text-white border-4 border-emerald-400 shadow-xl'
+                        : activeDoc.shape === 'formal_sheet'
+                        ? 'rounded-2xl bg-slate-900 text-white border-2 border-slate-700 shadow-md'
+                        : 'rounded-full aspect-square flex flex-col items-center justify-center bg-slate-900 text-white border-4 border-emerald-500 shadow-xl max-w-[230px]'
+                    }`}
+                  >
+                    <div className="text-[11px] font-black text-emerald-400">
+                      {SCOPE_LABELS[activeDoc.scope]}
+                    </div>
+                    <input
+                      type="text"
+                      value={activeDoc.title}
+                      onChange={(e) =>
+                        updateActiveDoc((d) => ({ ...d, title: e.target.value }))
+                      }
+                      aria-label="عنوان الخريطة الذهنية"
+                      className="w-full text-center text-xl sm:text-2xl font-black bg-transparent text-white border-b border-white/20 focus:border-emerald-400 focus:outline-none pb-1"
+                    />
+                    <div className="text-xs font-bold text-slate-300">
+                      {activeDoc.studentName}
+                    </div>
+                    <div className="text-[11px] text-slate-400 tabular-nums">
+                      {activeDoc.subjects.length} مواد · {completedBranches}/
+                      {totalBranches} منجز
+                    </div>
+                  </div>
+                </div>
+
+                {/* Left Column Subjects */}
+                <div className="lg:col-span-4 space-y-5 order-3">
+                  {leftSubjects.map((subj) => {
+                    const globalIdx = activeDoc.subjects.findIndex(
+                      (x) => x.id === subj.id
+                    );
+                    return (
+                      <SubjectNodeCard
+                        key={subj.id}
+                        subject={subj}
+                        shape={activeDoc.shape}
+                        showCheckboxesInPrint={activeDoc.showCheckboxesInPrint}
+                        canMoveUp={globalIdx > 0}
+                        canMoveDown={globalIdx < activeDoc.subjects.length - 1}
+                        onMoveSubject={handleMoveSubject}
+                        onAddBranchItem={handleAddBranchItem}
+                        onToggleBranchItem={handleToggleBranchItem}
+                        onDeleteBranchItem={handleDeleteBranchItem}
+                        onSendItemToSchedule={handleSendItemToSchedule}
+                        onOpenItemStyler={(subjectId, item) =>
+                          setStylerTarget({
+                            subjectId,
+                            subjectName: subj.name,
+                            item,
+                          })
+                        }
+                        onEditSubject={openEditSubjectModal}
+                        onDeleteSubject={(s) =>
+                          setDeleteTarget({ type: 'subject', subject: s })
+                        }
+                        registerCardRef={registerCardRef}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Sheet Bottom Motto & Platform Signature */}

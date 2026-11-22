@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { X, Check, Palette, Highlighter, Bold, Underline, RotateCcw } from 'lucide-react';
 import {
+  BranchPriority,
   HIGHLIGHT_COLORS,
   INK_COLORS,
   MindMapBranchItem,
@@ -29,6 +30,7 @@ export default function BranchItemEditorModal({
   const [lineColor, setLineColor] = useState(item?.lineColor || '');
   const [lineHighlight, setLineHighlight] = useState(item?.lineHighlight || '');
   const [bold, setBold] = useState(Boolean(item?.bold));
+  const [priority, setPriority] = useState<BranchPriority>(item?.priority || 'normal');
   const [wordStyles, setWordStyles] = useState<WordStyleRule[]>(
     item?.wordStyles || []
   );
@@ -62,6 +64,7 @@ export default function BranchItemEditorModal({
   const previewItem: MindMapBranchItem = {
     ...item,
     text,
+    priority,
     lineColor: lineColor || undefined,
     lineHighlight: lineHighlight || undefined,
     bold,
@@ -129,6 +132,39 @@ export default function BranchItemEditorModal({
             className="w-full px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
             required
           />
+        </div>
+
+        {/* Priority Selector */}
+        <div className="space-y-1.5">
+          <span className="text-xs font-black text-slate-700 dark:text-slate-300 block">
+            أولوية البند في المذاكرة
+          </span>
+          <div className="grid grid-cols-3 gap-2">
+            {(
+              [
+                { id: 'normal', label: 'عادي' },
+                { id: 'high', label: 'مهم جداً' },
+                { id: 'quick', label: 'مراجعة سريعة' },
+              ] as { id: BranchPriority; label: string }[]
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setPriority(opt.id)}
+                className={`py-2 px-3 rounded-xl text-xs font-black border transition-colors ${
+                  priority === opt.id
+                    ? opt.id === 'high'
+                      ? 'bg-rose-600 text-white border-rose-600'
+                      : opt.id === 'quick'
+                      ? 'bg-amber-500 text-slate-950 border-amber-500'
+                      : 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-transparent'
+                    : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Whole-line Styling */}

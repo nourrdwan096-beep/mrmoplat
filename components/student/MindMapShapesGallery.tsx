@@ -93,6 +93,50 @@ export const MIND_MAP_SHAPE_ITEMS: ShapeShowcaseItem[] = [
       </svg>
     ),
   },
+  {
+    id: 'timeline_roadmap',
+    title: 'مسار الخطوات والمراحل المتتابعة',
+    subtitle: 'ترتيب خطوات المذاكرة والمواد كمسار مرقم من البداية حتى ليلة الامتحان',
+    renderPreview: () => (
+      <svg viewBox="0 0 220 120" className="w-full h-28">
+        <rect x="6" y="6" width="208" height="108" rx="10" fill="#f8fafc" stroke="#e2e8f0" />
+        <line x1="34" y1="36" x2="186" y2="36" stroke="#10b981" strokeWidth="3" strokeLinecap="round" />
+        <circle cx="42" cy="36" r="10" fill="#0284c7" />
+        <text x="42" y="39" textAnchor="middle" fill="#ffffff" fontSize="8" fontWeight="bold">01</text>
+        <circle cx="90" cy="36" r="10" fill="#059669" />
+        <text x="90" y="39" textAnchor="middle" fill="#ffffff" fontSize="8" fontWeight="bold">02</text>
+        <circle cx="138" cy="36" r="10" fill="#ea580c" />
+        <text x="138" y="39" textAnchor="middle" fill="#ffffff" fontSize="8" fontWeight="bold">03</text>
+        <circle cx="182" cy="36" r="10" fill="#7c3aed" />
+        <text x="182" y="39" textAnchor="middle" fill="#ffffff" fontSize="8" fontWeight="bold">04</text>
+        <rect x="22" y="56" width="40" height="44" rx="6" fill="#ffffff" stroke="#0284c7" strokeWidth="1.4" />
+        <rect x="70" y="56" width="40" height="44" rx="6" fill="#ffffff" stroke="#059669" strokeWidth="1.4" />
+        <rect x="118" y="56" width="40" height="44" rx="6" fill="#ffffff" stroke="#ea580c" strokeWidth="1.4" />
+        <rect x="164" y="56" width="36" height="44" rx="6" fill="#ffffff" stroke="#7c3aed" strokeWidth="1.4" />
+      </svg>
+    ),
+  },
+  {
+    id: 'kanban_board',
+    title: 'لوحة الأعمدة الشبكية المنظمة',
+    subtitle: 'بطاقات مرتبة في شبكة متوازنة مع شريط إنجاز لكل مادة ومؤشرات أولوية واضحة',
+    renderPreview: () => (
+      <svg viewBox="0 0 220 120" className="w-full h-28">
+        <rect x="6" y="6" width="208" height="108" rx="10" fill="#f8fafc" stroke="#e2e8f0" />
+        <rect x="18" y="18" width="56" height="84" rx="8" fill="#ffffff" stroke="#cbd5e1" />
+        <rect x="18" y="18" width="56" height="18" rx="8" fill="#0284c7" />
+        <rect x="82" y="18" width="56" height="84" rx="8" fill="#ffffff" stroke="#cbd5e1" />
+        <rect x="82" y="18" width="56" height="18" rx="8" fill="#059669" />
+        <rect x="146" y="18" width="56" height="84" rx="8" fill="#ffffff" stroke="#cbd5e1" />
+        <rect x="146" y="18" width="56" height="18" rx="8" fill="#7c3aed" />
+        <line x1="26" y1="50" x2="66" y2="50" stroke="#94a3b8" strokeWidth="2.5" strokeLinecap="round" />
+        <line x1="26" y1="64" x2="58" y2="64" stroke="#cbd5e1" strokeWidth="2.5" strokeLinecap="round" />
+        <line x1="90" y1="50" x2="130" y2="50" stroke="#94a3b8" strokeWidth="2.5" strokeLinecap="round" />
+        <line x1="90" y1="64" x2="122" y2="64" stroke="#cbd5e1" strokeWidth="2.5" strokeLinecap="round" />
+        <line x1="154" y1="50" x2="194" y2="50" stroke="#94a3b8" strokeWidth="2.5" strokeLinecap="round" />
+      </svg>
+    ),
+  },
 ];
 
 interface MindMapShapesGalleryProps {

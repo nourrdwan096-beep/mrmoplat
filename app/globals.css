@@ -103,6 +103,31 @@
   background-size: 20px 20px;
 }
 
+.mm-paper-english {
+  background-color: #fffdf8;
+  background-image:
+    linear-gradient(to bottom, transparent 30px, rgba(244, 63, 94, 0.16) 30px, rgba(244, 63, 94, 0.16) 31px, transparent 31px),
+    repeating-linear-gradient(
+      to bottom,
+      transparent,
+      transparent 35px,
+      rgba(99, 102, 241, 0.13) 35px,
+      rgba(99, 102, 241, 0.13) 36px
+    );
+}
+.dark .mm-paper-english {
+  background-color: #0f172a;
+  background-image:
+    linear-gradient(to bottom, transparent 30px, rgba(244, 63, 94, 0.14) 30px, rgba(244, 63, 94, 0.14) 31px, transparent 31px),
+    repeating-linear-gradient(
+      to bottom,
+      transparent,
+      transparent 35px,
+      rgba(129, 140, 248, 0.08) 35px,
+      rgba(129, 140, 248, 0.08) 36px
+    );
+}
+
 html {
   scroll-behavior: smooth;
 }
@@ -167,12 +192,14 @@ html {
     color: #b45309 !important;
   }
 
-  /* Mind Map High-Fidelity Print Styling */
+  /* Mind Map, Notes & Schedule High-Fidelity Print Styling */
   .print-only {
     display: block !important;
   }
 
-  #student-mind-map-printable {
+  #student-mind-map-printable,
+  #student-notes-printable,
+  #student-schedule-printable {
     border: none !important;
     box-shadow: none !important;
     background: #ffffff !important;
