@@ -152,12 +152,15 @@ export default function StudentQuizSolver({
   // Submission & Results
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [resultActiveTab, setResultActiveTab] = useState<'score_certificate' | 'answers_review'>('score_certificate');
   const [results, setResults] = useState<{
     totalPoints: number;
     earnedPoints: number;
     percentage: number;
     passed: boolean;
+    certificateCode?: string;
+    canRevealModelAnswers?: boolean;
     questionResults: Record<string, {
       earned: number;
       max: number;
@@ -249,20 +252,29 @@ export default function StudentQuizSolver({
         // First violation: Warning modal
         setShowViolationModal(true);
       } else if (nextCount >= 2) {
-        // Second violation: Terminate & Deduct Attempt
+        // Second violation: Terminate & Deduct Attempt authoritatively on the server
         setIsSecurityTerminated(true);
         setShowViolationModal(false);
-        if (onSecurityViolation) {
-          onSecurityViolation();
-        }
-        if (onComplete) {
-          // Record 0% fail and deduct attempt
-          onComplete(0, false);
-        }
+        submitStudentExamAnswers({
+          itemId: item.id,
+          studentId: currentUser?.id || '',
+          courseId,
+          answers: { mcqAnswers: {}, multiSelectAnswers: {}, wordBankAnswers: {}, textAnswers: {} },
+          isSecurityTerminated: true,
+        })
+          .catch(() => {})
+          .finally(() => {
+            if (onSecurityViolation) {
+              onSecurityViolation();
+            }
+            if (onComplete) {
+              onComplete(0, false);
+            }
+          });
       }
       return nextCount;
     });
-  }, [previewMode, isSubmitted, isSecurityTerminated, onSecurityViolation, onComplete]);
+  }, [previewMode, isSubmitted, isSecurityTerminated, item.id, currentUser?.id, courseId, onSecurityViolation, onComplete]);
 
   // Anti-Cheat & Strict Security Event Listeners (Active during test, before submission)
   useEffect(() => {
@@ -401,7 +413,7 @@ export default function StudentQuizSolver({
   const unansweredCount = solvableQuestions.length - answeredCount;
   const flaggedCount = solvableQuestions.filter((q) => flaggedQuestions[q.id]).length;
 
-  // Single Question Evaluator for Homework (Using Secure Server Action)
+  // Single Question Evaluator for Homework (Strictly Server-Verified for Live Students)
   const evaluateHomeworkQuestion = async (q: QuestionData, answerOverride?: any) => {
     if (evaluatedQuestions[q.id]) return; // Already locked
 
@@ -413,6 +425,24 @@ export default function StudentQuizSolver({
       textAnswers[q.id]
     );
 
+    if (previewMode) {
+      const isCorrect = q.correctAnswerId ? (chosen === q.correctAnswerId) : false;
+      setEvaluatedQuestions((prev) => ({
+        ...prev,
+        [q.id]: {
+          isCorrect,
+          isPartial: false,
+          correctCount: isCorrect ? 1 : 0,
+          totalCount: 1,
+          earnedPoints: isCorrect ? maxPts : 0,
+          explanation: q.explanation,
+          chosenAnswer: chosen,
+        }
+      }));
+      return;
+    }
+
+    setSubmitError(null);
     try {
       const res = await verifyHomeworkQuestionAnswer({
         itemId: item.id,
@@ -435,23 +465,12 @@ export default function StudentQuizSolver({
         }));
         return;
       }
-    } catch (err) {
-      console.error('Homework verification server error, falling back locally:', err);
-    }
 
-    // Local fallback if server call is unavailable
-    const isCorrect = q.correctAnswerId ? (chosen === q.correctAnswerId) : false;
-    setEvaluatedQuestions((prev) => ({
-      ...prev,
-      [q.id]: {
-        isCorrect,
-        isPartial: false,
-        correctCount: isCorrect ? 1 : 0,
-        totalCount: 1,
-        earnedPoints: isCorrect ? maxPts : 0,
-        chosenAnswer: chosen,
-      }
-    }));
+      setSubmitError((res as any)?.error || 'تعذر التحقق من إجابة السؤال عبر الخادم. يرجى المحاولة مرة أخرى.');
+    } catch (err) {
+      console.error('Homework verification server error:', err);
+      setSubmitError('تعذر الاتصال بالسيرفر للتحقق من الإجابة. يرجى المحاولة مرة أخرى.');
+    }
   };
 
   // Handle Answers with Strict Homework Lockout
@@ -655,8 +674,9 @@ export default function StudentQuizSolver({
     }
 
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
-      const studentId = currentUser?.id || 'demo_student';
+      const studentId = currentUser?.id || '';
       const serverResult = await submitStudentExamAnswers({
         itemId: item.id,
         studentId,
@@ -677,6 +697,8 @@ export default function StudentQuizSolver({
           earnedPoints: serverResult.earnedPoints,
           percentage: serverResult.percentage,
           passed: serverResult.isPassed,
+          certificateCode: (serverResult as any).certificateCode || undefined,
+          canRevealModelAnswers: (serverResult as any).canRevealModelAnswers !== false,
           questionResults: serverResult.questionResults as any,
         };
 
@@ -688,74 +710,15 @@ export default function StudentQuizSolver({
         }
         return;
       }
+
+      setShowPreSubmitModal(false);
+      setSubmitError((serverResult as any)?.error || 'تعذر اعتماد وتسليم الإجابات على السيرفر. يرجى إعادة المحاولة.');
     } catch (err) {
-      console.error('Submit exam to server failed, falling back to local calculation:', err);
+      console.error('Submit exam to server failed:', err);
+      setShowPreSubmitModal(false);
+      setSubmitError('حدث خطأ في الاتصال بالسيرفر أثناء التصحيح. إجاباتك ما زالت محفوظة، يرجى إعادة المحاولة.');
     } finally {
       setIsSubmitting(false);
-    }
-
-    // Fallback if offline / server action fails
-    let totalPoints = 0;
-    let earnedPoints = 0;
-    const qResults: Record<string, any> = {};
-
-    solvableQuestions.forEach((q) => {
-      const maxPts = q.points || 1;
-      totalPoints += maxPts;
-
-      if (isHomework && evaluatedQuestions[q.id]) {
-        // Use the locked homework score
-        const ev = evaluatedQuestions[q.id];
-        earnedPoints += ev.earnedPoints;
-        qResults[q.id] = { earned: ev.earnedPoints, max: maxPts, isCorrect: ev.isCorrect };
-        return;
-      }
-
-      if (q.questionType === 'mcq' || q.questionType === 'tf') {
-        const chosen = mcqAnswers[q.id];
-        const isCorrect = Boolean(q.correctAnswerId && chosen === q.correctAnswerId);
-        const earned = isCorrect ? maxPts : 0;
-        earnedPoints += earned;
-        qResults[q.id] = { earned, max: maxPts, isCorrect };
-      } else if (q.questionType === 'multi_select') {
-        const chosen = (multiSelectAnswers[q.id] || []).slice().sort();
-        const expected = (q.correctAnswerIds || (q.correctAnswerId ? [q.correctAnswerId] : [])).slice().sort();
-        const isExactMatch =
-          chosen.length === expected.length &&
-          chosen.every((val, idx) => val === expected[idx]);
-        const earned = isExactMatch ? maxPts : 0;
-        earnedPoints += earned;
-        qResults[q.id] = { earned, max: maxPts, isCorrect: isExactMatch };
-      } else if (q.questionType === 'word_bank') {
-        qResults[q.id] = { earned: 0, max: maxPts, isCorrect: false };
-      } else {
-        const ans = (textAnswers[q.id] || '').trim().toLowerCase();
-        const ideal = (q.idealAnswer || '').trim().toLowerCase();
-        const isMatch = Boolean(ideal && ans === ideal);
-        const earned = isMatch ? maxPts : 0;
-        earnedPoints += earned;
-        qResults[q.id] = { earned, max: maxPts, isCorrect: isMatch };
-      }
-    });
-
-    earnedPoints = parseFloat(earnedPoints.toFixed(2));
-    const percentage = Math.min(100, Math.round((earnedPoints / (totalPoints || 1)) * 100));
-    const passingRequired = item.passingScorePercentage || 60;
-    const passed = percentage >= passingRequired;
-
-    const res = {
-      totalPoints,
-      earnedPoints,
-      percentage,
-      passed,
-      questionResults: qResults
-    };
-
-    setResults(res);
-    setIsSubmitted(true);
-    setShowPreSubmitModal(false);
-    if (onComplete) {
-      onComplete(percentage, passed);
     }
   };
 
@@ -763,6 +726,7 @@ export default function StudentQuizSolver({
     if (!previewMode && isLockedOut) return;
     setIsSubmitted(false);
     setResults(null);
+    setSubmitError(null);
     setMcqAnswers({});
     setMultiSelectAnswers({});
     setWordBankAnswers({});
@@ -1559,6 +1523,23 @@ export default function StudentQuizSolver({
 
       </div>
 
+      {/* Authoritative Server Submission / Verification Error Alert */}
+      {submitError && (
+        <div className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-800 dark:text-rose-200 flex items-center justify-between gap-3 text-xs sm:text-sm font-bold shadow-sm">
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+            <span>{submitError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSubmitError(null)}
+            className="px-3 py-1 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-900 dark:text-rose-100 text-xs font-black shrink-0"
+          >
+            إغلاق
+          </button>
+        </div>
+      )}
+
       {/* Results Header (Displays if submitted) */}
       {isSubmitted && results && (
         <div className="space-y-6">
@@ -1738,14 +1719,15 @@ export default function StudentQuizSolver({
                     </div>
                   </div>
 
-                  {/* Honor Certificate for Exam with Score >= 80% */}
-                  {!isHomework && results.percentage >= 80 && (
+                  {/* Honor Certificate for Exam with Score >= 80% & Server-Signed Code */}
+                  {!isHomework && results.percentage >= 80 && (previewMode || Boolean(results.certificateCode)) && (
                     <div className="pt-2">
                       <HonorCertificate
                         studentName={currentUser?.fullName || 'الطالب المتميز'}
                         examTitle={item.title}
                         courseTitle={courseData?.title}
                         scorePercentage={results.percentage}
+                        certificateId={results.certificateCode}
                       />
                     </div>
                   )}
@@ -1764,6 +1746,14 @@ export default function StudentQuizSolver({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Security Banner when Model Answers remain protected while self-retakes remain */}
+      {isSubmitted && results?.passed && resultActiveTab === 'answers_review' && results.canRevealModelAnswers === false && (
+        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs font-bold flex items-center gap-2.5">
+          <Lock className="w-5 h-5 text-amber-600 shrink-0" />
+          <span>حماية نموذج الإجابة: يمكنك الآن مراجعة حالة كل سؤال والدرجة المحققة، ويظهر نموذج الإجابة النصي الكامل فور إتمام جميع المحاولات المتاحة للاختبار.</span>
         </div>
       )}
 

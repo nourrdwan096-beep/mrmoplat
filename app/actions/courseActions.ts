@@ -4,14 +4,20 @@ import { supabase } from '@/lib/supabaseClient';
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import { revalidatePath } from 'next/cache';
 import {
+  getServerSession,
   requireStaffSession,
   canAssistantAccessCoursePerm,
   canAssistantAccessAnyCoursePerm,
 } from '@/lib/serverAuth';
-import { getItemTypePermissionKey } from '@/lib/assistantPermissions';
+import { canAccessCourse, getItemTypePermissionKey } from '@/lib/assistantPermissions';
 
 export async function getTeacherCourses() {
-  const { data, error } = await supabase
+  const session = await requireStaffSession();
+  if (!session) {
+    throw new Error('غير مصرح بالوصول لبيانات الكورسات الإدارية');
+  }
+
+  const { data, error } = await supabaseAdmin
     .from('courses')
     .select(`
       *,
@@ -21,19 +27,46 @@ export async function getTeacherCourses() {
     .order('created_at', { ascending: false });
 
   if (error) throw new Error(error.message);
+  if (!session.isTeacher && session.assistantMatrix) {
+    return (data || []).filter((c: any) => canAccessCourse(session.assistantMatrix!, c.id));
+  }
   return data;
 }
 
 export async function getCourseDetails(courseId: string) {
-  const { data: course, error } = await supabase
+  const session = await getServerSession();
+  const { data: course, error } = await supabaseAdmin
     .from('courses')
     .select('*')
     .eq('id', courseId)
     .single();
 
-  if (error) throw new Error(error.message);
+  if (error || !course) throw new Error(error?.message || 'الكورس غير موجود');
 
-  const { data: units, error: unitsError } = await supabase
+  if (!session?.isStaff && course.is_published === false) {
+    throw new Error('هذا الكورس غير متاح حالياً');
+  }
+
+  let canViewMedia = false;
+  if (session?.isStaff) {
+    canViewMedia = true;
+  } else if (session?.role === 'student' && session.status === 'active') {
+    const isFree = course.is_free === true || Number(course.price) === 0;
+    if (isFree) {
+      canViewMedia = true;
+    } else {
+      const { data: enr } = await supabaseAdmin
+        .from('course_enrollments')
+        .select('id')
+        .eq('student_id', session.id)
+        .eq('course_id', courseId)
+        .eq('is_active', true)
+        .maybeSingle();
+      canViewMedia = Boolean(enr?.id);
+    }
+  }
+
+  const { data: units, error: unitsError } = await supabaseAdmin
     .from('course_units')
     .select(`
       *,
@@ -44,10 +77,21 @@ export async function getCourseDetails(courseId: string) {
 
   if (unitsError) throw new Error(unitsError.message);
 
-  // Sort items inside units
+  // Sort items inside units and strip protected media links if caller lacks access
   const formattedUnits = units?.map(u => ({
     ...u,
-    items: (u.items || []).sort((a: any, b: any) => a.order_index - b.order_index)
+    items: (u.items || [])
+      .map((it: any) =>
+        canViewMedia
+          ? it
+          : {
+              ...it,
+              obfuscated_video_id: '',
+              direct_video_url: '',
+              pdf_attachment_url: '',
+            }
+      )
+      .sort((a: any, b: any) => a.order_index - b.order_index)
   })) || [];
 
   return { course, units: formattedUnits };

@@ -236,7 +236,7 @@ export default function AssistantPermissionsManifest({
               </div>
               <span className="text-xs font-black text-slate-600 dark:text-slate-300 tabular-nums whitespace-nowrap shrink-0">
                 {permissions.canManageAllCourses
-                  ? `${globalCoursePermCount} / 17 صلاحية مفعلة`
+                  ? `${globalCoursePermCount} / ${Object.keys(COURSE_PERMISSION_LABELS).length} صلاحية مفعلة`
                   : `${activeScopedCourses.length} كورس مفعّل`}
               </span>
             </div>
@@ -278,7 +278,7 @@ export default function AssistantPermissionsManifest({
 
                         <div className="flex items-center gap-3 shrink-0">
                           <span className="text-xs font-black text-slate-600 dark:text-slate-300 tabular-nums">
-                            {activeCount} / 17 صلاحية
+                            {activeCount} / {Object.keys(COURSE_PERMISSION_LABELS).length} صلاحية
                           </span>
                           {hasAnyCoursePermission(cp) && (
                             <Link

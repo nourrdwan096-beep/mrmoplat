@@ -1,5 +1,6 @@
 'use server';
 
+import { createHmac, timingSafeEqual } from 'crypto';
 import { supabaseAdmin } from '@/lib/supabaseServer';
 import {
   getServerSession,
@@ -9,6 +10,55 @@ import {
   canAssistantAccessAnyCoursePerm,
 } from '@/lib/serverAuth';
 import { getItemTypePermissionKey } from '@/lib/assistantPermissions';
+
+function getCertificateSigningSecret(): string {
+  return process.env.HONOR_CERTIFICATE_SECRET
+    || process.env.CERTIFICATE_SIGNING_SECRET
+    || 'mrmoplat-honor-certificate-development-secret';
+}
+
+function encodeCertificatePayload(payload: {
+  studentId: string;
+  courseId: string;
+  itemId: string;
+  percentage: number;
+}): string {
+  return Buffer.from(JSON.stringify({
+    studentId: payload.studentId,
+    courseId: payload.courseId,
+    itemId: payload.itemId,
+    percentage: payload.percentage,
+  }), 'utf8').toString('base64url');
+}
+
+function signHonorCertificate(payload: {
+  studentId: string;
+  courseId: string;
+  itemId: string;
+  percentage: number;
+}): string {
+  const encodedPayload = encodeCertificatePayload(payload);
+  const signature = createHmac('sha256', getCertificateSigningSecret())
+    .update(encodedPayload)
+    .digest('base64url');
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyHonorCertificateCode(code: string, payload: {
+  studentId: string;
+  courseId: string;
+  itemId: string;
+  percentage: number;
+}): boolean {
+  if (!code) return false;
+
+  const expectedCode = signHonorCertificate(payload);
+  const codeBuffer = Buffer.from(code);
+  const expectedBuffer = Buffer.from(expectedCode);
+
+  return codeBuffer.length === expectedBuffer.length
+    && timingSafeEqual(codeBuffer, expectedBuffer);
+}
 
 const STAFF_PROXY_TABLES = new Set([
   'announcements',
@@ -76,6 +126,10 @@ async function assertProxyAccess(
       throw new Error('يجب تسجيل الدخول أولاً');
     }
     if (session.isStaff) return session;
+    // STRICT SECURITY: Students cannot directly write/upsert/update/delete progress or scores!
+    if (op !== 'select') {
+      throw new Error('غير مصرح بتعديل الدرجات أو حالة الإنجاز مباشرة');
+    }
     const records = Array.isArray(payloadOrMatch) ? payloadOrMatch : [payloadOrMatch];
     for (const rec of records) {
       const targetStudentId = rec?.student_id || rec?.studentId;
@@ -87,6 +141,118 @@ async function assertProxyAccess(
   }
 
   throw new Error('الجدول غير مصرح بالوصول إليه عبر هذه الواجهة');
+}
+
+async function checkStudentItemAccessServer(
+  studentId: string,
+  itemRow: any
+): Promise<{ isAccessible: boolean; reason?: string }> {
+  if (!itemRow || !itemRow.course_id) {
+    return { isAccessible: false, reason: 'المحتوى المطلوب غير موجود.' };
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+
+  const { data: courseRow } = await supabaseAdmin
+    .from('courses')
+    .select('id, is_published, publish_date, expiry_date, description')
+    .eq('id', itemRow.course_id)
+    .maybeSingle();
+
+  if (!courseRow || courseRow.is_published === false) {
+    return { isAccessible: false, reason: 'هذا الكورس غير متاح أو مغلق حالياً.' };
+  }
+  if (courseRow.publish_date && today < String(courseRow.publish_date)) {
+    return { isAccessible: false, reason: `هذا الكورس مجدول للبدء بتاريخ ${courseRow.publish_date}.` };
+  }
+  if (courseRow.expiry_date && today > String(courseRow.expiry_date)) {
+    return { isAccessible: false, reason: `انتهت صلاحية هذا الكورس بتاريخ ${courseRow.expiry_date}.` };
+  }
+
+  if (itemRow.start_date && today < String(itemRow.start_date)) {
+    return { isAccessible: false, reason: `هذا العنصر مجدول ومحدد للبدء بتاريخ ${itemRow.start_date}.` };
+  }
+  if (itemRow.end_date && today > String(itemRow.end_date)) {
+    return { isAccessible: false, reason: `انتهى الموعد النهائي لهذا العنصر بتاريخ ${itemRow.end_date}.` };
+  }
+
+  const parsedCourse = parseCourseFromRow(courseRow);
+  const enforceUnitProgression = parsedCourse.enforceUnitProgression ?? true;
+  const enforceItemProgression = parsedCourse.enforceItemProgression ?? true;
+
+  if (!enforceUnitProgression && !enforceItemProgression) {
+    return { isAccessible: true };
+  }
+
+  const [{ data: units }, { data: allItems }, { data: progRows }] = await Promise.all([
+    supabaseAdmin
+      .from('course_units')
+      .select('id, order_index, unit_number, title')
+      .eq('course_id', itemRow.course_id)
+      .order('order_index', { ascending: true }),
+    supabaseAdmin
+      .from('unit_items')
+      .select('id, unit_id, item_type, order_index, is_prerequisite_required')
+      .eq('course_id', itemRow.course_id)
+      .order('order_index', { ascending: true }),
+    supabaseAdmin
+      .from('student_item_progress')
+      .select('item_id, is_passed')
+      .eq('student_id', studentId)
+      .eq('course_id', itemRow.course_id),
+  ]);
+
+  const passedSet = new Set(
+    (progRows || []).filter((p: any) => p.is_passed === true).map((p: any) => p.item_id)
+  );
+  const sortedUnits = (units || []).slice().sort(
+    (a: any, b: any) => (a.order_index || 0) - (b.order_index || 0) || (a.unit_number || 0) - (b.unit_number || 0)
+  );
+  const currentUnitIdx = sortedUnits.findIndex((u: any) => u.id === itemRow.unit_id);
+
+  const itemsByUnit = new Map<string, any[]>();
+  (allItems || []).forEach((it: any) => {
+    const arr = itemsByUnit.get(it.unit_id) || [];
+    arr.push(it);
+    itemsByUnit.set(it.unit_id, arr);
+  });
+
+  if (enforceUnitProgression && currentUnitIdx > 0) {
+    for (let uIdx = 0; uIdx < currentUnitIdx; uIdx++) {
+      const prevUnit = sortedUnits[uIdx];
+      const prevItems = itemsByUnit.get(prevUnit.id) || [];
+      for (const pItem of prevItems) {
+        const isCore = pItem.item_type === 'video' || pItem.item_type === 'homework' || pItem.item_type === 'exam';
+        if (isCore && pItem.is_prerequisite_required !== false && !passedSet.has(pItem.id)) {
+          return {
+            isAccessible: false,
+            reason: `يجب إكمال واجتياز (${prevUnit.title}) أولاً لفتح هذا المحتوى.`,
+          };
+        }
+      }
+    }
+  }
+
+  if (enforceItemProgression && itemRow.is_prerequisite_required !== false && itemRow.unit_id) {
+    const currentUnitItems = (itemsByUnit.get(itemRow.unit_id) || []).slice().sort(
+      (a: any, b: any) => (a.order_index || 0) - (b.order_index || 0)
+    );
+    const currentItemIdx = currentUnitItems.findIndex((i: any) => i.id === itemRow.id);
+    if (currentItemIdx > 0) {
+      for (let iIdx = 0; iIdx < currentItemIdx; iIdx++) {
+        const prevItem = currentUnitItems[iIdx];
+        const isCore = prevItem.item_type === 'video' || prevItem.item_type === 'homework' || prevItem.item_type === 'exam';
+        if (isCore && prevItem.is_prerequisite_required !== false && !passedSet.has(prevItem.id)) {
+          return {
+            isAccessible: false,
+            reason: 'يجب اجتياز الدروس والاختبارات السابقة أولاً قبل الدخول إلى هذا التقييم.',
+          };
+        }
+      }
+    }
+  }
+
+  return { isAccessible: true };
 }
 
 async function hasCourseContentAccess(
@@ -521,6 +687,8 @@ export async function fetchItemsServer(unitId: string): Promise<any[]> {
       totalMarks: i.total_marks || 100,
       passingScorePercentage: i.passing_score_percentage || 60,
       maxExamAttempts: i.max_exam_attempts !== null && i.max_exam_attempts !== undefined ? Number(i.max_exam_attempts) : 3,
+      startDate: i.start_date || undefined,
+      endDate: i.end_date || undefined,
       videoSourceType: i.video_source_type || 'internal_secured',
       obfuscatedVideoId: canViewMedia ? (i.obfuscated_video_id || '') : '',
       directVideoUrl: canViewMedia ? (i.direct_video_url || '') : '',
@@ -549,7 +717,7 @@ export async function saveItemServer(item: any): Promise<any> {
     }
   }
   const itemId = item.id && item.id.length === 36 ? item.id : crypto.randomUUID();
-  const payload = {
+  const payload: Record<string, any> = {
     id: itemId,
     unit_id: item.unitId,
     course_id: item.courseId,
@@ -568,6 +736,8 @@ export async function saveItemServer(item: any): Promise<any> {
     is_prerequisite_required: item.isPrerequisiteRequired !== false,
     updated_at: new Date().toISOString(),
   };
+  if (item.startDate !== undefined) payload.start_date = item.startDate || null;
+  if (item.endDate !== undefined) payload.end_date = item.endDate || null;
 
   const { data, error } = await supabaseAdmin
     .from('unit_items')
@@ -604,6 +774,8 @@ export async function saveItemServer(item: any): Promise<any> {
     totalMarks: i.total_marks,
     passingScorePercentage: i.passing_score_percentage,
     maxExamAttempts: i.max_exam_attempts,
+    startDate: i.start_date || undefined,
+    endDate: i.end_date || undefined,
     videoSourceType: i.video_source_type,
     obfuscatedVideoId: i.obfuscated_video_id,
     directVideoUrl: i.direct_video_url,
@@ -803,18 +975,39 @@ export async function fetchSecuredStudentQuestionsServer(itemId: string): Promis
     const session = await getServerSession();
     if (!session) return [];
 
+    const { data: itemMeta } = await supabaseAdmin
+      .from('unit_items')
+      .select('id, course_id, unit_id, item_type, order_index, is_prerequisite_required, start_date, end_date, max_exam_attempts')
+      .eq('id', itemId)
+      .maybeSingle();
+
+    if (!itemMeta || (itemMeta.item_type !== 'exam' && itemMeta.item_type !== 'homework')) {
+      return [];
+    }
+
     if (!session.isStaff) {
-      const { data: itemMeta } = await supabaseAdmin
-        .from('unit_items')
-        .select('course_id')
-        .eq('id', itemId)
+      const allowed = await hasCourseContentAccess(session, itemMeta.course_id);
+      if (!allowed) return [];
+
+      const accessCheck = await checkStudentItemAccessServer(session.id, itemMeta);
+      if (!accessCheck.isAccessible) return [];
+
+      const maxAttempts =
+        itemMeta.max_exam_attempts !== null && itemMeta.max_exam_attempts !== undefined
+          ? Math.max(1, Number(itemMeta.max_exam_attempts))
+          : 3;
+      const { data: prog } = await supabaseAdmin
+        .from('student_item_progress')
+        .select('attempts_count, is_passed')
+        .eq('student_id', session.id)
+        .eq('item_id', itemId)
         .maybeSingle();
 
-      const allowed = await hasCourseContentAccess(session, itemMeta?.course_id);
-      if (!allowed) return [];
+      if (Number(prog?.attempts_count || 0) >= maxAttempts && !prog?.is_passed) {
+        return [];
+      }
     } else if (!session.isTeacher) {
-      const courseId = await resolveCourseIdForItem(itemId);
-      if (!courseId || !canAssistantAccessCoursePerm(session, courseId, 'canViewQuestions')) {
+      if (!canAssistantAccessCoursePerm(session, itemMeta.course_id, 'canViewQuestions')) {
         return [];
       }
     }
@@ -1057,6 +1250,8 @@ export async function submitAndGradeExamServer(payload: {
   attemptsCount: number;
   maxExamAttempts: number;
   isExhausted: boolean;
+  canRevealModelAnswers?: boolean;
+  certificateCode?: string;
   questionResults: Record<string, { earned: number; max: number; isCorrect: boolean }>;
   error?: string;
 }> {
@@ -1077,28 +1272,10 @@ export async function submitAndGradeExamServer(payload: {
       };
     }
 
-    const { itemId, courseId, answers, isSecurityTerminated } = payload;
+    const { itemId, answers, isSecurityTerminated } = payload;
     const studentId = session.isStaff ? payload.studentId : session.id;
 
-    if (!session.isStaff) {
-      const enrolled = await hasCourseContentAccess(session, courseId);
-      if (!enrolled) {
-        return {
-          success: false,
-          totalPoints: 0,
-          earnedPoints: 0,
-          percentage: 0,
-          isPassed: false,
-          attemptsCount: 0,
-          maxExamAttempts: 3,
-          isExhausted: false,
-          questionResults: {},
-          error: 'غير مصرح بتسليم هذا الاختبار بدون اشتراك مفعل',
-        };
-      }
-    }
-
-    if (!itemId || !studentId || !courseId) {
+    if (!itemId || !studentId) {
       return {
         success: false,
         totalPoints: 0,
@@ -1113,20 +1290,67 @@ export async function submitAndGradeExamServer(payload: {
       };
     }
 
-    // 1. Fetch item configuration to get passing score and max attempts
+    // 1. Fetch item configuration authoritatively from DB (NEVER trust client courseId!)
     const { data: itemData, error: itemErr } = await supabaseAdmin
       .from('unit_items')
-      .select('passing_score_percentage, max_exam_attempts, total_marks')
+      .select('id, course_id, unit_id, item_type, order_index, is_prerequisite_required, start_date, end_date, passing_score_percentage, max_exam_attempts, total_marks')
       .eq('id', itemId)
       .maybeSingle();
 
-    if (itemErr) {
-      console.warn('submitAndGradeExamServer item fetch warning:', itemErr);
+    if (itemErr || !itemData || (itemData.item_type !== 'exam' && itemData.item_type !== 'homework')) {
+      return {
+        success: false,
+        totalPoints: 0,
+        earnedPoints: 0,
+        percentage: 0,
+        isPassed: false,
+        attemptsCount: 0,
+        maxExamAttempts: 3,
+        isExhausted: false,
+        questionResults: {},
+        error: 'الاختبار أو الواجب المطلوب غير موجود',
+      };
+    }
+
+    const canonicalCourseId = itemData.course_id;
+
+    if (!session.isStaff) {
+      const enrolled = await hasCourseContentAccess(session, canonicalCourseId);
+      if (!enrolled) {
+        return {
+          success: false,
+          totalPoints: 0,
+          earnedPoints: 0,
+          percentage: 0,
+          isPassed: false,
+          attemptsCount: 0,
+          maxExamAttempts: 3,
+          isExhausted: false,
+          questionResults: {},
+          error: 'غير مصرح بتسليم هذا الاختبار بدون اشتراك مفعل',
+        };
+      }
+
+      const accessCheck = await checkStudentItemAccessServer(session.id, itemData);
+      if (!accessCheck.isAccessible) {
+        return {
+          success: false,
+          totalPoints: 0,
+          earnedPoints: 0,
+          percentage: 0,
+          isPassed: false,
+          attemptsCount: 0,
+          maxExamAttempts: 3,
+          isExhausted: false,
+          questionResults: {},
+          error: accessCheck.reason || 'هذا التقييم مغلق حالياً أو لم يتم اجتياز المتطلبات السابقة.',
+        };
+      }
     }
 
     const passingScorePercentage = itemData?.passing_score_percentage ?? 60;
     const maxExamAttempts = itemData?.max_exam_attempts !== null && itemData?.max_exam_attempts !== undefined
-      ? Number(itemData.max_exam_attempts)
+      ? Math.max(1, Number(itemData.max_exam_attempts))
       : 3;
 
     // 2. Fetch current student progress for this item
@@ -1154,6 +1378,16 @@ export async function submitAndGradeExamServer(payload: {
         error: `عذراً، لقد استنفدت جميع المحاولات المسموح بها (${maxExamAttempts} محاولات). يرجى مراجعة المعلم أو المساعد لفتح محاولة إضافية.`,
       };
     }
+
+    // For homework items, lock any pre-verified question choice to prevent interactive-oracle tampering
+    const lockedHomeworkAnswers: Record<string, any> =
+      itemData.item_type === 'homework' &&
+      existingProg?.student_answers &&
+      typeof existingProg.student_answers === 'object' &&
+      existingProg.student_answers.__homeworkChecked &&
+      typeof existingProg.student_answers.__homeworkChecked === 'object'
+        ? existingProg.student_answers.__homeworkChecked
+        : {};
 
     // 3. Fetch true questions with answers securely from database
     const { data: questionsData, error: qErr } = await supabaseAdmin
@@ -1186,6 +1420,7 @@ export async function submitAndGradeExamServer(payload: {
     // If exam was terminated due to a security violation, score is strictly 0
     if (isSecurityTerminated) {
       questions.forEach((q: any) => {
+        if (q.question_type === 'passage') return;
         const maxPts = Number(q.points) || 1;
         totalPoints += maxPts;
         questionResults[q.id] = { earned: 0, max: maxPts, isCorrect: false };
@@ -1206,9 +1441,10 @@ export async function submitAndGradeExamServer(payload: {
           : (correctAnswerId ? [correctAnswerId] : []);
         const idealAnswer = isOptionsObj ? (q.options.idealAnswer || q.ideal_answer || '') : (q.ideal_answer || '');
         const wordBankBlanks = isOptionsObj ? (q.options.wordBankBlanks || []) : (q.word_bank_blanks || []);
+        const lockedChoice = lockedHomeworkAnswers[q.id];
 
         if (q.question_type === 'mcq' || q.question_type === 'tf') {
-          const chosen = answers.mcqAnswers?.[q.id];
+          const chosen = lockedChoice !== undefined ? lockedChoice.chosenAnswer : answers.mcqAnswers?.[q.id];
           const isCorrect = Boolean(chosen && chosen === correctAnswerId);
           const earned = isCorrect ? maxPts : 0;
           earnedPoints += earned;
@@ -1222,14 +1458,17 @@ export async function submitAndGradeExamServer(payload: {
             explanation: q.explanation || '',
           };
         } else if (q.question_type === 'multi_select') {
-          const chosen = (answers.multiSelectAnswers?.[q.id] || []).slice().sort();
+          const rawChosen = lockedChoice !== undefined
+            ? (Array.isArray(lockedChoice.chosenAnswer) ? lockedChoice.chosenAnswer : [])
+            : (answers.multiSelectAnswers?.[q.id] || []);
+          const chosen = rawChosen.slice().sort();
           const expected = correctAnswerIds.slice().sort();
           const isExactMatch =
             chosen.length === expected.length &&
-            chosen.every((val, idx) => val === expected[idx]);
+            chosen.every((val: string, idx: number) => val === expected[idx]);
 
-          const correctPicks = chosen.filter((id) => expected.includes(id)).length;
-          const wrongPicks = chosen.filter((id) => !expected.includes(id)).length;
+          const correctPicks = chosen.filter((id: string) => expected.includes(id)).length;
+          const wrongPicks = chosen.filter((id: string) => !expected.includes(id)).length;
           const totalCount = expected.length || 1;
           let earned = 0;
 
@@ -1255,7 +1494,10 @@ export async function submitAndGradeExamServer(payload: {
             explanation: q.explanation || '',
           };
         } else if (q.question_type === 'word_bank') {
-          const studentBlanks = answers.wordBankAnswers?.[q.id] || {};
+          const studentBlanks =
+            lockedChoice !== undefined && typeof lockedChoice.chosenAnswer === 'object' && lockedChoice.chosenAnswer !== null
+              ? lockedChoice.chosenAnswer
+              : (answers.wordBankAnswers?.[q.id] || {});
           let correctCount = 0;
 
           wordBankBlanks.forEach((b: any) => {
@@ -1281,7 +1523,8 @@ export async function submitAndGradeExamServer(payload: {
           };
         } else {
           // Text / Essay / Rewrite
-          const ans = (answers.textAnswers?.[q.id] || '').trim().toLowerCase();
+          const rawAns = lockedChoice !== undefined ? String(lockedChoice.chosenAnswer || '') : (answers.textAnswers?.[q.id] || '');
+          const ans = rawAns.trim().toLowerCase();
           const ideal = idealAnswer.trim().toLowerCase();
           const isMatch = Boolean(ideal && ans === ideal);
           const earned = isMatch ? maxPts : 0;
@@ -1299,16 +1542,28 @@ export async function submitAndGradeExamServer(payload: {
       });
     }
 
-    const percentage = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
+    earnedPoints = Math.min(totalPoints, Math.max(0, parseFloat(earnedPoints.toFixed(2))));
+    const percentage = totalPoints > 0 ? Math.min(100, Math.max(0, Math.round((earnedPoints / totalPoints) * 100))) : 0;
     const isPassed = percentage >= passingScorePercentage;
     const newAttemptsCount = currentAttempts + 1;
     const isExhausted = newAttemptsCount >= maxExamAttempts && !isPassed;
+
+    // Certificate only minted server-side for EXAMS when passed with >= 80%
+    const certificateCode =
+      itemData.item_type === 'exam' && isPassed && percentage >= 80
+        ? signHonorCertificate({
+            studentId,
+            courseId: canonicalCourseId,
+            itemId,
+            percentage,
+          })
+        : undefined;
 
     // Strict rule: "تتتاخد درجة الامتحان الأخير، يعني آخر مرة هو دخلها... فبتتتاخد درجة الامتحان الأخير بس"
     const recordPayload = {
       id: existingProg?.id || crypto.randomUUID(),
       student_id: studentId,
-      course_id: courseId,
+      course_id: canonicalCourseId,
       item_id: itemId,
       status: isPassed ? 'completed' : (isExhausted ? 'failed_exhausted' : 'in_progress'),
       attempts_count: newAttemptsCount,
@@ -1328,9 +1583,11 @@ export async function submitAndGradeExamServer(payload: {
       console.warn('submitAndGradeExamServer upsert error:', upsertErr);
     }
 
-    // SECURITY HARDENING: If student did not pass the exam, NEVER return model answers,
-    // ideal answers, or explanations to prevent cheating or inspection in network DevTools!
-    const sanitizedQuestionResults = isPassed
+    // SECURITY HARDENING: Never expose exact answer keys unless passed AND (homework OR final attempt used)!
+    const canRevealModelAnswers =
+      isPassed && (itemData.item_type === 'homework' || newAttemptsCount >= maxExamAttempts);
+
+    const sanitizedQuestionResults = canRevealModelAnswers
       ? questionResults
       : Object.fromEntries(
           Object.entries(questionResults).map(([qId, res]) => [
@@ -1356,6 +1613,8 @@ export async function submitAndGradeExamServer(payload: {
       attemptsCount: newAttemptsCount,
       maxExamAttempts,
       isExhausted,
+      canRevealModelAnswers,
+      certificateCode,
       questionResults: sanitizedQuestionResults,
     };
   } catch (err: any) {
@@ -1395,8 +1654,10 @@ export async function fetchStudentProgressServer(studentId: string, courseId?: s
     }
 
     const { data, error } = await query;
+    let rows: any[] = data || [];
+    const itemTypeMap = new Map<string, string>();
+
     if (error) {
-      // Fallback if join syntax is not supported in the schema
       let fallbackQuery = supabaseAdmin
         .from('student_item_progress')
         .select('*')
@@ -1409,14 +1670,72 @@ export async function fetchStudentProgressServer(studentId: string, courseId?: s
         console.warn('fetchStudentProgressServer fallback warning:', rawErr);
         return [];
       }
-      return rawData || [];
+      rows = rawData || [];
     }
 
-    return data || [];
+    const missingTypeIds = rows
+      .filter((r) => !r.unit_items?.item_type && r.item_id)
+      .map((r) => r.item_id);
+
+    if (missingTypeIds.length > 0) {
+      const { data: itemsInfo } = await supabaseAdmin
+        .from('unit_items')
+        .select('id, item_type')
+        .in('id', missingTypeIds);
+      (itemsInfo || []).forEach((it: any) => {
+        itemTypeMap.set(it.id, it.item_type);
+      });
+    }
+
+    return rows.map((row: any) => {
+      const resolvedItemType = row.unit_items?.item_type || itemTypeMap.get(row.item_id);
+      const score = Number(row.last_score ?? row.highest_score ?? 0);
+      const eligible = resolvedItemType === 'exam' && row.is_passed === true && score >= 80;
+      const certificate_code = eligible
+        ? signHonorCertificate({
+            studentId: targetStudentId,
+            courseId: row.course_id,
+            itemId: row.item_id,
+            percentage: score,
+          })
+        : undefined;
+
+      // Strip internal __homeworkChecked cache from student response if present
+      let cleanAnswers = row.student_answers;
+      if (cleanAnswers && typeof cleanAnswers === 'object' && '__homeworkChecked' in cleanAnswers) {
+        const { __homeworkChecked: _omit, ...rest } = cleanAnswers;
+        cleanAnswers = rest;
+      }
+
+      return {
+        ...row,
+        student_answers: cleanAnswers,
+        certificate_code,
+      };
+    });
   } catch (err) {
     console.error('fetchStudentProgressServer exception:', err);
     return [];
   }
+}
+
+export async function verifyHonorCertificateServer(payload: {
+  certificateCode: string;
+  studentId: string;
+  courseId: string;
+  itemId: string;
+  percentage: number;
+}): Promise<{ valid: boolean }> {
+  const session = await getServerSession();
+  if (!session) return { valid: false };
+  return {
+    valid: verifyHonorCertificateCode(payload.certificateCode, {
+      studentId: payload.studentId,
+      courseId: payload.courseId,
+      itemId: payload.itemId,
+      percentage: payload.percentage,
+    }),
+  };
 }
 
 // -------------------------------------------------------------
@@ -1710,16 +2029,47 @@ export async function verifyHomeworkQuestionAnswerServer(payload: {
 
     const { itemId, questionId, chosenAnswer } = payload;
 
-    if (!session.isStaff) {
-      const { data: itemMeta } = await supabaseAdmin
-        .from('unit_items')
-        .select('course_id')
-        .eq('id', itemId)
-        .maybeSingle();
+    const { data: itemMeta } = await supabaseAdmin
+      .from('unit_items')
+      .select('id, course_id, unit_id, item_type, order_index, is_prerequisite_required, start_date, end_date')
+      .eq('id', itemId)
+      .maybeSingle();
 
-      const allowed = await hasCourseContentAccess(session, itemMeta?.course_id);
+    // STRICT ANTI-ORACLE INVARIANT: Interactive answer verification is ONLY allowed for HOMEWORK, NEVER for EXAMS!
+    if (!itemMeta || itemMeta.item_type !== 'homework') {
+      return { success: false, isCorrect: false, earnedPoints: 0, maxPoints: 1 };
+    }
+
+    let existingProg: any = null;
+    if (!session.isStaff) {
+      const allowed = await hasCourseContentAccess(session, itemMeta.course_id);
       if (!allowed) {
         return { success: false, isCorrect: false, earnedPoints: 0, maxPoints: 1 };
+      }
+      const accessCheck = await checkStudentItemAccessServer(session.id, itemMeta);
+      if (!accessCheck.isAccessible) {
+        return { success: false, isCorrect: false, earnedPoints: 0, maxPoints: 1 };
+      }
+
+      const { data: progRow } = await supabaseAdmin
+        .from('student_item_progress')
+        .select('*')
+        .eq('student_id', session.id)
+        .eq('item_id', itemId)
+        .maybeSingle();
+      existingProg = progRow;
+
+      // Single-check lock: if this student already verified this homework question, return the locked verdict
+      const lockedVerdict = existingProg?.student_answers?.__homeworkChecked?.[questionId];
+      if (lockedVerdict) {
+        return {
+          success: true,
+          isCorrect: Boolean(lockedVerdict.isCorrect),
+          isPartial: Boolean(lockedVerdict.isPartial),
+          earnedPoints: Number(lockedVerdict.earnedPoints) || 0,
+          maxPoints: Number(lockedVerdict.maxPoints) || 1,
+          explanation: lockedVerdict.explanation,
+        };
       }
     }
 
@@ -1739,18 +2089,25 @@ export async function verifyHomeworkQuestionAnswerServer(payload: {
     const correctAnswerId = q.correct_answer_id || '';
     const explanation = q.explanation || '';
 
+    let verdict: {
+      success: boolean;
+      isCorrect: boolean;
+      isPartial?: boolean;
+      earnedPoints: number;
+      maxPoints: number;
+      explanation?: string;
+    };
+
     if (q.question_type === 'mcq' || q.question_type === 'tf') {
       const isCorrect = chosenAnswer === correctAnswerId;
-      return {
+      verdict = {
         success: true,
         isCorrect,
         earnedPoints: isCorrect ? maxPts : 0,
         maxPoints: maxPts,
         explanation: isCorrect ? explanation : undefined,
       };
-    }
-
-    if (q.question_type === 'multi_select') {
+    } else if (q.question_type === 'multi_select') {
       const correctAnswerIds: string[] = isOptionsObj
         ? (q.options.correctAnswerIds || (correctAnswerId ? [correctAnswerId] : []))
         : (correctAnswerId ? [correctAnswerId] : []);
@@ -1774,16 +2131,15 @@ export async function verifyHomeworkQuestionAnswerServer(payload: {
         earned = parseFloat(((net / totalCount) * maxPts).toFixed(2));
       }
 
-      return {
+      verdict = {
         success: true,
         isCorrect: isExactMatch,
+        isPartial: !isExactMatch && earned > 0,
         earnedPoints: earned,
         maxPoints: maxPts,
-        explanation,
+        explanation: isExactMatch ? explanation : undefined,
       };
-    }
-
-    if (q.question_type === 'word_bank') {
+    } else if (q.question_type === 'word_bank') {
       const wordBankBlanks = isOptionsObj ? (q.options.wordBankBlanks || []) : (q.word_bank_blanks || []);
       const studentBlanks = typeof chosenAnswer === 'object' && chosenAnswer !== null ? chosenAnswer : {};
       let correctCount = 0;
@@ -1801,25 +2157,72 @@ export async function verifyHomeworkQuestionAnswerServer(payload: {
       const earned = parseFloat((correctCount * blankPoints).toFixed(2));
       const isExact = totalBlanks > 0 && correctCount === totalBlanks;
 
-      return {
+      verdict = {
         success: true,
         isCorrect: isExact,
+        isPartial: !isExact && earned > 0,
         earnedPoints: earned,
         maxPoints: maxPts,
-        explanation,
+        explanation: isExact ? explanation : undefined,
+      };
+    } else {
+      // Text / Essay
+      const idealAnswer = isOptionsObj ? (q.options.idealAnswer || q.ideal_answer || '') : (q.ideal_answer || '');
+      const isTextMatch = Boolean(idealAnswer && String(chosenAnswer).trim().toLowerCase() === idealAnswer.trim().toLowerCase());
+      verdict = {
+        success: true,
+        isCorrect: isTextMatch,
+        earnedPoints: isTextMatch ? maxPts : 0,
+        maxPoints: maxPts,
+        explanation: isTextMatch ? explanation : undefined,
       };
     }
 
-    // Text / Essay
-    const idealAnswer = isOptionsObj ? (q.options.idealAnswer || q.ideal_answer || '') : (q.ideal_answer || '');
-    const isTextMatch = Boolean(idealAnswer && String(chosenAnswer).trim().toLowerCase() === idealAnswer.trim().toLowerCase());
-    return {
-      success: true,
-      isCorrect: isTextMatch,
-      earnedPoints: isTextMatch ? maxPts : 0,
-      maxPoints: maxPts,
-      explanation,
-    };
+    // Persist locked first check for students so this question cannot be probed repeatedly
+    if (!session.isStaff && !existingProg?.is_passed) {
+      const prevAnswers =
+        existingProg?.student_answers && typeof existingProg.student_answers === 'object'
+          ? existingProg.student_answers
+          : {};
+      const prevChecked =
+        prevAnswers.__homeworkChecked && typeof prevAnswers.__homeworkChecked === 'object'
+          ? prevAnswers.__homeworkChecked
+          : {};
+
+      const nextAnswers = {
+        ...prevAnswers,
+        __homeworkChecked: {
+          ...prevChecked,
+          [questionId]: {
+            chosenAnswer,
+            isCorrect: verdict.isCorrect,
+            isPartial: Boolean(verdict.isPartial),
+            earnedPoints: verdict.earnedPoints,
+            maxPoints: verdict.maxPoints,
+            explanation: verdict.explanation || '',
+          },
+        },
+      };
+
+      await supabaseAdmin.from('student_item_progress').upsert(
+        {
+          id: existingProg?.id || crypto.randomUUID(),
+          student_id: session.id,
+          course_id: itemMeta.course_id,
+          item_id: itemId,
+          status: existingProg?.status || 'in_progress',
+          attempts_count: Number(existingProg?.attempts_count || 0),
+          highest_score: Number(existingProg?.highest_score || 0),
+          last_score: Number(existingProg?.last_score || 0),
+          is_passed: Boolean(existingProg?.is_passed),
+          student_answers: nextAnswers,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'student_id,item_id' }
+      );
+    }
+
+    return verdict;
   } catch (err) {
     console.error('verifyHomeworkQuestionAnswerServer exception:', err);
     return { success: false, isCorrect: false, earnedPoints: 0, maxPoints: 1 };
@@ -2150,5 +2553,459 @@ export async function fetchCourseEnrolledStudentsDataServer(courseId: string) {
       progress: [],
       deviceCountsByStudent: {} as Record<string, number>,
     };
+  }
+}
+
+// -------------------------------------------------------------
+// ATOMIC ASSESSMENT CONVERSION, INDEPENDENT CLONING & CROSS-COURSE EXPORT
+// -------------------------------------------------------------
+
+function mapUnitItemRow(i: any) {
+  return {
+    id: i.id,
+    unitId: i.unit_id,
+    courseId: i.course_id,
+    itemType: i.item_type,
+    title: i.title,
+    description: i.description || '',
+    orderIndex: i.order_index || 1,
+    durationMinutes: i.duration_minutes || 0,
+    totalMarks: i.total_marks || 100,
+    passingScorePercentage: i.passing_score_percentage || 60,
+    maxExamAttempts: i.max_exam_attempts !== null && i.max_exam_attempts !== undefined ? Number(i.max_exam_attempts) : 3,
+    startDate: i.start_date || undefined,
+    endDate: i.end_date || undefined,
+    videoSourceType: i.video_source_type || 'internal_secured',
+    obfuscatedVideoId: i.obfuscated_video_id || '',
+    directVideoUrl: i.direct_video_url || '',
+    pdfAttachmentUrl: i.pdf_attachment_url || '',
+    isPrerequisiteRequired: i.is_prerequisite_required ?? true,
+    createdAt: i.created_at || new Date().toISOString(),
+  };
+}
+
+async function deepCloneQuestionsOnServer(sourceItemId: string, targetItemId: string): Promise<{ questionsCount: number; totalMarks: number }> {
+  const { data: sourceQuestions, error: qFetchErr } = await supabaseAdmin
+    .from('quiz_questions')
+    .select('*')
+    .eq('item_id', sourceItemId)
+    .order('order_index', { ascending: true });
+
+  if (qFetchErr) {
+    throw new Error(`فشل قراءة أسئلة المصدر للنسخ: ${qFetchErr.message}`);
+  }
+
+  const list = sourceQuestions || [];
+  if (list.length === 0) {
+    return { questionsCount: 0, totalMarks: 0 };
+  }
+
+  const idMap = new Map<string, string>();
+  list.forEach((q: any) => {
+    idMap.set(q.id, crypto.randomUUID());
+  });
+
+  let totalMarks = 0;
+  const clonedRows = list.map((q: any, idx: number) => {
+    const newId = idMap.get(q.id) || crypto.randomUUID();
+    const clonedOptions = q.options ? JSON.parse(JSON.stringify(q.options)) : {};
+    if (clonedOptions && typeof clonedOptions === 'object' && !Array.isArray(clonedOptions)) {
+      if (clonedOptions.parentId && idMap.has(clonedOptions.parentId)) {
+        clonedOptions.parentId = idMap.get(clonedOptions.parentId);
+      } else if (clonedOptions.parentId) {
+        clonedOptions.parentId = null;
+      }
+    }
+
+    if (q.question_type !== 'passage') {
+      totalMarks += Number(q.points) || 1;
+    }
+
+    return {
+      id: newId,
+      item_id: targetItemId,
+      question_text: q.question_text || '',
+      question_image_url: q.question_image_url || null,
+      question_type: q.question_type || 'mcq',
+      options: clonedOptions,
+      correct_answer_id: q.correct_answer_id || '',
+      explanation: q.explanation || null,
+      points: Number(q.points) || 1,
+      order_index: q.order_index || idx + 1,
+    };
+  });
+
+  const { error: insertErr } = await supabaseAdmin.from('quiz_questions').insert(clonedRows);
+  if (insertErr) {
+    throw new Error(`فشل نسخ الأسئلة للعنصر الجديد: ${insertErr.message}`);
+  }
+
+  return { questionsCount: clonedRows.length, totalMarks };
+}
+
+export async function convertOrCloneAssessmentServer(payload: {
+  sourceItemId: string;
+  targetType: 'exam' | 'homework';
+  mode: 'convert_in_place' | 'keep_copy';
+  newTitle?: string;
+  targetCourseId?: string;
+  targetUnitId?: string;
+}): Promise<{
+  success: boolean;
+  item?: any;
+  questionsCount?: number;
+  mode?: 'convert_in_place' | 'keep_copy';
+  error?: string;
+}> {
+  try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return { success: false, error: 'غير مصرح بهذه العملية الإدارية' };
+    }
+
+    const { sourceItemId, targetType, mode, newTitle, targetCourseId, targetUnitId } = payload;
+    if (!sourceItemId || (targetType !== 'exam' && targetType !== 'homework') || (mode !== 'convert_in_place' && mode !== 'keep_copy')) {
+      return { success: false, error: 'بيانات التحويل أو النسخ غير صالحة' };
+    }
+
+    const { data: sourceItem, error: srcErr } = await supabaseAdmin
+      .from('unit_items')
+      .select('*')
+      .eq('id', sourceItemId)
+      .maybeSingle();
+
+    if (srcErr || !sourceItem) {
+      return { success: false, error: 'لم يتم العثور على الامتحان أو الواجب المطلوب' };
+    }
+
+    if (sourceItem.item_type !== 'exam' && sourceItem.item_type !== 'homework') {
+      return { success: false, error: 'التحويل الثنائي متاح فقط للامتحانات والواجبات' };
+    }
+
+    if (!staff.isTeacher && !canAssistantAccessCoursePerm(staff, sourceItem.course_id, 'canConvertAssessments')) {
+      return {
+        success: false,
+        error: 'غير مصرح للمساعد بتحويل الامتحانات والواجبات ذهاباً وإياباً. يرجى مراجعة المعلم لمنح الصلاحية.',
+      };
+    }
+
+    const resolvedTargetCourseId = targetCourseId || sourceItem.course_id;
+    const resolvedTargetUnitId = targetUnitId || sourceItem.unit_id;
+
+    if (mode === 'keep_copy' && resolvedTargetCourseId !== sourceItem.course_id && !staff.isTeacher) {
+      if (!canAssistantAccessCoursePerm(staff, sourceItem.course_id, 'canTransferContent')) {
+        return { success: false, error: 'غير مصرح للمساعد بنقل النسخ إلى كورس آخر' };
+      }
+      const targetPerm = targetType === 'exam' ? 'canAddExams' : 'canAddHomework';
+      if (!canAssistantAccessAnyCoursePerm(staff, resolvedTargetCourseId, [targetPerm, 'canTransferContent', 'canConvertAssessments'])) {
+        return { success: false, error: 'غير مصرح للمساعد بإضافة محتوى في الكورس المستهدف' };
+      }
+    }
+
+    const { data: existingQuestions } = await supabaseAdmin
+      .from('quiz_questions')
+      .select('id, points, question_type')
+      .eq('item_id', sourceItemId);
+
+    const qList = existingQuestions || [];
+    const computedMarks = qList.reduce((sum: number, q: any) => {
+      if (q.question_type === 'passage') return sum;
+      return sum + (Number(q.points) || 1);
+    }, 0);
+    const finalTotalMarks = computedMarks > 0 ? computedMarks : (Number(sourceItem.total_marks) || 100);
+    const nowIso = new Date().toISOString();
+
+    if (mode === 'convert_in_place') {
+      if (sourceItem.item_type === targetType) {
+        return { success: false, error: 'العنصر يحمل نفس النوع المحدد بالفعل' };
+      }
+
+      const updateFields: Record<string, any> = {
+        item_type: targetType,
+        total_marks: finalTotalMarks,
+        updated_at: nowIso,
+      };
+      if (newTitle && newTitle.trim()) {
+        updateFields.title = newTitle.trim();
+      }
+
+      const { data: updatedRows, error: upErr } = await supabaseAdmin
+        .from('unit_items')
+        .update(updateFields)
+        .eq('id', sourceItemId)
+        .select();
+
+      if (upErr || !updatedRows?.[0]) {
+        return { success: false, error: upErr?.message || 'فشل تحويل العنصر في قاعدة البيانات' };
+      }
+
+      try {
+        await supabaseAdmin.from('audit_logs').insert([{
+          actor_id: staff.id,
+          actor_name: staff.fullName,
+          actor_role: staff.role,
+          action_type: 'CONVERT_ASSESSMENT_IN_PLACE',
+          target_entity: 'unit_items',
+          target_id: sourceItemId,
+          details: {
+            courseId: sourceItem.course_id,
+            fromType: sourceItem.item_type,
+            toType: targetType,
+            questionsCount: qList.length,
+            title: updatedRows[0].title,
+          },
+        }]);
+      } catch {}
+
+      return {
+        success: true,
+        item: mapUnitItemRow(updatedRows[0]),
+        questionsCount: qList.length,
+        mode: 'convert_in_place',
+      };
+    }
+
+    // Mode: keep_copy (Independent clone preserving the original item completely untouched)
+    const { data: unitCheck } = await supabaseAdmin
+      .from('course_units')
+      .select('id, course_id')
+      .eq('id', resolvedTargetUnitId)
+      .maybeSingle();
+
+    if (!unitCheck || unitCheck.course_id !== resolvedTargetCourseId) {
+      return { success: false, error: 'الوحدة المستهدفة غير صالحة أو لا تنتمي للكورس المختار' };
+    }
+
+    const newItemId = crypto.randomUUID();
+    const defaultSuffix = targetType === 'homework' ? 'نسخة واجب' : 'نسخة امتحان';
+    const finalTitle = newTitle?.trim() || `${sourceItem.title} (${defaultSuffix})`;
+
+    const { data: existingUnitItems } = await supabaseAdmin
+      .from('unit_items')
+      .select('order_index')
+      .eq('unit_id', resolvedTargetUnitId)
+      .order('order_index', { ascending: false })
+      .limit(1);
+
+    const nextOrderIndex = Number(existingUnitItems?.[0]?.order_index || 0) + 1;
+
+    const newItemPayload: Record<string, any> = {
+      id: newItemId,
+      unit_id: resolvedTargetUnitId,
+      course_id: resolvedTargetCourseId,
+      item_type: targetType,
+      title: finalTitle,
+      description: sourceItem.description || null,
+      order_index: nextOrderIndex,
+      duration_minutes: Number(sourceItem.duration_minutes) || 0,
+      total_marks: finalTotalMarks,
+      passing_score_percentage: Number(sourceItem.passing_score_percentage) || 60,
+      max_exam_attempts: sourceItem.max_exam_attempts !== null && sourceItem.max_exam_attempts !== undefined ? Math.max(1, Number(sourceItem.max_exam_attempts)) : 3,
+      start_date: sourceItem.start_date || null,
+      end_date: sourceItem.end_date || null,
+      is_prerequisite_required: sourceItem.is_prerequisite_required !== false,
+      updated_at: nowIso,
+    };
+
+    const { data: insertedItems, error: insItemErr } = await supabaseAdmin
+      .from('unit_items')
+      .insert(newItemPayload)
+      .select();
+
+    if (insItemErr || !insertedItems?.[0]) {
+      return { success: false, error: insItemErr?.message || 'فشل إنشاء النسخة الجديدة في الوحدة المستهدفة' };
+    }
+
+    let clonedCount = 0;
+    try {
+      const cloned = await deepCloneQuestionsOnServer(sourceItemId, newItemId);
+      clonedCount = cloned.questionsCount;
+    } catch (cloneErr: any) {
+      // Roll back the new item so we never leave a broken half-copied assessment
+      await supabaseAdmin.from('unit_items').delete().eq('id', newItemId);
+      return { success: false, error: cloneErr?.message || 'فشل استنساخ الأسئلة للنسخة الجديدة' };
+    }
+
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_id: staff.id,
+        actor_name: staff.fullName,
+        actor_role: staff.role,
+        action_type: 'CLONE_ASSESSMENT_AS_OPPOSITE_TYPE',
+        target_entity: 'unit_items',
+        target_id: newItemId,
+        details: {
+          sourceItemId,
+          sourceCourseId: sourceItem.course_id,
+          sourceType: sourceItem.item_type,
+          targetCourseId: resolvedTargetCourseId,
+          targetUnitId: resolvedTargetUnitId,
+          targetType,
+          questionsCount: clonedCount,
+          title: finalTitle,
+        },
+      }]);
+    } catch {}
+
+    return {
+      success: true,
+      item: mapUnitItemRow(insertedItems[0]),
+      questionsCount: clonedCount,
+      mode: 'keep_copy',
+    };
+  } catch (err: any) {
+    console.error('convertOrCloneAssessmentServer exception:', err);
+    return { success: false, error: err?.message || 'حدث خطأ غير متوقع أثناء التحويل أو الاستنساخ' };
+  }
+}
+
+export async function transferItemToTargetCourseServer(payload: {
+  sourceItemId: string;
+  targetCourseId: string;
+  targetUnitId: string;
+  newItemTitle?: string;
+}): Promise<{
+  success: boolean;
+  item?: any;
+  questionsCount?: number;
+  error?: string;
+}> {
+  try {
+    const staff = await requireStaffSession();
+    if (!staff) {
+      return { success: false, error: 'غير مصرح بهذه العملية الإدارية' };
+    }
+
+    const { sourceItemId, targetCourseId, targetUnitId, newItemTitle } = payload;
+    if (!sourceItemId || !targetCourseId || !targetUnitId) {
+      return { success: false, error: 'يرجى تحديد العنصر والكورس والوحدة المستهدفة' };
+    }
+
+    const { data: sourceItem, error: srcErr } = await supabaseAdmin
+      .from('unit_items')
+      .select('*')
+      .eq('id', sourceItemId)
+      .maybeSingle();
+
+    if (srcErr || !sourceItem) {
+      return { success: false, error: 'لم يتم العثور على المحتوى المطلوب تصديره' };
+    }
+
+    if (!staff.isTeacher) {
+      if (!canAssistantAccessCoursePerm(staff, sourceItem.course_id, 'canTransferContent')) {
+        return { success: false, error: 'غير مصرح للمساعد بنقل وتصدير المحتوى من هذا الكورس' };
+      }
+      if (targetCourseId !== sourceItem.course_id) {
+        const permKey = getItemTypePermissionKey(sourceItem.item_type);
+        const allowedKeys = permKey ? [permKey, 'canTransferContent'] as any : ['canTransferContent'] as any;
+        if (!canAssistantAccessAnyCoursePerm(staff, targetCourseId, allowedKeys)) {
+          return { success: false, error: 'غير مصرح للمساعد بإضافة أو استيراد محتوى في الكورس المستهدف' };
+        }
+      }
+    }
+
+    const { data: unitCheck } = await supabaseAdmin
+      .from('course_units')
+      .select('id, course_id')
+      .eq('id', targetUnitId)
+      .maybeSingle();
+
+    if (!unitCheck || unitCheck.course_id !== targetCourseId) {
+      return { success: false, error: 'الوحدة المستهدفة لا تنتمي للكورس المحدد' };
+    }
+
+    const { data: existingUnitItems } = await supabaseAdmin
+      .from('unit_items')
+      .select('order_index')
+      .eq('unit_id', targetUnitId)
+      .order('order_index', { ascending: false })
+      .limit(1);
+
+    const nextOrderIndex = Number(existingUnitItems?.[0]?.order_index || 0) + 1;
+    const newItemId = crypto.randomUUID();
+    const targetTitle = newItemTitle?.trim() || `${sourceItem.title} (نسخة)`;
+    const nowIso = new Date().toISOString();
+
+    const newItemRow: Record<string, any> = {
+      id: newItemId,
+      unit_id: targetUnitId,
+      course_id: targetCourseId,
+      item_type: sourceItem.item_type,
+      title: targetTitle,
+      description: sourceItem.description || null,
+      order_index: nextOrderIndex,
+      duration_minutes: Number(sourceItem.duration_minutes) || 0,
+      total_marks: Number(sourceItem.total_marks) || 100,
+      passing_score_percentage: Number(sourceItem.passing_score_percentage) || 60,
+      max_exam_attempts: sourceItem.max_exam_attempts !== null && sourceItem.max_exam_attempts !== undefined ? Math.max(1, Number(sourceItem.max_exam_attempts)) : 3,
+      start_date: sourceItem.start_date || null,
+      end_date: sourceItem.end_date || null,
+      video_source_type: sourceItem.video_source_type || 'internal_secured',
+      obfuscated_video_id: sourceItem.obfuscated_video_id || null,
+      direct_video_url: sourceItem.direct_video_url || null,
+      pdf_attachment_url: sourceItem.pdf_attachment_url || null,
+      is_prerequisite_required: sourceItem.is_prerequisite_required !== false,
+      updated_at: nowIso,
+    };
+
+    const { data: insertedRows, error: insertErr } = await supabaseAdmin
+      .from('unit_items')
+      .insert(newItemRow)
+      .select();
+
+    if (insertErr || !insertedRows?.[0]) {
+      return { success: false, error: insertErr?.message || 'فشل إنشاء النسخة في الكورس المستهدف' };
+    }
+
+    let clonedQuestionsCount = 0;
+    let finalTotalMarks = Number(sourceItem.total_marks) || 100;
+
+    if (sourceItem.item_type === 'exam' || sourceItem.item_type === 'homework') {
+      try {
+        const cloned = await deepCloneQuestionsOnServer(sourceItemId, newItemId);
+        clonedQuestionsCount = cloned.questionsCount;
+        if (cloned.totalMarks > 0) {
+          finalTotalMarks = cloned.totalMarks;
+          await supabaseAdmin
+            .from('unit_items')
+            .update({ total_marks: finalTotalMarks, updated_at: new Date().toISOString() })
+            .eq('id', newItemId);
+        }
+      } catch (cloneErr: any) {
+        await supabaseAdmin.from('unit_items').delete().eq('id', newItemId);
+        return { success: false, error: cloneErr?.message || 'فشل نسخ الأسئلة أثناء التصدير' };
+      }
+    }
+
+    try {
+      await supabaseAdmin.from('audit_logs').insert([{
+        actor_id: staff.id,
+        actor_name: staff.fullName,
+        actor_role: staff.role,
+        action_type: 'EXPORT_ITEM_TO_TARGET_COURSE',
+        target_entity: 'unit_items',
+        target_id: newItemId,
+        details: {
+          sourceItemId,
+          sourceCourseId: sourceItem.course_id,
+          targetCourseId,
+          targetUnitId,
+          itemType: sourceItem.item_type,
+          questionsCount: clonedQuestionsCount,
+          title: targetTitle,
+        },
+      }]);
+    } catch {}
+
+    const mapped = mapUnitItemRow(insertedRows[0]);
+    mapped.totalMarks = finalTotalMarks;
+    return {
+      success: true,
+      item: mapped,
+      questionsCount: clonedQuestionsCount,
+    };
+  } catch (err: any) {
+    console.error('transferItemToTargetCourseServer exception:', err);
+    return { success: false, error: err?.message || 'حدث خطأ أثناء نسخ وتصدير المحتوى' };
   }
 }

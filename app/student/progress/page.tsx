@@ -100,14 +100,14 @@ export default function StudentProgressPage() {
                     strongTopics.push({ item, score: prog.highestScore });
                   }
 
-                  // Certificate eligibility: EXAM ONLY and HIGHEST SCORE >= 80%
-                  if (item.itemType === 'exam' && prog.highestScore >= 80) {
+                  // Certificate eligibility: EXAM ONLY, HIGHEST SCORE >= 80%, and SERVER-SIGNED certificateCode
+                  if (item.itemType === 'exam' && prog.highestScore >= 80 && prog.certificateCode) {
                     earnedCerts.push({
                       item,
                       course,
                       score: prog.highestScore,
                       dateStr: prog.completedAt ? new Date(prog.completedAt).toLocaleDateString('ar-EG', { year: 'numeric', month: 'long', day: 'numeric' }) : undefined,
-                      certificateId: `MR-${item.id.slice(0, 4).toUpperCase()}-${Math.round(prog.highestScore)}`,
+                      certificateId: prog.certificateCode,
                     });
                   }
                 } else {

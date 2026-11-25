@@ -2,46 +2,79 @@
 
 import React, { useState, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { User, BookOpen, Phone, Mail, Edit3, Shield, MonitorSmartphone, Camera, CheckCircle2, Wallet, Sparkles } from 'lucide-react';
+import { User, BookOpen, Phone, Mail, Edit3, Shield, MonitorSmartphone, Camera, CheckCircle2, Wallet, Sparkles, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
+
+async function compressAvatarFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        const maxSide = 256;
+        let { width, height } = img;
+        if (width > height && width > maxSide) {
+          height = Math.round((height * maxSide) / width);
+          width = maxSide;
+        } else if (height > maxSide) {
+          width = Math.round((width * maxSide) / height);
+          height = maxSide;
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(reader.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.8));
+      };
+      img.onerror = () => reject(new Error('Invalid image'));
+      img.src = reader.result as string;
+    };
+    reader.onerror = () => reject(new Error('File read error'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function StudentProfilePage() {
   const { currentUser, updateCurrentUser } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUpdatingPhoto, setIsUpdatingPhoto] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
   if (!currentUser) return null;
 
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setErrorMsg('');
 
     if (!file.type.startsWith('image/')) {
-      alert('يرجى اختيار ملف صورة صالح (JPG, PNG, WebP)');
+      setErrorMsg('يرجى اختيار ملف صورة صالح (JPG, PNG, WebP)');
       return;
     }
 
     if (file.size > 4 * 1024 * 1024) {
-      alert('حجم الصورة كبير جداً، الحد الأقصى 4 ميجابايت');
+      setErrorMsg('حجم الصورة كبير جداً، الحد الأقصى 4 ميجابايت');
       return;
     }
 
     setIsUpdatingPhoto(true);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64Data = reader.result as string;
-      updateCurrentUser({ avatarUrl: base64Data });
-      setIsUpdatingPhoto(false);
-      setSuccessMsg('تم تحديث الصورة الشخصية بنجاح ✨');
+    try {
+      const compressedBase64 = await compressAvatarFile(file);
+      updateCurrentUser({ avatarUrl: compressedBase64 });
+      setSuccessMsg('تم تحديث وحفظ الصورة الشخصية بنجاح ✨');
       setTimeout(() => setSuccessMsg(''), 4000);
-    };
-    reader.onerror = () => {
-      alert('حدث خطأ أثناء قراءة ملف الصورة');
+    } catch {
+      setErrorMsg('حدث خطأ أثناء معالجة أو قراءة ملف الصورة');
+    } finally {
       setIsUpdatingPhoto(false);
-    };
-    reader.readAsDataURL(file);
+    }
   };
 
   return (
@@ -56,6 +89,13 @@ export default function StudentProfilePage() {
           </p>
         </div>
       </div>
+
+      {errorMsg && (
+        <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-bold text-sm flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
 
       {successMsg && (
         <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-bold text-sm flex items-center gap-3 animate-fade-in">
@@ -128,7 +168,7 @@ export default function StudentProfilePage() {
               <div>
                 <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-1">{currentUser.fullName}</h2>
                 <p className="text-sm font-bold text-slate-500 dark:text-slate-400">
-                  {currentUser.stage === 'high' ? 'المرحلة الثانوية' : 'المرحلة الإعدادية'} - الصف {currentUser.grade === 1 ? 'الأول' : currentUser.grade === 2 ? 'الثاني' : 'الثالث'}
+                  {currentUser.stage === 'high' ? 'المرحلة الثانوية' : currentUser.stage === 'middle' ? 'المرحلة الإعدادية' : 'المرحلة الدراسية'} - الصف {currentUser.grade === 1 ? 'الأول' : currentUser.grade === 2 ? 'الثاني' : 'الثالث'}
                 </p>
               </div>
               <div className="flex items-center gap-2">

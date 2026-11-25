@@ -2581,8 +2581,185 @@ export async function saveStudentItemProgressAction(payload: {
       return { success: false, error: 'غير مصرح بتسجيل التقدم لهذا الحساب.' };
     }
 
-    const recordId = id || crypto.randomUUID();
+    const canonicalStudentId = session.isStaff ? studentId : session.id;
+    const nowIso = new Date().toISOString();
 
+    if (!session.isStaff) {
+      // Strictly resolve canonical item from DB
+      const { data: itemRow } = await supabaseAdmin
+        .from('unit_items')
+        .select('id, course_id, unit_id, item_type, order_index, is_prerequisite_required, start_date, end_date')
+        .eq('id', itemId)
+        .maybeSingle();
+
+      if (!itemRow) {
+        return { success: false, error: 'المحتوى المطلوب غير موجود.' };
+      }
+
+      // STRICT SECURITY: Students can NEVER write progress or scores for exams or homeworks directly!
+      // Assessments are exclusively graded and recorded by submitAndGradeExamServer.
+      if (itemRow.item_type === 'exam' || itemRow.item_type === 'homework') {
+        return {
+          success: false,
+          error: 'غير مصرح بتسجيل درجات أو حالة اجتياز الامتحانات والواجبات من خارج نظام التصحيح المعتمد.',
+        };
+      }
+
+      if (itemRow.item_type !== 'video' && itemRow.item_type !== 'concept_sheet' && itemRow.item_type !== 'summary_pdf') {
+        return { success: false, error: 'نوع محتوى غير صالح للتسجيل.' };
+      }
+
+      const canonicalCourseId = itemRow.course_id;
+      const today = nowIso.split('T')[0];
+
+      const [{ data: courseRow }, { data: enrollmentRow }] = await Promise.all([
+        supabaseAdmin
+          .from('courses')
+          .select('id, is_free, price, is_published, publish_date, expiry_date, description')
+          .eq('id', canonicalCourseId)
+          .maybeSingle(),
+        supabaseAdmin
+          .from('course_enrollments')
+          .select('id')
+          .eq('student_id', canonicalStudentId)
+          .eq('course_id', canonicalCourseId)
+          .eq('is_active', true)
+          .maybeSingle(),
+      ]);
+
+      if (!courseRow || courseRow.is_published === false) {
+        return { success: false, error: 'هذا الكورس غير متاح حالياً.' };
+      }
+
+      const isCourseFree = courseRow.is_free === true || Number(courseRow.price) === 0;
+      if (!enrollmentRow?.id && !isCourseFree) {
+        return { success: false, error: 'غير مصرح بالوصول إلى محتوى هذا الكورس قبل التفعيل.' };
+      }
+
+      if (courseRow.publish_date && today < String(courseRow.publish_date)) {
+        return { success: false, error: `هذا الكورس مجدول للبدء بتاريخ ${courseRow.publish_date}.` };
+      }
+      if (courseRow.expiry_date && today > String(courseRow.expiry_date)) {
+        return { success: false, error: `انتهت صلاحية هذا الكورس بتاريخ ${courseRow.expiry_date}.` };
+      }
+      if (itemRow.start_date && today < String(itemRow.start_date)) {
+        return { success: false, error: `هذا الدرس متاح بدءاً من ${itemRow.start_date}.` };
+      }
+      if (itemRow.end_date && today > String(itemRow.end_date)) {
+        return { success: false, error: `انتهت فترة إتاحة هذا الدرس بتاريخ ${itemRow.end_date}.` };
+      }
+
+      // Check progression locks server-side
+      let enforceUnitProgression = true;
+      let enforceItemProgression = true;
+      const metaMatch = (courseRow.description || '').match(/\n\n<!--meta:([\s\S]*?)-->$/);
+      if (metaMatch) {
+        try {
+          const parsedMeta = JSON.parse(metaMatch[1]);
+          if (parsedMeta.enforceUnitProgression !== undefined) enforceUnitProgression = parsedMeta.enforceUnitProgression;
+          if (parsedMeta.enforceItemProgression !== undefined) enforceItemProgression = parsedMeta.enforceItemProgression;
+        } catch {}
+      }
+
+      if (enforceUnitProgression || enforceItemProgression) {
+        const [{ data: units }, { data: allItems }, { data: progRows }] = await Promise.all([
+          supabaseAdmin
+            .from('course_units')
+            .select('id, order_index, unit_number, title')
+            .eq('course_id', canonicalCourseId)
+            .order('order_index', { ascending: true }),
+          supabaseAdmin
+            .from('unit_items')
+            .select('id, unit_id, item_type, order_index, is_prerequisite_required')
+            .eq('course_id', canonicalCourseId)
+            .order('order_index', { ascending: true }),
+          supabaseAdmin
+            .from('student_item_progress')
+            .select('item_id, is_passed')
+            .eq('student_id', canonicalStudentId)
+            .eq('course_id', canonicalCourseId),
+        ]);
+
+        const passedSet = new Set(
+          (progRows || []).filter((p: any) => p.is_passed === true).map((p: any) => p.item_id)
+        );
+        const sortedUnits = (units || []).slice().sort(
+          (a: any, b: any) => (a.order_index || 0) - (b.order_index || 0) || (a.unit_number || 0) - (b.unit_number || 0)
+        );
+        const currentUnitIdx = sortedUnits.findIndex((u: any) => u.id === itemRow.unit_id);
+        const itemsByUnit = new Map<string, any[]>();
+        (allItems || []).forEach((it: any) => {
+          const arr = itemsByUnit.get(it.unit_id) || [];
+          arr.push(it);
+          itemsByUnit.set(it.unit_id, arr);
+        });
+
+        if (enforceUnitProgression && currentUnitIdx > 0) {
+          for (let uIdx = 0; uIdx < currentUnitIdx; uIdx++) {
+            const prevUnit = sortedUnits[uIdx];
+            const prevItems = itemsByUnit.get(prevUnit.id) || [];
+            for (const pItem of prevItems) {
+              const isCore = pItem.item_type === 'video' || pItem.item_type === 'homework' || pItem.item_type === 'exam';
+              if (isCore && pItem.is_prerequisite_required !== false && !passedSet.has(pItem.id)) {
+                return { success: false, error: `يجب إكمال واجتياز (${prevUnit.title}) أولاً.` };
+              }
+            }
+          }
+        }
+
+        if (enforceItemProgression && itemRow.is_prerequisite_required !== false && itemRow.unit_id) {
+          const currentUnitItems = (itemsByUnit.get(itemRow.unit_id) || []).slice().sort(
+            (a: any, b: any) => (a.order_index || 0) - (b.order_index || 0)
+          );
+          const currentItemIdx = currentUnitItems.findIndex((i: any) => i.id === itemRow.id);
+          if (currentItemIdx > 0) {
+            for (let iIdx = 0; iIdx < currentItemIdx; iIdx++) {
+              const prevItem = currentUnitItems[iIdx];
+              const isCore = prevItem.item_type === 'video' || prevItem.item_type === 'homework' || prevItem.item_type === 'exam';
+              if (isCore && prevItem.is_prerequisite_required !== false && !passedSet.has(prevItem.id)) {
+                return { success: false, error: 'يجب اجتياز الدروس والاختبارات السابقة أولاً.' };
+              }
+            }
+          }
+        }
+      }
+
+      const { data: existingProg } = await supabaseAdmin
+        .from('student_item_progress')
+        .select('id')
+        .eq('student_id', canonicalStudentId)
+        .eq('item_id', itemRow.id)
+        .maybeSingle();
+
+      const safeStudentPayload = {
+        id: existingProg?.id || crypto.randomUUID(),
+        student_id: canonicalStudentId,
+        course_id: canonicalCourseId,
+        item_id: itemRow.id,
+        status: 'completed',
+        attempts_count: 1,
+        highest_score: 100,
+        last_score: 100,
+        is_passed: true,
+        student_answers: null,
+        completed_at: nowIso,
+        updated_at: nowIso,
+      };
+
+      const { error } = await supabaseAdmin
+        .from('student_item_progress')
+        .upsert(safeStudentPayload, { onConflict: 'student_id,item_id' });
+
+      if (error) {
+        console.warn('saveStudentItemProgressAction error:', error);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true };
+    }
+
+    // Staff path (Teacher/Assistant administrative adjustments)
+    const recordId = id || crypto.randomUUID();
     const dbPayload: any = {
       id: recordId,
       student_id: studentId,
@@ -2590,12 +2767,12 @@ export async function saveStudentItemProgressAction(payload: {
       item_id: itemId,
       status: status || 'in_progress',
       attempts_count: attemptsCount || 1,
-      highest_score: highestScore ?? 0,
-      last_score: lastScore ?? 0,
-      is_passed: isPassed ?? false,
+      highest_score: Math.min(100, Math.max(0, Number(highestScore ?? 0))),
+      last_score: Math.min(100, Math.max(0, Number(lastScore ?? 0))),
+      is_passed: Boolean(isPassed),
       student_answers: studentAnswers || null,
       completed_at: completedAt || null,
-      updated_at: updatedAt || new Date().toISOString(),
+      updated_at: updatedAt || nowIso,
     };
 
     const { error } = await supabaseAdmin

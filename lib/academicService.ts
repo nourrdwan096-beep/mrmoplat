@@ -32,6 +32,8 @@ import {
   saveEnrollmentServer,
   syncLocalCoursesServer,
   fetchCourseEnrolledStudentsDataServer,
+  convertOrCloneAssessmentServer,
+  transferItemToTargetCourseServer,
 } from '@/app/actions/dbProxy';
 import { saveVaultItem } from './indexedDbStorage';
 import { getStudentProfilesByIdsAction, saveStudentItemProgressAction } from '@/app/actions/studentActions';
@@ -898,7 +900,7 @@ export async function fetchQuestionsByItem(itemId: string): Promise<QuestionData
 }
 
 // STRICT SECURITY: Student Question Fetcher
-// Fetches questions WITHOUT answers, preventing answer scraping or local storage snooping
+// Fetches questions exclusively from server WITHOUT answers, preventing answer scraping or local storage snooping
 export async function fetchSecuredStudentQuestions(itemId: string): Promise<QuestionData[]> {
   try {
     const remoteQuestions = await fetchSecuredStudentQuestionsServer(itemId);
@@ -906,23 +908,9 @@ export async function fetchSecuredStudentQuestions(itemId: string): Promise<Ques
       return remoteQuestions.sort((a, b) => a.orderIndex - b.orderIndex);
     }
   } catch (err) {
-    console.warn('fetchSecuredStudentQuestionsServer error, falling back:', err);
+    console.warn('fetchSecuredStudentQuestionsServer error:', err);
   }
-
-  // Fallback: strictly sanitize any cached local questions without fetching unmasked answers
-  const cachedQuestions = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []).filter((q) => q.itemId === itemId);
-  return cachedQuestions.map((q) => ({
-    ...q,
-    correctAnswerId: '',
-    correctAnswerIds: [],
-    idealAnswer: '',
-    explanation: '',
-    wordBankBlanks: q.wordBankBlanks?.map((b) => ({
-      blankIndex: b.blankIndex,
-      points: b.points,
-      correctAnswer: '',
-    })),
-  })).sort((a, b) => a.orderIndex - b.orderIndex);
+  return [];
 }
 
 // Submit student answers to server for authoritative scoring
@@ -986,94 +974,59 @@ export async function saveQuestionsForItem(itemId: string, questions: QuestionDa
   return true;
 }
 
-// Transfer / Copy any content item (Exam, Homework, Video, Sheet) to another Course & Unit
+// Bidirectional Exam <-> Homework conversion or independent cloning (Authoritative Server Action)
+export async function convertOrCloneAssessment(payload: {
+  sourceItemId: string;
+  targetType: 'exam' | 'homework';
+  mode: 'convert_in_place' | 'keep_copy';
+  newTitle?: string;
+  targetCourseId?: string;
+  targetUnitId?: string;
+}): Promise<{
+  success: boolean;
+  item?: UnitItemData;
+  questionsCount?: number;
+  mode?: 'convert_in_place' | 'keep_copy';
+  error?: string;
+}> {
+  const res = await convertOrCloneAssessmentServer(payload);
+  if (res.success && res.item) {
+    const itemsList = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
+    const idx = itemsList.findIndex((i) => i.id === res.item.id);
+    if (idx !== -1) {
+      itemsList[idx] = res.item;
+    } else {
+      itemsList.push(res.item);
+    }
+    setLocal(STORAGE_KEYS.ITEMS, itemsList);
+  }
+  return res;
+}
+
+// Transfer / Copy any content item (Exam, Homework, Video, Sheet) to another Course & Unit (Authoritative Server Action)
 export async function copyItemToTargetCourse(
   sourceItemId: string,
   targetCourseId: string,
   targetUnitId: string,
   newItemTitle?: string
 ): Promise<UnitItemData | null> {
-  const sourceItems = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
-  let sourceItem = sourceItems.find(i => i.id === sourceItemId);
-  if (!sourceItem) {
-    sourceItem = (await fetchItemById(sourceItemId)) || undefined;
-  }
-  if (!sourceItem) return null;
-
-  const targetTitle = newItemTitle?.trim() || `${sourceItem.title} (نسخة)`;
-
-  const newItem = await saveUnitItem({
-    unitId: targetUnitId,
-    courseId: targetCourseId,
-    itemType: sourceItem.itemType,
-    title: targetTitle,
-    description: sourceItem.description || '',
-    orderIndex: Math.floor(Date.now() / 1000),
-    durationMinutes: Number(sourceItem.durationMinutes) || 0,
-    totalMarks: Number(sourceItem.totalMarks) || 100,
-    passingScorePercentage: Number(sourceItem.passingScorePercentage) || 60,
-    maxExamAttempts: sourceItem.maxExamAttempts !== undefined && sourceItem.maxExamAttempts !== null ? Number(sourceItem.maxExamAttempts) : 3,
-    videoSourceType: sourceItem.videoSourceType || 'internal_secured',
-    obfuscatedVideoId: sourceItem.obfuscatedVideoId,
-    directVideoUrl: sourceItem.directVideoUrl,
-    pdfAttachmentUrl: sourceItem.pdfAttachmentUrl,
-    isPrerequisiteRequired: sourceItem.isPrerequisiteRequired ?? true,
+  const res = await transferItemToTargetCourseServer({
+    sourceItemId,
+    targetCourseId,
+    targetUnitId,
+    newItemTitle,
   });
 
-  // If item is exam or homework, perform deep replica of all questions
-  if (sourceItem.itemType === 'exam' || sourceItem.itemType === 'homework') {
-    let questions = await fetchQuestionsByItem(sourceItemId);
-    // Double check local storage if empty
-    if (!questions || questions.length === 0) {
-      const allQ = getLocal<QuestionData[]>(STORAGE_KEYS.QUESTIONS, []);
-      questions = allQ.filter(q => q.itemId === sourceItemId);
-    }
-    // Also check server directly if still empty
-    if (!questions || questions.length === 0) {
-      try {
-        const remote = await fetchQuestionsServer(sourceItemId);
-        if (remote && Array.isArray(remote) && remote.length > 0) {
-          questions = remote;
-        }
-      } catch (err) {
-        console.warn('Direct server fetch fallback in copy error:', err);
-      }
-    }
-
-    if (questions && questions.length > 0) {
-      // Map every question to a fresh 36-character standard UUID
-      const idMap: { [oldId: string]: string } = {};
-      questions.forEach(q => {
-        idMap[q.id] = crypto.randomUUID();
-      });
-
-      const duplicatedQuestions: QuestionData[] = questions.map((q, idx) => ({
-        ...q,
-        id: idMap[q.id] || crypto.randomUUID(),
-        itemId: newItem.id,
-        parentId: q.parentId && idMap[q.parentId] ? idMap[q.parentId] : undefined,
-        orderIndex: idx + 1,
-        options: q.options ? JSON.parse(JSON.stringify(q.options)) : [],
-        correctAnswerIds: q.correctAnswerIds ? [...q.correctAnswerIds] : (q.correctAnswerId ? [q.correctAnswerId] : []),
-        wordBankBlanks: q.wordBankBlanks ? JSON.parse(JSON.stringify(q.wordBankBlanks)) : [],
-        wordBankWords: q.wordBankWords ? [...q.wordBankWords] : [],
-      }));
-
-      await saveQuestionsForItem(newItem.id, duplicatedQuestions);
-
-      // Recalculate total marks from duplicated questions
-      const calculatedTotalMarks = duplicatedQuestions.reduce((sum, q) => {
-        if (q.questionType === 'passage') return sum;
-        return sum + (typeof q.points === 'number' ? q.points : (Number(q.points) || 1));
-      }, 0);
-
-      const finalTotalMarks = calculatedTotalMarks > 0 ? calculatedTotalMarks : (sourceItem.totalMarks || 100);
-      await updateItemMetadata(newItem.id, { totalMarks: finalTotalMarks });
-      newItem.totalMarks = finalTotalMarks;
-    }
+  if (!res?.success || !res.item) {
+    throw new Error(res?.error || 'فشل نسخ ونقل المحتوى عبر الخادم');
   }
 
-  return newItem;
+  const itemsList = getLocal<UnitItemData[]>(STORAGE_KEYS.ITEMS, []);
+  if (!itemsList.some((i) => i.id === res.item.id)) {
+    setLocal(STORAGE_KEYS.ITEMS, [...itemsList, res.item]);
+  }
+
+  return res.item;
 }
 
 // Backward-compatible alias for exam / homework transfer
@@ -1396,6 +1349,7 @@ export interface StudentItemProgressData {
   studentAnswers?: any;
   completedAt?: string;
   updatedAt?: string;
+  certificateCode?: string;
 }
 
 export async function fetchStudentProgress(studentId: string, courseId: string): Promise<Record<string, StudentItemProgressData>> {
@@ -1403,13 +1357,11 @@ export async function fetchStudentProgress(studentId: string, courseId: string):
   if (!studentId || !courseId) return map;
 
   const storageKey = `mr_radwan_progress_${studentId}_${courseId}`;
-  const localList = getLocal<StudentItemProgressData[]>(storageKey, []);
-  localList.forEach(p => { map[p.itemId] = p; });
 
   try {
     const remoteData = await fetchStudentProgressServer(studentId, courseId);
 
-    if (remoteData && remoteData.length > 0) {
+    if (Array.isArray(remoteData)) {
       remoteData.forEach((row: any) => {
         map[row.item_id] = {
           id: row.id,
@@ -1424,14 +1376,18 @@ export async function fetchStudentProgress(studentId: string, courseId: string):
           studentAnswers: row.student_answers,
           completedAt: row.completed_at,
           updatedAt: row.updated_at,
+          certificateCode: row.certificate_code || undefined,
         };
       });
       setLocal(storageKey, Object.values(map));
+      return map;
     }
   } catch (err) {
     console.warn('fetchStudentProgress error:', err);
   }
 
+  const localList = getLocal<StudentItemProgressData[]>(storageKey, []);
+  localList.forEach(p => { map[p.itemId] = p; });
   return map;
 }
 
@@ -1449,9 +1405,6 @@ export async function recordStudentItemProgress(
   const existingMap = await fetchStudentProgress(studentId, courseId);
   const prev = existingMap[itemId];
 
-  // User rule:
-  // "ولو أداله يبقى يُعاد وتتتاخد درجة الامتحان الأخير، يعني آخر مرة هو دخلها. يعني لو نجح في امتحان والمعلم حب يتأكد منه فدخله الامتحان تاني، فبتتتاخد درجة الامتحان الأخير بس وبتتلغي درجة الامتحان الأول."
-  // Strictly take the score of the LAST attempt and update status accordingly:
   const updated: StudentItemProgressData = {
     id: prev?.id || crypto.randomUUID(),
     studentId,
@@ -1459,16 +1412,13 @@ export async function recordStudentItemProgress(
     itemId,
     status: isPassed ? 'completed' : 'in_progress',
     attemptsCount: (prev?.attemptsCount || 0) + 1,
-    highestScore: score, // Strictly set to the score of the last attempt
-    lastScore: score,    // Store the exact last attempt score
-    isPassed: isPassed,  // True only if this last attempt passed!
+    highestScore: score,
+    lastScore: score,
+    isPassed,
     studentAnswers: answers || prev?.studentAnswers,
     completedAt: isPassed ? new Date().toISOString() : undefined,
     updatedAt: new Date().toISOString(),
   };
-
-  existingMap[itemId] = updated;
-  setLocal(storageKey, Object.values(existingMap));
 
   try {
     const actionResult = await saveStudentItemProgressAction({
@@ -1486,27 +1436,15 @@ export async function recordStudentItemProgress(
       updatedAt: updated.updatedAt,
     });
     if (!actionResult?.success) {
-      // Fallback to client-side supabase directly
-      await proxyUpsert('student_item_progress', {
-        id: updated.id,
-        student_id: updated.studentId,
-        course_id: updated.courseId,
-        item_id: updated.itemId,
-        status: updated.status,
-        attempts_count: updated.attemptsCount,
-        highest_score: updated.highestScore,
-        last_score: updated.lastScore,
-        is_passed: updated.isPassed,
-        student_answers: updated.studentAnswers,
-        completed_at: updated.completedAt,
-        updated_at: updated.updatedAt,
-      });
+      return false;
     }
+    existingMap[itemId] = updated;
+    setLocal(storageKey, Object.values(existingMap));
+    return true;
   } catch (err) {
     console.warn('Supabase recordStudentItemProgress error:', err);
+    return false;
   }
-
-  return true;
 }
 
 export async function grantStudentExtraAttempts(
@@ -1920,45 +1858,12 @@ export async function fetchCourseEnrolledStudents(courseId: string): Promise<Enr
   const result: EnrolledStudentData[] = [];
 
   for (const [studentId, student] of studentMap.entries()) {
-    // Merge progress from local storage and Supabase
-    const localKey = `mr_radwan_progress_${studentId}_${courseId}`;
-    const localProgressList = getLocal<StudentItemProgressData[]>(localKey, []);
+    // Strictly trust authoritative server-side student progress (never allow localStorage tampering)
     const dbStudentProgress = dbProgressMap.get(studentId) || [];
 
-    // Map by item_id to avoid duplicates
     const itemProgMap = new Map<string, any>();
     dbStudentProgress.forEach(p => {
       itemProgMap.set(p.item_id, p);
-    });
-    localProgressList.forEach(lp => {
-      if (!itemProgMap.has(lp.itemId)) {
-        itemProgMap.set(lp.itemId, {
-          id: lp.id,
-          student_id: lp.studentId,
-          course_id: lp.courseId,
-          item_id: lp.itemId,
-          attempts_count: lp.attemptsCount,
-          status: lp.status,
-          highest_score: lp.highestScore,
-          last_score: lp.lastScore,
-          is_passed: lp.isPassed,
-          completed_at: lp.completedAt,
-          updated_at: lp.updatedAt,
-        });
-      } else {
-        // Strict requirement: Take the latest attempt's score (lastScore) and status
-        const existing = itemProgMap.get(lp.itemId);
-        const isLocalNewer = !existing.updated_at || (lp.updatedAt && lp.updatedAt >= existing.updated_at);
-        itemProgMap.set(lp.itemId, {
-          ...existing,
-          attempts_count: Math.max(existing.attempts_count || 0, lp.attemptsCount || 0),
-          highest_score: isLocalNewer ? Number(lp.highestScore || 0) : Number(existing.highest_score || 0),
-          last_score: isLocalNewer ? Number(lp.lastScore ?? lp.highestScore ?? 0) : Number(existing.last_score ?? existing.highest_score ?? 0),
-          is_passed: isLocalNewer ? lp.isPassed : existing.is_passed,
-          completed_at: isLocalNewer ? lp.completedAt : existing.completed_at,
-          updated_at: isLocalNewer ? lp.updatedAt : existing.updated_at,
-        });
-      }
     });
 
     // Build assessment breakdown

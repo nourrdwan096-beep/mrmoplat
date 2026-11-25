@@ -30,7 +30,8 @@ export default function HonorCertificate({
     day: 'numeric'
   });
 
-  const serialCode = certificateId || `MR-${Math.abs(examTitle.split('').reduce((a, b) => a + b.charCodeAt(0), 0) * 97 + scorePercentage * 31).toString().slice(0, 8)}`;
+  const isServerVerified = Boolean(certificateId && certificateId.startsWith('MR-CERT-'));
+  const serialCode = certificateId || 'معاينة رسمية غير موثقة';
 
   const handlePrint = () => {
     window.print();
@@ -127,7 +128,7 @@ export default function HonorCertificate({
             </div>
             <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-emerald-400/10 border border-emerald-400/30 text-emerald-300 text-xs font-black">
               <ShieldCheck className="w-5 h-5 text-emerald-400" />
-              <span>موثقة إلكترونياً بالسيرفر</span>
+              <span>{isServerVerified ? 'موثقة ومشفرة إلكترونياً بالسيرفر' : 'صيغة معاينة تعليمية'}</span>
             </div>
           </div>
 
@@ -137,7 +138,7 @@ export default function HonorCertificate({
             <div className="text-right sm:text-right space-y-1">
               <span className="text-slate-400 block text-[11px]">تاريخ المنح:</span>
               <span className="text-amber-200 print:text-slate-900 font-black">{formattedDate}</span>
-              <span className="text-[10px] text-slate-500 block font-mono">كود التوثيق: {serialCode}</span>
+              <span className="text-[10px] text-slate-400 block font-mono">كود التوثيق: {serialCode}</span>
             </div>
 
             {/* Official Stamp Hologram */}

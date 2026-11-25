@@ -56,6 +56,7 @@ export default function AssistantItemBuilderPage({
           cp.canEditCourseSettings ||
           cp.canAddExams ||
           cp.canAddHomework ||
+          cp.canConvertAssessments ||
           cp.canViewQuestions ||
           cp.canAddQuestions ||
           cp.canEditQuestions ||

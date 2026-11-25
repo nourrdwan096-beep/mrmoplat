@@ -15,6 +15,7 @@ import {
   fetchAllCourses,
   fetchUnitsByCourse,
   copyItemToTargetCourse,
+  convertOrCloneAssessment,
 } from '@/lib/academicService';
 import { extractBlankIndices } from '@/lib/blankUtils';
 import {
@@ -25,6 +26,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowRight,
+  ArrowLeftRight,
   Plus,
   Save,
   Trash2,
@@ -92,6 +94,7 @@ export default function CourseItemBuilderClient({
   const canEditSettings =
     isTeacher || cp.canEditCourseSettings || cp.canAddExams || cp.canAddHomework;
   const canTransfer = isTeacher || cp.canTransferContent;
+  const canConvertAssessments = isTeacher || cp.canConvertAssessments;
   const canPreviewStudent = isTeacher || cp.canViewQuestions;
   const hasQuestionsTabAccess = canViewQuestions || canAddQuestions;
 
@@ -214,6 +217,73 @@ export default function CourseItemBuilderClient({
       console.error(err);
       setIsTransferring(false);
       showFeedback('error', err.message || 'حدث خطأ أثناء النسخ والنقل');
+    }
+  };
+
+  // Bidirectional Conversion / Independent Clone Modal State
+  const [isConvertModalOpen, setIsConvertModalOpen] = useState(false);
+  const [convertMode, setConvertMode] = useState<'convert_in_place' | 'keep_copy'>('keep_copy');
+  const [convertTitle, setConvertTitle] = useState('');
+  const [convertTargetCourseId, setConvertTargetCourseId] = useState('');
+  const [convertTargetUnits, setConvertTargetUnits] = useState<UnitData[]>([]);
+  const [convertTargetUnitId, setConvertTargetUnitId] = useState('');
+  const [isConvertingAssessment, setIsConvertingAssessment] = useState(false);
+
+  const handleOpenConvertModal = async () => {
+    if (!item || !canConvertAssessments) return;
+    const targetLabel = item.itemType === 'exam' ? 'واجب' : 'امتحان';
+    setConvertMode('keep_copy');
+    setConvertTitle(`${item.title} (نسخة ${targetLabel})`);
+    setConvertTargetCourseId(courseId);
+    const [courses, units] = await Promise.all([fetchAllCourses(), fetchUnitsByCourse(courseId)]);
+    const filteredCourses =
+      !canTransfer
+        ? courses.filter((c) => c.id === courseId)
+        : allowedTargetCourseIds && allowedTargetCourseIds.length > 0
+        ? courses.filter((c) => allowedTargetCourseIds.includes(c.id))
+        : courses;
+    setAllCourses(filteredCourses);
+    setConvertTargetUnits(units);
+    setConvertTargetUnitId(item.unitId || (units[0]?.id || ''));
+    setIsConvertModalOpen(true);
+  };
+
+  const handleExecuteConvertAssessment = async () => {
+    if (!item || !canConvertAssessments) return;
+    const targetType = item.itemType === 'exam' ? 'homework' : 'exam';
+    const targetLabel = targetType === 'homework' ? 'واجب منزلي' : 'امتحان شامل';
+
+    setIsConvertingAssessment(true);
+    try {
+      const res = await convertOrCloneAssessment({
+        sourceItemId: item.id,
+        targetType,
+        mode: convertMode,
+        newTitle: convertTitle.trim() || undefined,
+        targetCourseId: convertMode === 'keep_copy' ? (convertTargetCourseId || courseId) : undefined,
+        targetUnitId: convertMode === 'keep_copy' ? (convertTargetUnitId || item.unitId) : undefined,
+      });
+
+      if (!res.success || !res.item) {
+        showFeedback('error', res.error || 'تعذر تنفيذ التحويل أو الاستنساخ');
+        return;
+      }
+
+      setIsConvertModalOpen(false);
+      const qCount = res.questionsCount ?? 0;
+
+      if (convertMode === 'convert_in_place') {
+        setItem(res.item);
+        setMetaTitle(res.item.title || '');
+        showFeedback('success', `تم التحويل التام إلى ${targetLabel} مع الحفاظ على (${qCount}) سؤال بالكامل.`);
+        router.refresh();
+      } else {
+        showFeedback('success', `تم إنشاء ${targetLabel} مستقل بعنوان "${res.item.title}" (${qCount} سؤال) مع إبقاء الأصل كما هو.`);
+      }
+    } catch (err: any) {
+      showFeedback('error', err?.message || 'حدث خطأ أثناء التحويل');
+    } finally {
+      setIsConvertingAssessment(false);
     }
   };
 
@@ -826,6 +896,18 @@ export default function CourseItemBuilderClient({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {canConvertAssessments && (
+              <button
+                type="button"
+                onClick={handleOpenConvertModal}
+                className="flex items-center gap-1.5 px-4 py-3 bg-violet-50 hover:bg-violet-100 dark:bg-violet-500/15 dark:hover:bg-violet-500/25 text-violet-700 dark:text-violet-300 font-black text-xs rounded-2xl transition-all border border-violet-200 dark:border-violet-700/60 whitespace-nowrap shrink-0"
+                title={item.itemType === 'exam' ? 'تحويل أو نسخ هذا الامتحان كواجب' : 'تحويل أو نسخ هذا الواجب كامتحان'}
+              >
+                <ArrowLeftRight className="w-4 h-4 text-violet-600" />
+                <span>{item.itemType === 'exam' ? 'تحويل / نسخ كواجب' : 'تحويل / نسخ كامتحان'}</span>
+              </button>
+            )}
+
             {canTransfer && (
               <button
                 type="button"
@@ -1174,6 +1256,33 @@ export default function CourseItemBuilderClient({
                   {item.itemType === 'homework' ? 'الواجب' : 'الامتحان'}
                 </label>
               </div>
+
+              {/* Bidirectional Exam <-> Homework Conversion & Independent Clone Card */}
+              {canConvertAssessments && (
+                <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-violet-50/80 to-indigo-50/70 dark:from-violet-950/30 dark:to-indigo-950/20 border border-violet-200 dark:border-violet-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <h4 className="text-xs sm:text-sm font-black text-violet-900 dark:text-violet-200 flex items-center gap-2">
+                      <ArrowLeftRight className="w-4 h-4 text-violet-600 shrink-0" />
+                      <span>
+                        {item.itemType === 'exam'
+                          ? 'تحويل هذا الامتحان إلى واجب أو إنشاء نسخة واجب مستقلة'
+                          : 'تحويل هذا الواجب إلى امتحان أو إنشاء نسخة امتحان مستقلة'}
+                      </span>
+                    </h4>
+                    <p className="text-[11px] font-bold text-slate-600 dark:text-slate-400">
+                      يمكنك التحويل التام (مع إمكانية الإرجاع في أي وقت) أو عمل نسخة مستقلة بذاتها بنفس الأسئلة كاملة بحيث لا يؤثر تعديل أحدهما على الآخر.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOpenConvertModal}
+                    className="px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-black text-xs shadow-sm transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 self-start sm:self-center"
+                  >
+                    <ArrowLeftRight className="w-3.5 h-3.5" />
+                    <span>{item.itemType === 'exam' ? 'تحويل / نسخ كواجب' : 'تحويل / نسخ كامتحان'}</span>
+                  </button>
+                </div>
+              )}
 
               {/* Save & Nav */}
               <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-100 dark:border-slate-800">
@@ -2530,6 +2639,182 @@ export default function CourseItemBuilderClient({
                 >
                   <Copy className="w-3.5 h-3.5" />
                   <span>{isTransferring ? 'جاري النسخ...' : 'تأكيد النسخ والنقل'}</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Bidirectional Convert / Independent Clone Modal */}
+      <AnimatePresence>
+        {isConvertModalOpen && item && canConvertAssessments && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 md:p-7 max-w-lg w-full shadow-2xl space-y-5 max-h-[92vh] overflow-y-auto"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3.5">
+                <h3 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
+                  <ArrowLeftRight className="w-5 h-5 text-violet-600" />
+                  <span>
+                    {item.itemType === 'exam'
+                      ? 'تحويل أو نسخ الامتحان كواجب'
+                      : 'تحويل أو نسخ الواجب كامتحان'}
+                  </span>
+                </h3>
+                <button
+                  onClick={() => setIsConvertModalOpen(false)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConvertMode('keep_copy');
+                    const targetLabel = item.itemType === 'exam' ? 'واجب' : 'امتحان';
+                    setConvertTitle(`${item.title} (نسخة ${targetLabel})`);
+                  }}
+                  className={`text-right p-4 rounded-2xl border-2 transition-all space-y-1 ${
+                    convertMode === 'keep_copy'
+                      ? 'border-violet-600 bg-violet-50/70 dark:bg-violet-950/35 shadow-sm'
+                      : 'border-slate-200 dark:border-slate-800 hover:border-violet-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                      <Copy className="w-4 h-4 text-violet-600" />
+                      <span>إنشاء نسخة مستقلة من النوع الآخر (مع بقاء الأصل)</span>
+                    </span>
+                    <span className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${convertMode === 'keep_copy' ? 'border-violet-600 bg-violet-600' : 'border-slate-300 dark:border-slate-600'}`}>
+                      {convertMode === 'keep_copy' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-bold text-slate-600 dark:text-slate-400 leading-relaxed">
+                    ينشئ {item.itemType === 'exam' ? 'واجباً جديداً' : 'امتحاناً جديداً'} بكل الأسئلة كاملة وبشكل مستقل تماماً بحيث أي إضافة أو تعديل مستقبلي لا يؤثر على الأصل.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConvertMode('convert_in_place');
+                    setConvertTitle(item.title);
+                  }}
+                  className={`text-right p-4 rounded-2xl border-2 transition-all space-y-1 ${
+                    convertMode === 'convert_in_place'
+                      ? 'border-amber-600 bg-amber-50/70 dark:bg-amber-950/35 shadow-sm'
+                      : 'border-slate-200 dark:border-slate-800 hover:border-amber-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-black text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                      <ArrowLeftRight className="w-4 h-4 text-amber-600" />
+                      <span>تحويل تام مباشر (قابل للعكس في أي وقت)</span>
+                    </span>
+                    <span className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${convertMode === 'convert_in_place' ? 'border-amber-600 bg-amber-600' : 'border-slate-300 dark:border-slate-600'}`}>
+                      {convertMode === 'convert_in_place' && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-bold text-slate-600 dark:text-slate-400 leading-relaxed">
+                    يحوّل هذا العنصر نفسه من {item.itemType === 'exam' ? 'امتحان إلى واجب' : 'واجب إلى امتحان'} بجميع أسئلته كما هي، مع إمكانية إرجاعه لاحقاً.
+                  </p>
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    {convertMode === 'keep_copy' ? 'عنوان النسخة المستقلة' : 'العنوان بعد التحويل'}
+                  </label>
+                  <input
+                    type="text"
+                    value={convertTitle}
+                    onChange={(e) => setConvertTitle(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-xs text-slate-900 dark:text-white focus:outline-none"
+                  />
+                </div>
+
+                {convertMode === 'keep_copy' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                    <div>
+                      <label className="block text-[11px] font-black text-slate-600 dark:text-slate-400 mb-1">
+                        الكورس المستهدف
+                      </label>
+                      <select
+                        value={convertTargetCourseId}
+                        disabled={!canTransfer}
+                        onChange={async (e) => {
+                          const cId = e.target.value;
+                          setConvertTargetCourseId(cId);
+                          const u = await fetchUnitsByCourse(cId);
+                          setConvertTargetUnits(u);
+                          setConvertTargetUnitId(u[0]?.id || '');
+                        }}
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-xs text-slate-900 dark:text-white disabled:opacity-70"
+                      >
+                        {allCourses.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.title} {c.id === courseId ? '(هذا الكورس)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-black text-slate-600 dark:text-slate-400 mb-1">
+                        الوحدة المستهدفة
+                      </label>
+                      <select
+                        value={convertTargetUnitId}
+                        onChange={(e) => setConvertTargetUnitId(e.target.value)}
+                        className="w-full px-3 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-bold text-xs text-slate-900 dark:text-white"
+                      >
+                        {convertTargetUnits.map((u) => (
+                          <option key={u.id} value={u.id}>
+                            الوحدة {u.unitNumber}: {u.title}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsConvertModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-xl"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    isConvertingAssessment ||
+                    (convertMode === 'keep_copy' && (!convertTargetCourseId || !convertTargetUnitId))
+                  }
+                  onClick={handleExecuteConvertAssessment}
+                  className={`px-5 py-2 text-white font-black text-xs rounded-xl shadow-md disabled:opacity-50 flex items-center gap-1.5 ${
+                    convertMode === 'convert_in_place'
+                      ? 'bg-amber-600 hover:bg-amber-700'
+                      : 'bg-violet-600 hover:bg-violet-700'
+                  }`}
+                >
+                  <ArrowLeftRight className="w-3.5 h-3.5" />
+                  <span>
+                    {isConvertingAssessment
+                      ? 'جاري التنفيذ...'
+                      : convertMode === 'convert_in_place'
+                      ? `تأكيد التحويل إلى ${item.itemType === 'exam' ? 'واجب' : 'امتحان'}`
+                      : `إنشاء نسخة ${item.itemType === 'exam' ? 'الواجب' : 'الامتحان'} المستقلة`}
+                  </span>
                 </button>
               </div>
             </motion.div>

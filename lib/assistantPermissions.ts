@@ -11,6 +11,7 @@ export interface CourseGranularPermissions {
   canAddConceptSheets: boolean;
   canAddSummaries: boolean;
   canTransferContent: boolean;
+  canConvertAssessments: boolean;
 
   // Question Bank (Supports Blind Add-Only Mode when canViewQuestions === false)
   canViewQuestions: boolean;
@@ -72,6 +73,7 @@ export const DEFAULT_COURSE_PERMISSIONS: CourseGranularPermissions = {
   canAddConceptSheets: false,
   canAddSummaries: false,
   canTransferContent: false,
+  canConvertAssessments: false,
   canViewQuestions: false,
   canAddQuestions: false,
   canEditQuestions: false,
@@ -92,6 +94,7 @@ export const FULL_COURSE_PERMISSIONS: CourseGranularPermissions = {
   canAddConceptSheets: true,
   canAddSummaries: true,
   canTransferContent: true,
+  canConvertAssessments: true,
   canViewQuestions: true,
   canAddQuestions: true,
   canEditQuestions: true,
@@ -169,6 +172,11 @@ export const COURSE_PERMISSION_LABELS: Record<
   canTransferContent: {
     label: 'نسخ ونقل المحتوى',
     description: 'نسخ الامتحانات أو الدروس بين الوحدات والكورسات المصرح بها',
+    group: 'content',
+  },
+  canConvertAssessments: {
+    label: 'تحويل الامتحانات والواجبات ذهاباً وإياباً',
+    description: 'تحويل الامتحان إلى واجب أو العكس بنفس الأسئلة، أو إنشاء نسخة مستقلة من النوع الآخر مع بقاء الأصل',
     group: 'content',
   },
   canViewQuestions: {
@@ -397,6 +405,7 @@ export function normalizeCoursePermissions(
     canAddConceptSheets: raw.canAddConceptSheets ?? base.canAddConceptSheets,
     canAddSummaries: raw.canAddSummaries ?? base.canAddSummaries,
     canTransferContent: raw.canTransferContent ?? base.canTransferContent,
+    canConvertAssessments: raw.canConvertAssessments ?? base.canConvertAssessments,
     canViewQuestions: raw.canViewQuestions ?? base.canViewQuestions,
     canAddQuestions: raw.canAddQuestions ?? base.canAddQuestions,
     canEditQuestions: raw.canEditQuestions ?? base.canEditQuestions,
