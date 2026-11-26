@@ -756,7 +756,12 @@ export default function CourseDetailManagerClient({
       }
     } catch (err: any) {
       console.error(err);
-      showToast(err.message || 'حدث خطأ أثناء حفظ المحتوى', 'error');
+      const rawMsg = String(err?.message || '');
+      if (rawMsg.includes('was not found on the server') || rawMsg.includes('Failed to find Server Action')) {
+        showToast('تم تحديث ملفات المنصة على الخادم — يرجى تحديث الصفحة (F5) ثم إعادة الحفظ.', 'error');
+      } else {
+        showToast(rawMsg || 'حدث خطأ أثناء حفظ المحتوى', 'error');
+      }
     }
   };
 
