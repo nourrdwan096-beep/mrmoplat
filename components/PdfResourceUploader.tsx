@@ -15,7 +15,7 @@ import {
   RefreshCw,
   FolderOpen
 } from 'lucide-react';
-import { uploadDocumentToSupabase, detectLinkProvider } from '@/lib/storageService';
+import { uploadDocumentToSupabase, detectLinkProvider, resolveDocumentUrls } from '@/lib/storageService';
 
 interface PdfResourceUploaderProps {
   value: string;
@@ -46,8 +46,9 @@ export default function PdfResourceUploader({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Link type detection
-  const detectedType = detectLinkProvider(externalUrl);
+  // Link type detection & capability preview
+  const resolvedLink = resolveDocumentUrls(externalUrl);
+  const detectedType = resolvedLink.provider;
 
   const handleUrlChange = (newUrl: string) => {
     setExternalUrl(newUrl);
@@ -63,12 +64,12 @@ export default function PdfResourceUploader({
 
   const processFileUpload = async (file: File) => {
     if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-      setUploadError('يرجى اختيار ملف بصيغة PDF فقط.');
+      setUploadError('يرجى اختيار ملف بصيغة PDF فقط للرفع المباشر، أو استخدم تبويب «رابط خارجي» لأي صيغة أخرى.');
       return;
     }
 
     if (file.size > 50 * 1024 * 1024) {
-      setUploadError('حجم الملف يتجاوز 50 ميجابايت. يُفضل استخدام رابط خارجي (ميديا فاير) للملفات الكبيرة جداً.');
+      setUploadError('حجم الملف يتجاوز 50 ميجابايت. يُفضل استخدام Google Drive مجاناً للملفات الكبيرة.');
       return;
     }
 
@@ -134,7 +135,7 @@ export default function PdfResourceUploader({
             <FileText className="w-4 h-4 text-teal-600 dark:text-teal-400" />
           )}
           <span>{isConcept ? 'ملف ورقة المفاهيم' : 'ملزمة الكورس أو المذكرة'}</span>
-          <span className="text-[10px] text-slate-400 font-normal">(اختر الطريقة المناسبة)</span>
+          <span className="text-[10px] text-slate-400 font-normal">(بدون استهلاك قاعدة البيانات)</span>
         </label>
 
         {value && (
@@ -161,7 +162,7 @@ export default function PdfResourceUploader({
           }`}
         >
           <ExternalLink className="w-4 h-4" />
-          <span>رابط خارجي (ميديا فاير / درايف)</span>
+          <span>رابط مجاني (Google Drive / مباشر)</span>
         </button>
 
         <button
@@ -178,29 +179,39 @@ export default function PdfResourceUploader({
         </button>
       </div>
 
-      {/* MODE 1: EXTERNAL LINK (MediaFire / Google Drive) */}
+      {/* MODE 1: EXTERNAL LINK (Google Drive / Dropbox / Direct / MediaFire) */}
       {mode === 'link' && (
         <div className="p-4 bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800/80 rounded-2xl space-y-3">
           <div>
-            <div className="flex items-center justify-between mb-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
               <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
-                ضع رابط التحميل المباشر (مثل MediaFire أو Google Drive):
+                الصق رابط الملف (Google Drive أو Dropbox أو رابط مباشر أو MediaFire):
               </span>
               
               {/* Provider Badges */}
-              {detectedType === 'mediafire' && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-                  🔥 رابط ميديا فاير (MediaFire)
+              {detectedType === 'drive' && externalUrl && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  Google Drive — مشغل مدمج + تنزيل مباشر
                 </span>
               )}
-              {detectedType === 'drive' && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                  📁 رابط جوجل درايف (Google Drive)
+              {detectedType === 'dropbox' && externalUrl && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20">
+                  Dropbox — مشغل مدمج + تنزيل مباشر
+                </span>
+              )}
+              {detectedType === 'onedrive' && externalUrl && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                  OneDrive — مشغل سحابي + تنزيل
+                </span>
+              )}
+              {detectedType === 'mediafire' && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                  MediaFire — زر تحميل خارجي
                 </span>
               )}
               {detectedType === 'direct' && externalUrl.startsWith('http') && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                  🌐 رابط مباشر معتمد
+                  {resolvedLink.canEmbedInPlatform ? 'مشغل مدمج + تنزيل مباشر' : 'تنزيل مباشر على الجهاز'}
                 </span>
               )}
             </div>
@@ -208,7 +219,7 @@ export default function PdfResourceUploader({
             <div className="relative">
               <input
                 type="url"
-                placeholder="https://www.mediafire.com/file/... أو https://drive.google.com/..."
+                placeholder="https://drive.google.com/file/d/.../view أو رابط مباشر للملف بأي صيغة"
                 value={externalUrl}
                 onChange={(e) => handleUrlChange(e.target.value)}
                 className="w-full px-3.5 py-2.5 pr-9 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl font-mono text-xs text-slate-900 dark:text-white focus:outline-none focus:border-teal-500 text-left"
@@ -218,21 +229,34 @@ export default function PdfResourceUploader({
             </div>
           </div>
 
+          {/* Zero-Cost Google Drive Quick Guide */}
+          <div className="p-3 rounded-xl bg-emerald-500/5 border border-emerald-500/15 text-[11px] text-slate-600 dark:text-slate-300 font-bold leading-relaxed space-y-1">
+            <div className="text-emerald-700 dark:text-emerald-400 font-black">
+              طريقة Google Drive المجانية (بدون مفاتيح أو اشتراكات أو ضغط على سوبابيز):
+            </div>
+            <div>
+              1) ارفع الملف (PDF / Word / PowerPoint / صور / ZIP) على حساب Google Drive الخاص بك (15 جيجا مجاناً).
+              {' '}2) اضغط «مشاركة / Share» واختر «أي شخص لديه الرابط / Anyone with the link» ثم الصق الرابط هنا فقط — سيفتح للطالب داخل مشغل المنصة بملء الشاشة مع زر التنزيل المباشر!
+            </div>
+          </div>
+
           {/* Quick Presets & Test link */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
             <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
-              💡 سينتقل الطالب عند الضغط إلى صفحة التحميل في تبويب جديد فوري.
+              {detectedType === 'mediafire'
+                ? 'ملاحظة: MediaFire يفتح كصفحة تحميل خارجية ولا يدعم العرض داخل المشغل.'
+                : 'يتم حفظ الرابط النصي فقط ولا يستهلك أي مساحة من قاعدة بيانات المنصة.'}
             </div>
 
-            {externalUrl && (
+            {resolvedLink.safeUrl && (
               <a
-                href={externalUrl}
+                href={resolvedLink.safeUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-teal-500/10 hover:bg-teal-500/20 text-teal-700 dark:text-teal-300 font-black text-xs transition-colors"
               >
                 <Eye className="w-3.5 h-3.5" />
-                <span>معاينة الرابط ↗️</span>
+                <span>معاينة الرابط</span>
               </a>
             )}
           </div>
@@ -366,21 +390,25 @@ export default function PdfResourceUploader({
           <div className="flex items-center gap-2 truncate">
             <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
             <span className="font-bold text-slate-700 dark:text-slate-300">
-              {currentProvider === 'mediafire' ? '🔥 مربوط بـ MediaFire' :
-               currentProvider === 'drive' ? '📁 مربوط بـ Google Drive' :
-               currentProvider === 'platform' ? '☁️ مرفوع على المنصة وسوبابيز' : '🔗 رابط خارجي معتمد'}
+              {currentProvider === 'mediafire' ? 'مربوط بـ MediaFire (تحميل خارجي)' :
+               currentProvider === 'drive' ? 'مربوط بـ Google Drive (مشغل مدمج + تنزيل مباشر)' :
+               currentProvider === 'dropbox' ? 'مربوط بـ Dropbox (مشغل مدمج + تنزيل مباشر)' :
+               currentProvider === 'onedrive' ? 'مربوط بـ OneDrive (مشغل سحابي + تنزيل)' :
+               currentProvider === 'platform' ? 'مرفوع على المنصة وسوبابيز' : 'رابط مباشر معتمد'}
             </span>
           </div>
           
-          <a
-            href={value}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[11px] font-black text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 shrink-0"
-          >
-            <span>فتح ومعاينة</span>
-            <ExternalLink className="w-3 h-3" />
-          </a>
+          {resolveDocumentUrls(value).safeUrl && (
+            <a
+              href={resolveDocumentUrls(value).safeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[11px] font-black text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 shrink-0"
+            >
+              <span>فتح ومعاينة</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
         </div>
       )}
     </div>

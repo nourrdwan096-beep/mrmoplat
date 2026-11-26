@@ -22,6 +22,7 @@ import {
   StudentItemProgressData
 } from '@/lib/academicService';
 import { registerOrVerifyStudentCourseDevice } from '@/lib/deviceSecurity';
+import { resolveDocumentUrls } from '@/lib/storageService';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import {
@@ -636,15 +637,15 @@ export default function WatchLessonPage() {
                     <p className="text-xs text-slate-500 font-bold max-w-md mx-auto leading-relaxed">
                       {currentItem?.description || 'هذا العنصر متاح ضمن خطة المنهج.'}
                     </p>
-                    {currentItem?.pdfAttachmentUrl && (
+                    {currentItem?.pdfAttachmentUrl && resolveDocumentUrls(currentItem.pdfAttachmentUrl).downloadUrl && (
                       <a
-                        href={currentItem.pdfAttachmentUrl}
+                        href={resolveDocumentUrls(currentItem.pdfAttachmentUrl).downloadUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-2xl shadow-md transition-all"
                       >
                         <Download className="w-4 h-4" />
-                        <span>تحميل الملف المرفق (PDF)</span>
+                        <span>تنزيل الملف المرفق</span>
                       </a>
                     )}
                   </div>
@@ -725,15 +726,15 @@ export default function WatchLessonPage() {
                     <span>فهرس الكورس</span>
                   </Link>
 
-                  {currentItem?.pdfAttachmentUrl && (
+                  {currentItem?.pdfAttachmentUrl && resolveDocumentUrls(currentItem.pdfAttachmentUrl).downloadUrl && (
                     <a
-                      href={currentItem.pdfAttachmentUrl}
+                      href={resolveDocumentUrls(currentItem.pdfAttachmentUrl).downloadUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 font-bold text-xs transition-colors"
                     >
                       <Download className="w-4 h-4 text-emerald-500" />
-                      <span>تحميل ملزمة المحاضرة (PDF)</span>
+                      <span>تنزيل ملزمة المحاضرة</span>
                     </a>
                   )}
 

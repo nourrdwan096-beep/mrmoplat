@@ -16,6 +16,7 @@ import {
 import Link from 'next/link';
 import Image from 'next/image';
 import { useResolvedImageUrl } from '@/hooks/useResolvedImageUrl';
+import { resolveDocumentUrls } from '@/lib/storageService';
 
 export default function CourseViewClient({ courseId }: { courseId: string }) {
   const router = useRouter();
@@ -275,14 +276,19 @@ export default function CourseViewClient({ courseId }: { courseId: string }) {
     }
 
     if (item.pdfAttachmentUrl) {
-      const link = document.createElement('a');
-      link.href = item.pdfAttachmentUrl;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.download = `${item.title}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+      const resolvedDoc = resolveDocumentUrls(item.pdfAttachmentUrl);
+      if (resolvedDoc.downloadUrl) {
+        const link = document.createElement('a');
+        link.href = resolvedDoc.downloadUrl;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        if (resolvedDoc.fileExtension) {
+          link.download = `${item.title}.${resolvedDoc.fileExtension}`;
+        }
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
     } else {
       router.push(`/watch/${courseId}/${item.id}`);
     }
